@@ -1,0 +1,420 @@
+/* Custom Enhanced Loading Modal - Completely Isolated Styles */
+/* This modal is designed to be completely independent and not conflict with existing Bootstrap modals */
+
+/* Custom Modal Overlay */
+.excel-upload-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(6px);
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.excel-upload-overlay.active {
+    opacity: 1;
+    visibility: visible;
+}
+
+/* Custom Modal Container */
+.excel-upload-modal {
+    background: #ffffff;
+    border-radius: 20px;
+    box-shadow: 0 25px 80px rgba(0, 0, 0, 0.4);
+    width: 95%;
+    max-width: 650px;
+    max-height: 90vh;
+    overflow: hidden;
+    transform: scale(0.8) translateY(40px);
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.excel-upload-overlay.active .excel-upload-modal {
+    transform: scale(1) translateY(0);
+}
+
+/* Custom Modal Header */
+.excel-upload-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 2rem;
+    position: relative;
+    overflow: hidden;
+}
+
+.excel-upload-header::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: radial-gradient(circle at 20% 80%, rgba(255, 255, 255, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 20%, rgba(255, 255, 255, 0.1) 0%, transparent 50%);
+}
+
+.excel-upload-title {
+    font-size: 1.4rem;
+    font-weight: 700;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    position: relative;
+    z-index: 1;
+    letter-spacing: -0.025em;
+}
+
+.excel-upload-title .icon {
+    margin-right: 1rem;
+    font-size: 1.8rem;
+    opacity: 0.9;
+}
+
+/* Custom Modal Body */
+.excel-upload-body {
+    padding: 2.5rem;
+    background: #ffffff;
+    position: relative;
+}
+
+/* Custom Progress Steps */
+.excel-progress-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    margin-bottom: 2rem;
+}
+
+.excel-step-item {
+    display: flex;
+    align-items: center;
+    padding: 1.25rem;
+    border-radius: 16px;
+    background: #f8fafc;
+    border: 2px solid #e2e8f0;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+}
+
+.excel-step-item::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.5) 50%, transparent 100%);
+    transform: translateX(-100%);
+    transition: transform 0.6s ease;
+}
+
+.excel-step-item.active {
+    background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+    border-color: #3b82f6;
+    box-shadow: 0 8px 25px rgba(59, 130, 246, 0.15);
+    transform: translateX(4px);
+}
+
+.excel-step-item.active::before {
+    transform: translateX(100%);
+}
+
+.excel-step-item.completed {
+    background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%);
+    border-color: #10b981;
+    box-shadow: 0 8px 25px rgba(16, 185, 129, 0.15);
+}
+
+.excel-step-item.failed {
+    background: linear-gradient(135deg, #fef2f2 0%, #fecaca 100%);
+    border-color: #ef4444;
+    box-shadow: 0 8px 25px rgba(239, 68, 68, 0.15);
+}
+
+.excel-step-indicator {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 1.25rem;
+    position: relative;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    font-weight: 700;
+    font-size: 1.1rem;
+    flex-shrink: 0;
+    border: 3px solid transparent;
+}
+
+.excel-step-item.active .excel-step-indicator {
+    background: #3b82f6;
+    color: white;
+    box-shadow: 0 8px 20px rgba(59, 130, 246, 0.4);
+    border-color: rgba(255, 255, 255, 0.3);
+    transform: scale(1.05);
+}
+
+.excel-step-item.completed .excel-step-indicator {
+    background: #10b981;
+    color: white;
+    box-shadow: 0 8px 20px rgba(16, 185, 129, 0.4);
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.excel-step-item.failed .excel-step-indicator {
+    background: #ef4444;
+    color: white;
+    box-shadow: 0 8px 20px rgba(239, 68, 68, 0.4);
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.step-title {
+    font-weight: 600;
+    font-size: 1rem;
+    margin-bottom: 0.25rem;
+    color: #212529;
+}
+
+.step-item.active .step-title {
+    color: #0d6efd;
+}
+
+.step-item.completed .step-title {
+    color: #198754;
+}
+
+.step-item.failed .step-title {
+    color: #dc3545;
+}
+
+.step-description {
+    font-size: 0.875rem;
+    color: #6c757d;
+    margin: 0;
+}
+
+/* Progress Bar Enhancements */
+.progress {
+    border-radius: 6px;
+    background-color: #e9ecef;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.progress-bar {
+    border-radius: 6px;
+    transition: width 0.6s ease;
+    background: linear-gradient(90deg, #0d6efd 0%, #6610f2 100%);
+}
+
+/* Current Status Section */
+.current-status {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 1.5rem;
+    border-left: 4px solid #0d6efd;
+}
+
+.status-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.status-title {
+    color: #212529;
+    font-size: 1.1rem;
+    margin-bottom: 0.5rem;
+}
+
+.status-description {
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+/* Processing Tips */
+.processing-tips {
+    background: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 8px;
+    padding: 1rem;
+}
+
+.tip-header {
+    display: flex;
+    align-items: center;
+    font-weight: 600;
+    color: #856404;
+    margin-bottom: 0.5rem;
+}
+
+.tip-content {
+    color: #856404;
+}
+
+/* Animations */
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.05);
+    }
+    100% {
+        transform: scale(1);
+    }
+}
+
+.step-item.active {
+    animation: pulse 2s infinite;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    #enhancedLoadingModal .modal-dialog {
+        margin: 1rem;
+    }
+    
+    .step-item {
+        padding: 0.75rem;
+    }
+    
+    .step-indicator {
+        width: 35px;
+        height: 35px;
+        margin-right: 0.75rem;
+    }
+    
+    .step-title {
+        font-size: 0.9rem;
+    }
+    
+    .step-description {
+        font-size: 0.8rem;
+    }
+    
+    .current-status {
+        padding: 1rem;
+    }
+    
+    .status-title {
+        font-size: 1rem;
+    }
+}
+
+/* Success State */
+.step-item.completed .step-indicator i {
+    font-size: 1.2rem;
+}
+
+/* Loading Animation for Progress Bar */
+.progress-bar-animated {
+    animation: progress-bar-stripes 1s linear infinite;
+}
+
+@keyframes progress-bar-stripes {
+    0% {
+        background-position: 1rem 0;
+    }
+    100% {
+        background-position: 0 0;
+    }
+}
+
+/* Modal Backdrop Enhancement */
+#enhancedLoadingModal .modal-backdrop {
+    background-color: rgba(0, 0, 0, 0.6);
+}
+
+/* Spinner Customization */
+.spinner-border-sm {
+    width: 1rem;
+    height: 1rem;
+}
+
+/* Alert Styling */
+.alert-warning {
+    border-left: 4px solid #ffc107;
+    background-color: #fff3cd;
+    border-color: #ffeaa7;
+}
+
+/* Icon Styling */
+.bi {
+    font-size: inherit;
+}
+
+/* Gradient Background for Header */
+/* .bg-gradient-primary {
+    background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%) !important;
+} */
+
+/* Processing Logs Styling */
+.processing-logs {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    padding: 1rem;
+    margin-top: 1rem;
+}
+
+.log-header {
+    display: flex;
+    align-items: center;
+    font-weight: 600;
+    color: #495057;
+    margin-bottom: 0.5rem;
+}
+
+.log-content {
+    background: #ffffff;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 0.75rem;
+    font-family: 'Courier New', monospace;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.log-entry {
+    margin-bottom: 0.25rem;
+    color: #6c757d;
+}
+
+.log-entry:last-child {
+    margin-bottom: 0;
+}
+
+/* Custom scrollbar for log content */
+.log-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.log-content::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 3px;
+}
+
+.log-content::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 3px;
+}
+
+.log-content::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
+}

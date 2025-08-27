@@ -1,0 +1,147 @@
+{% extends "./error-layout.html" %}
+
+{% block content %}
+<div class="d-flex align-items-center" style="min-height: 100vh; background: linear-gradient(135deg, #f5f7fa 0%, #e4e8eb 100%);">
+  <div class="container">
+    <div class="row justify-content-center">
+      <div class="col-md-8 text-center">
+        <!-- Maintenance Icon -->
+        <div class="maintenance-icon mb-4">
+          <i class="fas fa-tools" style="font-size: 4rem; color: #ffc107; text-shadow: 2px 2px 4px rgba(0,0,0,0.1);"></i>
+        </div>
+
+        <div class="maintenance-badge mb-3">
+          <span class="badge bg-warning fs-5 px-4 py-2" 
+                style="box-shadow: 0 4px 6px rgba(255, 193, 7, 0.2);">
+            <i class="fas fa-exclamation-triangle me-2"></i>System Maintenance
+          </span>
+        </div>
+
+        <h1 class="display-4 fw-bold mb-3 text-dark"
+            style="text-shadow: 2px 2px 4px rgba(0,0,0,0.1);">
+          {{ title || 'System Under Maintenance' }}
+        </h1>
+
+        <p class="lead text-secondary mb-4"
+           style="font-size: 1.2rem; line-height: 1.6;">
+          {{ message || 'We are currently performing scheduled maintenance to improve your experience. Please check back shortly.' }}
+        </p>
+
+        <div class="maintenance-info alert alert-warning mb-4 mx-auto"
+             style="max-width: 600px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          <i class="fas fa-clock me-2"></i>
+          <strong>Estimated Duration:</strong> We expect to be back online shortly.
+          <br>
+          <i class="fas fa-info-circle me-2 mt-2"></i>
+          <strong>What's happening:</strong> We're upgrading our systems to serve you better.
+        </div>
+
+        <!-- Progress indicator -->
+        <div class="maintenance-progress mb-4">
+          <div class="progress mx-auto" style="max-width: 400px; height: 8px;">
+            <div class="progress-bar progress-bar-striped progress-bar-animated bg-warning" 
+                 role="progressbar" 
+                 style="width: 65%;" 
+                 aria-valuenow="65" 
+                 aria-valuemin="0" 
+                 aria-valuemax="100">
+            </div>
+          </div>
+          <small class="text-muted mt-2 d-block">Maintenance in progress...</small>
+        </div>
+
+        <div class="d-flex justify-content-center gap-3 mt-4">
+          <button onclick="location.reload()" 
+                  class="btn btn-warning btn-lg px-4"
+                  style="border-radius: 12px;">
+            <i class="fas fa-sync-alt me-2"></i>Refresh Page
+          </button>
+          <a href="mailto:support@pinnacle-einvoice.com" 
+             class="btn btn-outline-secondary btn-lg px-4"
+             style="border-radius: 12px;">
+            <i class="fas fa-envelope me-2"></i>Contact Support
+          </a>
+        </div>
+
+        <!-- Auto-refresh notice -->
+        <div class="mt-4">
+          <small class="text-muted">
+            <i class="fas fa-sync-alt me-1"></i>
+            This page will automatically refresh every 30 seconds
+          </small>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Auto-refresh script -->
+<script>
+  // Auto-refresh every 30 seconds
+  setTimeout(function() {
+    location.reload();
+  }, 30000);
+  
+  // Add some animation to the maintenance icon
+  setInterval(function() {
+    const icon = document.querySelector('.maintenance-icon i');
+    if (icon) {
+      icon.style.transform = 'rotate(15deg)';
+      setTimeout(() => {
+        icon.style.transform = 'rotate(-15deg)';
+        setTimeout(() => {
+          icon.style.transform = 'rotate(0deg)';
+        }, 200);
+      }, 200);
+    }
+  }, 3000);
+</script>
+
+<style>
+  .maintenance-icon {
+    animation: pulse 2s infinite;
+  }
+  
+  @keyframes pulse {
+    0% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.05);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+  
+  .maintenance-badge {
+    animation: fadeInDown 0.8s ease-out;
+  }
+  
+  @keyframes fadeInDown {
+    from {
+      opacity: 0;
+      transform: translateY(-20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  
+  .maintenance-progress {
+    animation: fadeInUp 1s ease-out 0.3s both;
+  }
+  
+  @keyframes fadeInUp {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+</style>
+{% endblock %}

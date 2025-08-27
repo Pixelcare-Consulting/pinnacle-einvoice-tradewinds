@@ -1,0 +1,3580 @@
+{% extends 'layout.html' %}
+
+{% block head %}
+
+<title>Outbound Manual - eInvoice Portal</title>
+
+<!-- Bootstrap JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<link href="/assets/css/pages/inbound/card.css" rel="stylesheet">
+<link href="/assets/css/pages/inbound/notice.css" rel="stylesheet">
+
+<link href="/assets/css/pages/inbound/validation-modal.css" rel="stylesheet">
+<link href="/assets/css/pages/inbound/inbound-modal.css" rel="stylesheet">
+
+<!-- Template Main CSS Files -->
+<link href="/assets/css/pages/outbound/outbound-table.css" rel="stylesheet">
+<!-- Excel Loading Animation CSS -->
+<link href="/assets/css/pages/outbound/excel-loading.css" rel="stylesheet">
+<!-- Invoice Preview Modal Enhancements -->
+<link href="/assets/css/components/invoice-preview-modal.css" rel="stylesheet">
+<!-- Enhanced Loading Modal CSS -->
+<link href="/assets/css/components/enhanced-loading-modal.css" rel="stylesheet">
+
+<script src="/assets/js/config/validation-translations.js"></script>
+<script src="/assets/utils/lhdnErrorMapping.js"></script>
+
+<!-- Preview Table Styles -->
+<style>
+    /* Invoice List Container */
+#invoiceListContainer {
+    background: #fff;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    padding: 0.5rem;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+#supplierListContainer {
+    background: #fff;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    padding: 0.5rem;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+#receiverListContainer {
+    background: #fff;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    padding: 0.5rem;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+
+/* Pagination Styling */
+#invoicePagination .pagination {
+    margin: 0;
+}
+
+#invoicePagination .page-link {
+    border: 1px solid #e2e8f0;
+    color: #6b7280;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    transition: all 0.2s ease;
+}
+
+#invoicePagination .page-link:hover {
+    background-color: #f1f5f9;
+    border-color: #1a365d;
+    color: #1a365d;
+}
+
+#invoicePagination .page-item.active .page-link {
+    background-color: #1a365d;
+    border-color: #1a365d;
+    color: #fff;
+}
+
+#invoicePagination .page-item.disabled .page-link {
+    color: #d1d5db;
+    background-color: #f9fafb;
+    border-color: #e5e7eb;
+}
+
+.preview-table-container {
+    position: relative;
+    overflow-x: auto;
+    overflow-y: auto;
+}
+
+/* Hide scrollbars */
+.preview-table-container::-webkit-scrollbar {
+    display: none;
+}
+
+.preview-table-container {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+}
+
+.preview-table-container .sticky-column {
+    position: sticky;
+    left: 0;
+    background-color: #f8f9fa;
+    z-index: 10;
+    border-right: 2px solid #dee2e6;
+    font-weight: 600;
+}
+
+.preview-table-container .table thead th.sticky-column {
+    background-color: #e9ecef;
+    z-index: 11;
+}
+
+.preview-table-container .table tbody tr:hover .sticky-column {
+    background-color: #e2e6ea;
+}
+
+.preview-table-container .table th,
+.preview-table-container .table td {
+    white-space: nowrap;
+    min-width: 120px;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.preview-table-container .table th.sticky-column,
+.preview-table-container .table td.sticky-column {
+    min-width: 60px;
+    max-width: 80px;
+}
+
+.preview-table-container .table-info .sticky-column {
+    background-color: #d1ecf1;
+}
+
+/* Loading state */
+.preview-table-loading {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+/* Column toggle button */
+#columnToggleBtn {
+    transition: all 0.3s ease;
+}
+
+#columnToggleBtn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+/* Structured Preview Styles */
+.structured-preview {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    line-height: 1.6;
+}
+
+.processing-summary {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-radius: 8px;
+    padding: 20px;
+    border-left: 4px solid #1a365d;
+}
+
+.processing-summary h5 {
+    border-bottom: 2px solid #1a365d;
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}
+
+.document-section {
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 30px;
+}
+
+.document-header {
+    background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+    border-bottom: 1px solid #2196f3;
+}
+
+.document-content {
+    background: #ffffff;
+}
+
+.section-block {
+    border-left: 3px solid #17a2b8;
+    padding-left: 15px;
+    margin-left: 10px;
+}
+
+.section-block h6 {
+    color: #17a2b8;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.info-item {
+    margin-bottom: 8px;
+    padding: 4px 0;
+}
+
+.info-item strong {
+    color: #495057;
+    font-weight: 600;
+    min-width: 120px;
+    display: inline-block;
+}
+
+.line-item {
+    border: 1px solid #e9ecef;
+    transition: all 0.3s ease;
+}
+
+.line-item:hover {
+    border-color: #17a2b8;
+    box-shadow: 0 2px 8px rgba(23, 162, 184, 0.1);
+}
+
+.line-item h6 {
+    color: #6c757d;
+    border-bottom: 1px solid #e9ecef;
+    padding-bottom: 8px;
+    margin-bottom: 15px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .structured-preview .row > div {
+        margin-bottom: 10px;
+    }
+
+    .info-item strong {
+        min-width: auto;
+        display: block;
+        margin-bottom: 2px;
+    }
+}
+</style>
+
+<style>
+/* TIN Validation Modal Styles */
+#tinValidationModal .modal-dialog {
+    max-width: 1000px; /* Increased from 900px */
+}
+
+#tinValidationModal .modal-content {
+    overflow: hidden;
+    border: none;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+    border-radius: 0.5rem;
+}
+
+#tinValidationModal .modal-header {
+    background-color: #1a365d;
+    color: white;
+    border-bottom: none;
+    padding: 1rem 1.5rem;
+}
+
+#tinValidationModal .modal-header .btn-close {
+    color: white;
+    filter: brightness(0) invert(1);
+    opacity: 0.8;
+}
+
+#tinValidationModal .modal-header .btn-close:hover {
+    opacity: 1;
+}
+
+#validationResultSection {
+    min-height: 500px;
+    position: relative;
+    background: #f8f9fa;
+}
+
+#emptyResultState {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 80%;
+}
+
+.validation-status-badge .badge {
+    width: 80px;
+    height: 80px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+    animation: fadeInScale 0.6s ease-out;
+}
+
+.validation-status-badge .badge i {
+    font-size: 1.8rem;
+}
+
+/* Success checkmark animation */
+.success-checkmark {
+    animation: fadeIn 0.8s ease-out 0.3s both;
+}
+
+.checkmark {
+    stroke-dasharray: 100;
+    stroke-dashoffset: 100;
+    animation: drawCheck 1.2s ease-out forwards;
+}
+
+@keyframes drawCheck {
+    from {
+        stroke-dashoffset: 100;
+    }
+    to {
+        stroke-dashoffset: 0;
+    }
+}
+
+@keyframes fadeInScale {
+    from {
+        opacity: 0;
+        transform: scale(0.8);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+#validationResultContent .card {
+    transition: all 0.3s ease;
+    border-radius: 0.5rem;
+    animation: slideUp 0.5s ease-out 0.2s both;
+}
+
+#validationResultContent .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08) !important;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+#validationResultContent .card-header {
+    background-color: white;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+#validationResultContent .list-group-item {
+    transition: background-color 0.2s ease;
+    padding: 0.8rem 1.25rem;
+}
+
+#validationResultContent .list-group-item:hover {
+    background-color: rgba(0, 0, 0, 0.02);
+}
+
+.btn-lhdn {
+    background-color: #1a365d;
+    border-color: #1a365d;
+    color: white;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+    font-weight: 500;
+    padding: 0.6rem 1.5rem;
+    border-radius: 0.375rem;
+}
+
+.btn-lhdn:hover {
+    background-color: #2d3748;
+    border-color: #2d3748;
+    color: white;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 10px rgba(26, 54, 93, 0.25);
+}
+
+.btn-lhdn:before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+    transition: all 0.6s ease;
+}
+
+     /* Tutorial Modal Styles */
+     .tutorial-content {
+        position: relative;
+    }
+
+    .tutorial-progress {
+        padding: 15px 15px 5px;
+        background-color: #f8f9fa;
+    }
+
+    .step-indicators {
+        margin-top: 10px;
+    }
+
+    .step-dot {
+        width: 12px;
+        height: 12px;
+        background-color: #dee2e6;
+        border-radius: 50%;
+        display: inline-block;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+
+    .step-dot.active {
+        background-color: #1a365d;
+        transform: scale(1.2);
+    }
+
+    .tutorial-step {
+        display: none;
+    }
+
+    .tutorial-step.active {
+        display: block;
+    }
+
+    .step-content {
+        min-height: 300px;
+        max-height: 60vh;
+        overflow-y: auto;
+    }
+
+    /* Hide scrollbars for step content */
+    .step-content::-webkit-scrollbar {
+        display: none;
+    }
+
+    .step-content {
+        -ms-overflow-style: none;  /* IE and Edge */
+        scrollbar-width: none;  /* Firefox */
+    }
+
+    .step-image img {
+        max-height: 200px;
+        object-fit: contain;
+        border: 1px solid #dee2e6;
+    }
+
+    /* Highlight elements during tutorial */
+    .tutorial-highlight {
+        position: relative;
+        z-index: 1060;
+        box-shadow: 0 0 0 4px rgba(13, 110, 253, 0.5), 0 0 15px rgba(0, 0, 0, 0.3) !important;
+        border-radius: 4px;
+        transition: box-shadow 0.3s ease;
+    }
+
+    /* Tutorial tip styles */
+    .tutorial-tip {
+        background-color: #e7f5ff;
+        border-left: 4px solid #1a365d;
+        padding: 15px;
+        margin: 15px 0;
+        border-radius: 4px;
+    }
+
+    .tutorial-note {
+        background-color: #fff3cd;
+        border-left: 4px solid #ffc107;
+        padding: 15px;
+        margin: 15px 0;
+        border-radius: 4px;
+    }
+
+    /* Modal header styling */
+    #tutorialModal .modal-header {
+        background: linear-gradient(135deg, #1a365d, #2d3748);
+    }
+
+    /* Progress bar styling */
+    #tutorialModal .progress {
+        height: 8px;
+        border-radius: 4px;
+        background-color: #e9ecef;
+    }
+
+    #tutorialModal .progress-bar {
+        background: linear-gradient(90deg, #1a365d, #2d3748);
+        transition: width 0.5s ease;
+    }
+
+    /* Guided Tour Styles */
+    .guided-tour-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.2) !important;
+        backdrop-filter: blur(1px);
+        z-index: 1050;
+        display: none;
+    }
+
+    /* Prevent scrolling during tutorial */
+    body.tour-active {
+        overflow: hidden !important;
+        position: fixed;
+        width: 100%;
+        height: 100%;
+    }
+
+    .guided-tour-tooltip {
+        position: fixed;
+        width: min(360px, 90vw);
+        background-color: #fff;
+        border-radius: 16px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+        z-index: 1060;
+        display: none;
+        overflow: hidden;
+        transition: all 0.3s ease;
+        --arrow-position: 50%;
+        max-height: min(600px, 90vh);
+        display: flex;
+        flex-direction: column;
+    }
+
+    /* Header styling */
+    .tooltip-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 16px 20px;
+        background-color: #f8f9fa;
+        border-bottom: 1px solid #eee;
+        position: sticky;
+        top: 0;
+        z-index: 3;
+        flex-shrink: 0;
+    }
+
+    .tooltip-step-indicator {
+        font-size: 14px;
+        font-weight: 600;
+        color: #1a365d;
+        background-color: rgba(26, 54, 93, 0.1);
+        padding: 4px 12px;
+        border-radius: 20px;
+    }
+
+    .tooltip-close-btn {
+        background: none;
+        border: none;
+        color: #6c757d;
+        font-size: 20px;
+        cursor: pointer;
+        padding: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        transition: all 0.2s;
+    }
+
+    .tooltip-close-btn:hover {
+        background-color: rgba(108, 117, 125, 0.1);
+        color: #495057;
+    }
+
+    /* Body styling */
+    .tooltip-body {
+        padding: 20px;
+        overflow-y: auto;
+        flex-grow: 1;
+        min-height: 100px;
+        max-height: calc(90vh - 180px);
+    }
+
+    /* Hide scrollbars for tooltip body */
+    .tooltip-body::-webkit-scrollbar {
+        display: none;
+    }
+
+    .tooltip-body {
+        -ms-overflow-style: none;  /* IE and Edge */
+        scrollbar-width: none;  /* Firefox */
+    }
+
+    .tooltip-title {
+        font-size: clamp(16px, 4vw, 18px);
+        font-weight: 600;
+        color: #212529;
+        margin-bottom: 16px;
+    }
+
+    .tooltip-content {
+        font-size: clamp(13px, 3.5vw, 14px);
+        line-height: 1.6;
+        color: #495057;
+    }
+
+    .tooltip-content p {
+        margin-bottom: 12px;
+    }
+
+    .tooltip-content ul, .tooltip-content ol {
+        padding-left: 20px;
+        margin-bottom: 12px;
+    }
+
+    .tooltip-content li {
+        margin-bottom: 6px;
+    }
+
+    /* Progress styling */
+    .tooltip-progress {
+        padding: 12px 20px;
+        background: #fff;
+        border-top: 1px solid #eee;
+        position: sticky;
+        bottom: 56px;
+        z-index: 3;
+        flex-shrink: 0;
+    }
+
+    .tooltip-progress .progress {
+        height: 4px;
+        border-radius: 2px;
+        background-color: #e9ecef;
+        margin-bottom: 12px;
+        overflow: hidden;
+    }
+
+    .tooltip-progress .progress-bar {
+        background: linear-gradient(90deg, #1a365d, #2d3748);
+        transition: width 0.5s ease;
+    }
+
+    .step-dot {
+        width: 8px;
+        height: 8px;
+        background-color: #dee2e6;
+        border-radius: 50%;
+        display: inline-block;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+
+    .step-dot.active {
+        background-color: #1a365d;
+        transform: scale(1.3);
+    }
+
+    /* Footer styling */
+    .tooltip-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 20px;
+        background-color: #f8f9fa;
+        border-top: 1px solid #eee;
+        position: sticky;
+        bottom: 0;
+        z-index: 3;
+        flex-shrink: 0;
+        height: 56px;
+    }
+
+    .tooltip-btn {
+        border: none;
+        background: none;
+        padding: 8px 16px;
+        border-radius: 8px;
+        font-size: clamp(12px, 3.5vw, 14px);
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+        white-space: nowrap;
+        min-width: 70px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+    }
+
+    .tooltip-btn-prev {
+        color: #6c757d;
+        background-color: #f8f9fa;
+    }
+
+    .tooltip-btn-prev:hover:not(:disabled) {
+        background-color: #e9ecef;
+    }
+
+    .tooltip-btn-prev:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .tooltip-btn-skip {
+        color: #dc3545;
+        background-color: #fff;
+        border: 1px solid #dc3545;
+    }
+
+    .tooltip-btn-skip:hover {
+        background-color: #dc3545;
+        color: #fff;
+    }
+
+    .tooltip-btn-next {
+        color: #fff;
+        background-color: #1a365d;
+        border-radius: 8px;
+        padding: 8px 20px;
+        min-width: 80px;
+    }
+
+    .tooltip-btn-next:hover {
+        background-color: #2d3748;
+    }
+
+    /* Highlight elements during tutorial */
+    .tour-highlight {
+        position: relative !important;
+        z-index: 1055 !important;
+        background-color: #ffffff !important;
+        box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.4),
+                   0 0 15px 5px rgba(13, 110, 253, 0.2) !important;
+        border-radius: 4px !important;
+        animation: glow-highlight 2s infinite !important;
+        isolation: isolate;
+    }
+
+    /* Row highlighting for table rows */
+    .tour-highlight-row {
+        position: relative !important;
+        z-index: 1054 !important;
+        background-color: rgba(13, 110, 253, 0.04) !important;
+    }
+
+    /* Special handling for table cells */
+    .outbound-table td.tour-highlight,
+    .outbound-table th.tour-highlight {
+        position: relative !important;
+        z-index: 1056 !important;
+        background-color: rgba(255, 255, 255, 0.98) !important;
+        animation: glow-highlight 2s infinite;
+    }
+
+    /* Special handling for action buttons */
+    .tour-highlight .outbound-action-btn {
+        position: relative !important;
+        z-index: 1057 !important;
+        animation: glow-highlight 2s infinite;
+    }
+
+    /* Special handling for checkboxes */
+    .tour-highlight .outbound-checkbox {
+        position: relative !important;
+        z-index: 1057 !important;
+        animation: glow-highlight 2s infinite;
+    }
+
+/* Enhanced UI Styles */
+.statistics-section .card,
+.quick-actions-section .card,
+.enhanced-filter-section .card,
+.document-preview-section .card {
+    border: none;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.statistics-section .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.quick-actions-section .btn {
+    transition: all 0.2s ease;
+    border: none;
+    padding: 0.5rem 1rem;
+}
+
+.quick-actions-section .btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.enhanced-filter-section .form-floating > .form-control,
+.enhanced-filter-section .form-floating > .form-select {
+    border-radius: 6px;
+    border: 1px solid #dee2e6;
+    padding: 1rem 0.75rem;
+}
+
+.enhanced-filter-section .form-floating > label {
+    padding: 1rem 0.75rem;
+}
+
+.document-preview-section .document-info {
+    padding: 1rem;
+    background: #f8f9fa;
+    border-radius: 6px;
+}
+
+.document-preview-section .info-item {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.document-preview-section .info-item:last-child {
+    border-bottom: none;
+}
+
+.document-preview-frame {
+    min-height: 300px;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+/* Animation for refresh icon */
+.spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* Chart container styles */
+.statistics-section canvas {
+    max-height: 200px;
+}
+
+/* Card title styles */
+.card-title {
+    color: #495057;
+    font-size: 0.875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Quick action button styles */
+.quick-actions-section .btn i {
+    font-size: 1rem;
+}
+
+/* Enhanced filter styles */
+.enhanced-filter-section .btn-link {
+    color: #6c757d;
+    text-decoration: none;
+}
+
+.enhanced-filter-section .btn-link:hover {
+    color: #495057;
+}
+
+/* Document preview styles */
+.document-preview-section .badge {
+    padding: 0.5em 0.75em;
+    font-weight: 500;
+}
+
+.document-preview-section .fw-medium {
+    font-weight: 500;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .statistics-section .card {
+        margin-bottom: 1rem;
+    }
+
+    .quick-actions-section .btn {
+        width: 100%;
+        margin-bottom: 0.5rem;
+    }
+
+    .enhanced-filter-section .form-floating {
+        margin-bottom: 1rem;
+    }
+}
+
+/* Filter Styles */
+.filter-container {
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+.search-wrapper {
+    position: relative;
+}
+
+.search-wrapper .form-control {
+    padding-left: 2.5rem;
+    height: 48px;
+    border-radius: 24px;
+    border: 2px solid #e9ecef;
+    transition: all 0.2s ease;
+}
+
+.search-wrapper .form-control:focus {
+    border-color: #1a365d;
+    box-shadow: 0 0 0 0.25rem rgba(26,54,93,.15);
+}
+
+
+.quick-filters .btn.active {
+    background-color: #1a365d;
+    color: white;
+    box-shadow: 0 2px 4px rgba(26,54,93,0.2);
+}
+
+/* Filter Tags */
+.active-filter-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 0;
+}
+
+.filter-tag {
+    display: inline-flex;
+    align-items: center;
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 16px;
+    padding: 4px 12px;
+    font-size: 0.875rem;
+    color: #495057;
+    transition: all 0.2s ease;
+}
+
+.filter-tag:hover {
+    background-color: #e9ecef;
+}
+
+.filter-tag .close-btn {
+    background: none;
+    border: none;
+    color: #6c757d;
+    font-size: 18px;
+    line-height: 1;
+    padding: 0 0 0 8px;
+    cursor: pointer;
+    transition: color 0.2s ease;
+}
+
+.filter-tag .close-btn:hover {
+    color: #dc3545;
+}
+
+/* Advanced Filters */
+.advanced-filters-content {
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-top: 1rem;
+}
+
+.advanced-filters-content .form-label {
+    font-weight: 500;
+    color: #495057;
+    margin-bottom: 0.5rem;
+}
+
+.advanced-filters-content .form-control,
+.advanced-filters-content .form-select {
+    border: 2px solid #e9ecef;
+    border-radius: 6px;
+    padding: 0.5rem 1rem;
+}
+
+.advanced-filters-content .input-group-text {
+    border: 2px solid #e9ecef;
+    background-color: #f8f9fa;
+}
+
+/* Loading State */
+.filter-loading {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(255,255,255,0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    display: none;
+}
+
+.filter-loading.active {
+    display: flex;
+}
+
+/* Data Source Toggle Styles */
+.btn-group .btn-check:checked + .btn {
+    background-color: #1a365d;
+    border-color: #1a365d;
+    color: white;
+}
+
+.btn-group .btn-check:not(:checked) + .btn {
+    background-color: #f8f9fa;
+    border-color: #dee2e6;
+    color: #6c757d;
+}
+
+/* Loading backdrop styles */
+.loading-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 9999;
+}
+
+.loading-content {
+    background: white;
+    padding: 2rem;
+    border-radius: 8px;
+    text-align: center;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.loading-message {
+    margin-top: 1rem;
+    font-weight: 500;
+    color: #495057;
+}
+
+/* Responsive Adjustments */
+@media (max-width: 768px) {
+    .quick-filters {
+        flex-wrap: wrap;
+    }
+
+    .quick-filters .btn {
+        flex: 1 1 auto;
+        min-width: calc(33.333% - 8px);
+        margin-bottom: 8px;
+    }
+
+    .quick-filters .ms-auto {
+        width: 100%;
+        margin-top: 0.5rem;
+        display: flex;
+        gap: 0.5rem;
+    }
+}
+
+.toggle-icon {
+    transition: transform 0.3s ease;
+}
+[aria-expanded="false"] .toggle-icon {
+    transform: rotate(180deg);
+}
+#consolidationDetails {
+    transition: all 0.3s ease;
+}
+.btn-outline-secondary:hover .toggle-icon {
+    color: #6c757d;
+}
+
+.fs-7 {
+    font-size: 0.875rem;
+}
+.filter-note .card {
+    box-shadow: none;
+    background-color: rgba(255, 255, 255, 0.5) !important;
+}
+.filter-note .list-unstyled li {
+    margin-bottom: 0.25rem;
+}
+.filter-note .list-unstyled li:last-child {
+    margin-bottom: 0;
+}
+.filter-note .btn-link {
+    text-decoration: none;
+}
+.filter-note .btn-link:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+    border-radius: 4px;
+}
+.filter-note .alert-light {
+    background-color: rgba(255, 255, 255, 0.8);
+}
+
+.consolidation-section {
+    background: #fff;
+    border-radius: 12px;
+    padding: 1.25rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+}
+
+.info-banner {
+    padding: 0.75rem;
+    background: rgba(13, 110, 253, 0.04);
+    border-radius: 8px;
+}
+
+.content-card {
+    background: #f8f9fa;
+    border-radius: 10px;
+    overflow: hidden;
+    transition: transform 0.2s;
+}
+
+.content-card:hover {
+    transform: translateY(-2px);
+}
+
+.card-header {
+    padding: 0.75rem 1rem;
+    background: #fff;
+    border-bottom: 1px solid rgba(0,0,0,0.05);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.card-content {
+    padding: 1rem;
+}
+
+.detail-item, .format-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    border-radius: 6px;
+    margin-bottom: 0.5rem;
+    background: #fff;
+}
+
+.detail-item:last-child, .format-item:last-child {
+    margin-bottom: 0;
+}
+
+.detail-item .label {
+    color: #6c757d;
+    min-width: 100px;
+    font-size: 0.875rem;
+}
+
+.detail-item .value {
+    font-family: 'Roboto Mono', monospace;
+    font-size: 0.875rem;
+}
+
+.format-item {
+    font-size: 0.875rem;
+}
+
+.format-item i {
+    font-size: 1rem;
+}
+
+.badge.rounded-pill {
+    padding: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.btn-link:hover {
+    opacity: 0.75;
+}
+
+@media (max-width: 768px) {
+    .consolidation-section {
+        padding: 1rem;
+    }
+
+    .detail-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.25rem;
+    }
+
+    .detail-item .label {
+        min-width: auto;
+    }
+}
+
+.middleware-disclaimer {
+    display: flex;
+    gap: 1rem;
+    padding: 1rem;
+    /* background: linear-gradient(to right, rgba(13, 110, 253, 0.03), rgba(13, 110, 253, 0.01)); */
+    border-radius: 8px;
+    border: 1px solid rgba(13, 110, 253, 0.1);
+    position: relative;
+}
+
+.disclaimer-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    flex-shrink: 0;
+}
+
+.disclaimer-icon i {
+    font-size: 1.25rem;
+    color: #1a365d;
+}
+
+.disclaimer-content {
+    flex: 1;
+}
+
+.disclaimer-content h6 {
+    color: #1a365d;
+    font-weight: 600;
+    font-size: 0.875rem;
+}
+
+.disclaimer-content ul {
+    margin-top: 0.25rem;
+}
+
+.disclaimer-content ul li {
+    color: #6c757d;
+    margin-bottom: 0.25rem;
+}
+
+
+@media (max-width: 768px) {
+    .middleware-disclaimer {
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        padding: 1rem;
+    }
+
+    .disclaimer-content ul {
+        text-align: left;
+    }
+
+    .disclaimer-note {
+        text-align: left;
+    }
+}
+
+/* Progress Modal Styles */
+#submissionProgressModal .modal-content {
+    border-radius: 12px;
+    border: none;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+}
+
+#submissionProgressModal .modal-header {
+    background: #f8f9fa;
+    border-bottom: 1px solid #e9ecef;
+    padding: 1rem 1.5rem;
+}
+
+#submissionProgressModal .modal-body {
+    padding: 1.5rem;
+}
+
+#submissionProgress .progress {
+    height: 10px;
+    border-radius: 5px;
+    background-color: #e9ecef;
+    margin-bottom: 1rem;
+}
+
+#submissionProgress .progress-bar {
+    background: linear-gradient(90deg, #1a365d, #2d3748);
+    border-radius: 5px;
+}
+
+#submissionProgress .submission-status {
+    font-size: 0.9rem;
+    color: #6c757d;
+    margin-bottom: 1rem;
+}
+
+#submissionProgress .documents-status {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+/* Hide scrollbars for documents status */
+#submissionProgress .documents-status::-webkit-scrollbar {
+    display: none;
+}
+
+#submissionProgress .documents-status {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+}
+
+#submissionProgress .doc-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    border-radius: 4px;
+    background: #f8f9fa;
+}
+
+#submissionProgress .doc-status i {
+    font-size: 1rem;
+}
+
+/* Submission Summary Styles */
+.submission-summary {
+    text-align: left;
+    padding: 1rem;
+    background: #f8f9fa;
+    border-radius: 8px;
+    margin-top: 1rem;
+}
+
+.submission-summary p {
+    margin-bottom: 0.5rem;
+}
+
+.submission-summary p:last-child {
+    margin-bottom: 0;
+    color: #6c757d;
+    font-size: 0.9rem;
+}
+
+/* Selected Documents List Styles */
+.selected-docs-list {
+    max-height: 200px;
+    overflow-y: auto;
+    padding: 1rem;
+    background: #f8f9fa;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+}
+
+/* Hide scrollbars for selected docs list */
+.selected-docs-list::-webkit-scrollbar {
+    display: none;
+}
+
+.selected-docs-list {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+}
+
+.selected-docs-list:empty::after {
+    content: 'No documents selected';
+    color: #6c757d;
+    font-style: italic;
+}
+
+/* Validation Button Styles */
+.validate-tin-btn {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.875rem;
+    border-radius: 4px;
+    background-color: #e9ecef;
+    border: 1px solid #dee2e6;
+    color: #495057;
+    transition: all 0.2s ease;
+}
+
+.validate-tin-btn:hover {
+    background-color: #dee2e6;
+    border-color: #ced4da;
+}
+
+.validate-tin-btn i {
+    margin-right: 0.25rem;
+}
+
+/* Validation Result Styles */
+.validation-result {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 1rem;
+    border-radius: 8px;
+    background-color: #f8f9fa;
+}
+
+.validation-result.success {
+    background-color: rgba(25, 135, 84, 0.1);
+}
+
+.validation-result.error {
+    background-color: rgba(220, 53, 69, 0.1);
+}
+
+.validation-result i {
+    font-size: 1.5rem;
+}
+
+.validation-result.success i {
+    color: #198754;
+}
+
+.validation-result.error i {
+    color: #dc3545;
+}
+
+.result-details h6 {
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+}
+
+.result-details p {
+    margin-bottom: 0.25rem;
+    color: #6c757d;
+}
+
+.error-details {
+    color: #dc3545;
+    font-size: 0.875rem;
+}
+
+/* Summary Stats Styles */
+.summary-stats {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.stat-item {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    border-radius: 6px;
+    background-color: #f8f9fa;
+}
+
+.stat-item.success {
+    background-color: rgba(25, 135, 84, 0.1);
+    color: #198754;
+}
+
+.stat-item.error {
+    background-color: rgba(220, 53, 69, 0.1);
+    color: #dc3545;
+}
+
+.action-buttons {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+}
+
+.validate-tin-btn {
+    background-color: #e9ecef;
+    border: 1px solid #dee2e6;
+    color: #495057;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    transition: all 0.2s ease;
+}
+
+.validate-tin-btn:hover {
+    background-color: #dee2e6;
+    border-color: #ced4da;
+}
+
+.validate-tin-btn i {
+    font-size: 1rem;
+}
+
+.status-cell .badge {
+    font-size: 0.75rem;
+    padding: 0.25em 0.5em;
+}
+
+/* Validation Section Styles */
+.quick-validation-form {
+    background-color: #f8f9fa;
+}
+
+.quick-validation-form .form-floating > .form-control,
+.quick-validation-form .form-floating > .form-select {
+    height: calc(2.5rem + 2px);
+    line-height: 1.25;
+    padding: 0.5rem 0.75rem;
+}
+
+.quick-validation-form .form-floating > label {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+}
+
+.quick-validation-form .form-control:focus,
+.quick-validation-form .form-select:focus {
+    border-color: #1a365d;
+    box-shadow: 0 0 0 0.15rem rgba(26, 54, 93, 0.15);
+}
+
+.history-item {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid #e9ecef;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.history-item:last-child {
+    border-bottom: none;
+}
+
+.history-item .tin-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.history-item .tin-number {
+    font-size: 0.875rem;
+    font-weight: 500;
+    margin-bottom: 0.125rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.history-item .tin-details {
+    font-size: 0.75rem;
+    color: #6c757d;
+    line-height: 1.2;
+}
+
+.history-item .validation-status {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+.history-item .validation-status.valid {
+    background-color: rgba(25, 135, 84, 0.1);
+    color: #198754;
+}
+
+.history-item .validation-status.invalid {
+    background-color: rgba(220, 53, 69, 0.1);
+    color: #dc3545;
+}
+
+#clearHistory {
+    color: #6c757d;
+    transition: color 0.2s;
+}
+
+#clearHistory:hover {
+    color: #dc3545;
+}
+
+.validation-history {
+    background: #fff;
+}
+
+.alert-info {
+    background-color: rgba(13, 110, 253, 0.05);
+    border: none;
+}
+
+.outbound-btn-lhdn:hover {
+  background-color: #0f2952;
+  border-color: #0f2952;
+  color: white;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(26, 58, 108, 0.3);
+}
+
+.outbound-btn-lhdn:hover:before {
+  left: 100%;
+}
+
+.outbound-btn-lhdn:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 5px rgba(26, 58, 108, 0.2);
+}
+
+.outbound-btn-lhdn i {
+  transition: transform 0.3s ease;
+}
+
+.outbound-btn-lhdn:hover i {
+  transform: translateX(3px);
+}
+
+/* Consolidation Header Styles */
+#consolidationHeader {
+    cursor: pointer;
+    transition: all 0.2s ease;
+    background: #f8f9fa;
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid #e9ecef;
+    user-select: none;
+}
+
+#consolidationHeader:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+#consolidationDetails {
+    transition: all 0.3s ease-in-out;
+    overflow: hidden;
+}
+
+#consolidationDetails.collapse:not(.show) {
+    display: none;
+}
+
+#consolidationDetails.collapsing {
+    height: 0;
+}
+
+#toggleConsolidation {
+    padding: 0.25rem;
+    line-height: 1;
+    border-radius: 4px;
+}
+
+#toggleConsolidation:hover {
+    background-color: rgba(13, 110, 253, 0.1);
+}
+
+#toggleConsolidation[aria-expanded="true"] .toggle-icon {
+    transform: rotate(180deg);
+}
+
+/* Loading backdrop styles */
+.loading-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    z-index: 9999;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.loading-content {
+    background-color: white;
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+    text-align: center;
+    max-width: 400px;
+}
+
+.loading-content .spinner-border {
+    width: 3rem;
+    height: 3rem;
+    margin-bottom: 1rem;
+}
+
+.loading-message h5 {
+    margin-bottom: 0.5rem;
+}
+
+.loading-message p {
+    color: #6c757d;
+    margin-bottom: 0;
+}
+
+.validation-result.success {
+    background-color: rgba(25, 135, 84, 0.1);
+}
+
+/* Upload Modal Styles */
+.upload-zone {
+    border: 3px dashed #2a5298;
+    border-radius: 12px;
+    padding: 3rem 2rem;
+    text-align: center;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.upload-zone:hover {
+    border-color: #2a5298;
+    background: linear-gradient(135deg, #e7f3ff 0%, #cce7ff 100%);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(26, 54, 93, 0.15);
+}
+
+.upload-zone.dragover {
+    border-color: #198754;
+    background: linear-gradient(135deg, #e8f5e8 0%, #d1e7dd 100%);
+    transform: scale(1.02);
+}
+
+.upload-zone-content {
+    position: relative;
+    z-index: 10;
+}
+
+.upload-icon-container {
+    position: relative;
+    display: inline-block;
+}
+
+.upload-icon {
+    font-size: 2.5rem;
+    color: #6c757d;
+    transition: all 0.3s ease;
+    animation: float 3s ease-in-out infinite;
+}
+
+.upload-zone:hover .upload-icon {
+    color: #2a5298;
+    transform: scale(1.1);
+}
+
+.upload-zone.dragover .upload-icon {
+    color: #198754;
+    transform: scale(1.2);
+}
+
+@keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-10px); }
+}
+
+.upload-title {
+    color: #495057;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+}
+
+.upload-subtitle {
+    font-size: 0.95rem;
+    color: #6c757d;
+}
+
+.upload-formats {
+    padding: 0.5rem 1rem;
+    background: rgba(255, 255, 255, 0.8);
+    border-radius: 20px;
+    display: inline-block;
+}
+
+.upload-progress {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 80%;
+    background: rgba(255, 255, 255, 0.95);
+    padding: 2rem;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+    z-index: 20;
+}
+
+/* Ensure browse button is always visible */
+#browseFilesLink {
+    position: relative;
+    z-index: 15;
+    display: inline-block !important;
+    visibility: visible !important;
+}
+
+#fileDetails .card {
+    border: none;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+#fileDetails .card-header {
+    border-bottom: none;
+    padding: 1rem 1.5rem;
+}
+
+#fileDetails .card-body {
+    padding: 1.5rem;
+}
+
+.file-info-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.file-info-item:last-child {
+    border-bottom: none;
+}
+
+.file-info-label {
+    font-weight: 600;
+    color: #495057;
+}
+
+.file-info-value {
+    color: #6c757d;
+    font-family: 'Courier New', monospace;
+}
+
+.file-size-badge {
+    background: linear-gradient(45deg, #1e3c72, #2a5298);
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+#previewTable {
+    font-size: 0.875rem;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+/* Hide scrollbars for preview table */
+#previewTable::-webkit-scrollbar {
+    display: none;
+}
+
+#previewTable {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+}
+
+#previewTable th {
+    background: #f8f9fa;
+    font-weight: 600;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.modal-xl {
+    max-width: 1200px;
+}
+
+/* Animation for file selection */
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+#fileDetails {
+    animation: slideInUp 0.4s ease-out;
+}
+
+/* Error state styles */
+.upload-zone.error {
+    border-color: #dc3545;
+    background: linear-gradient(135deg, #f8d7da 0%, #f5c2c7 100%);
+}
+
+.upload-zone.error .upload-icon {
+    color: #dc3545;
+}
+
+/* Success state styles */
+.upload-zone.success {
+    border-color: #198754;
+    background: linear-gradient(135deg, #d1e7dd 0%, #a3d9a4 100%);
+}
+
+.upload-zone.success .upload-icon {
+    color: #198754;
+}
+
+/* Modern Upload Modal Styles */
+.bg-gradient-primary {
+    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+}
+
+.modal-icon-wrapper {
+    width: 50px;
+    height: 50px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(10px);
+}
+
+/* Upload Layout Container - Two Column Layout */
+.upload-layout-container {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    min-height: 500px;
+}
+
+/* Requirements Section */
+.requirements-section {
+    padding: 2rem;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+}
+
+/* Requirements Section in grid layout */
+.upload-layout-container .requirements-section {
+    /* border-right: 1px solid #2a5298; */
+    min-height: auto;
+    display: flex;
+    align-items: center;
+}
+
+.requirements-card {
+    background: white;
+    border-radius: 16px;
+    padding: 2rem;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+    border: 1px solid rgba(0, 0, 0, 0.05);
+    width: 100%;
+    max-width: 800px;
+    margin: 0 auto;
+    transition: all 0.3s ease;
+}
+
+.requirements-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 2rem;
+}
+
+.requirements-icon {
+    width: 48px;
+    height: 48px;
+    background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 1.25rem;
+    margin-right: 1rem;
+}
+
+.requirements-title {
+    margin: 0;
+    color: #2d3748;
+    font-weight: 600;
+    font-size: 1rem;
+}
+
+.requirements-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1.5rem;
+}
+
+/* Requirements grid in two-column layout */
+.upload-layout-container .requirements-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+}
+
+.requirement-item {
+    display: flex;
+    align-items: center;
+    padding: 1rem;
+    background: #f8f9fa;
+    border-radius: 12px;
+    border: 1px solid #e9ecef;
+    transition: all 0.3s ease;
+}
+
+.requirement-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    background: white;
+}
+
+.requirement-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    margin-right: 1rem;
+}
+
+.requirement-content {
+    flex: 1;
+}
+
+.requirement-label {
+    display: block;
+    font-weight: 600;
+    color: #4a5568;
+    font-size: 0.875rem;
+    margin-bottom: 0.25rem;
+}
+
+.requirement-value {
+    display: block;
+    color: #718096;
+    font-size: 0.875rem;
+}
+
+/* Modern Upload Zone */
+.modern-upload-zone {
+   
+    background: white;
+    border-radius: 20px;
+    padding: 2rem 1rem;
+    text-align: center;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Modern Upload Zone in grid layout */
+.upload-layout-container .modern-upload-zone {
+    margin: 0;
+    border-radius: 0;
+    border-left: none;
+    border-top: none;
+    border-bottom: none;
+    min-height: 500px;
+}
+
+.modern-upload-zone::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    /* background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%); */
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+/* .modern-upload-zone:hover::before {
+    opacity: 1;
+} */
+
+/* .modern-upload-zone:hover {
+    border-color: #667eea;
+    transform: translateY(-4px);
+    box-shadow: 0 12px 40px rgba(102, 126, 234, 0.15);
+} */
+
+.upload-zone-inner {
+    position: relative;
+    z-index: 2;
+    width: 100%;
+}
+
+/* Upload zone inner in grid layout */
+.upload-layout-container .upload-zone-inner {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    height: 100%;
+}
+
+.upload-animation-container {
+    margin-bottom: 2rem;
+}
+
+.upload-icon-wrapper {
+    position: relative;
+    display: inline-block;
+}
+
+.upload-icon {
+    font-size: 2.5rem;
+    color: #667eea;
+    transition: all 0.3s ease;
+}
+
+.upload-pulse {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 100px;
+    height: 100px;
+    border: 2px solid #667eea;
+    border-radius: 50%;
+    opacity: 0;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        transform: translate(-50%, -50%) scale(0.8);
+        opacity: 0.8;
+    }
+    50% {
+        transform: translate(-50%, -50%) scale(1.2);
+        opacity: 0.4;
+    }
+    100% {
+        transform: translate(-50%, -50%) scale(1.6);
+        opacity: 0;
+    }
+}
+
+.upload-content {
+    max-width: 400px;
+    margin: 0 auto;
+}
+
+.upload-title {
+    color: #2d3748;
+    font-weight: 600;
+    font-size: 1.25rem;
+    margin-bottom: 0.5rem;
+}
+
+.upload-subtitle {
+    color: #718096;
+    font-size: 0.9rem;
+    margin-bottom: 2rem;
+}
+
+.upload-btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 1rem 2rem;
+    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    margin-bottom: 2rem;
+}
+
+.upload-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(30, 60, 114, 0.3);
+    color: white;
+    text-decoration: none;
+}
+
+.upload-info {
+    margin-top: 1.5rem;
+}
+
+.format-badges {
+    display: flex;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.format-badge {
+    padding: 0.25rem 0.75rem;
+    background: #e2e8f0;
+    color: #4a5568;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.size-limit {
+    color: #718096;
+    font-size: 0.875rem;
+    margin: 0;
+}
+
+/* File Details Section */
+.file-details-section {
+    margin: 1rem;
+    animation: slideInUp 0.4s ease-out;
+}
+
+.file-details-card {
+    border-radius: 20px;
+    overflow: hidden;
+}
+
+.file-details-header {
+    display: flex;
+    align-items: center;
+}
+
+.success-indicator {
+    width: 60px;
+    height: 60px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    margin-right: 1.5rem;
+    backdrop-filter: blur(10px);
+}
+
+.header-content {
+    flex: 1;
+}
+
+.file-status-title {
+    margin: 0 0 0.5rem 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.file-status-subtitle {
+    margin: 0;
+    opacity: 0.9;
+    font-size: 0.9rem;
+}
+
+.file-details-body {
+    padding: 2rem;
+}
+
+.file-info-section {
+    margin-bottom: 2rem;
+}
+
+.file-info-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem;
+    background: #f8f9fa;
+    border-radius: 12px;
+    margin-bottom: 1rem;
+    border: 1px solid #e9ecef;
+    transition: all 0.3s ease;
+}
+
+.file-info-item:hover {
+    background: white;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.file-info-label {
+    display: flex;
+    align-items: center;
+    font-weight: 600;
+    color: #4a5568;
+}
+
+.file-info-value {
+    color: #718096;
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+}
+
+.file-size-badge {
+    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 20px;
+    font-size: 0.875rem;
+    font-weight: 600;
+}
+
+.file-preview-section {
+    margin-bottom: 2rem;
+}
+
+.preview-header {
+    margin-bottom: 1rem;
+}
+
+.preview-title {
+    color: #4a5568;
+    font-weight: 600;
+    margin: 0;
+}
+
+.preview-content {
+    background: #f8f9fa;
+    border-radius: 12px;
+    padding: 1rem;
+    border: 1px solid #e9ecef;
+}
+
+.action-buttons {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.btn-action {
+    display: inline-flex;
+    align-items: center;
+    padding: 1rem 1.5rem;
+    border: none;
+    border-radius: 12px;
+    font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-size: 0.95rem;
+}
+
+.btn-action.btn-primary {
+    background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+    color: white;
+}
+
+.btn-action.btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(40, 167, 69, 0.3);
+}
+
+.btn-action.btn-secondary {
+    background: linear-gradient(135deg, #6c757d 0%, #495057 100%);
+    color: white;
+}
+
+.btn-action.btn-secondary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(108, 117, 125, 0.3);
+}
+
+.btn-action.btn-outline {
+    background: white;
+    color: #6c757d;
+    border: 2px solid #e9ecef;
+}
+
+.btn-action.btn-outline:hover {
+    background: #f8f9fa;
+    border-color: #dee2e6;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .upload-layout-container {
+        grid-template-columns: 1fr;
+        min-height: auto;
+    }
+
+    .upload-layout-container .modern-upload-zone {
+        border: 2px dashed #2a5298;
+        border-radius: 20px;
+        margin: 1rem;
+        min-height: auto;
+    }
+
+    .requirements-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .modern-upload-zone {
+        margin: 1rem;
+        padding: 2rem 1rem;
+    }
+
+    .file-details-section {
+        margin: 1rem;
+    }
+
+    .action-buttons {
+        flex-direction: column;
+    }
+
+    .btn-action {
+        justify-content: center;
+    }
+}
+
+/* Custom SweetAlert Styling */
+.swal-success-popup {
+    border-radius: 12px !important;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1) !important;
+    border: 1px solid #e2e8f0 !important;
+}
+
+.swal-success-title {
+    color: #059669 !important;
+    font-weight: 600 !important;
+    font-size: 1.5rem !important;
+}
+
+.swal-success-content {
+    color: #374151 !important;
+    font-size: 1rem !important;
+    line-height: 1.5 !important;
+}
+
+.swal-success-button {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+    border: none !important;
+    border-radius: 8px !important;
+    padding: 12px 24px !important;
+    font-weight: 600 !important;
+    font-size: 0.95rem !important;
+    transition: all 0.2s ease !important;
+}
+
+.swal-success-button:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 8px 25px rgba(16, 185, 129, 0.3) !important;
+}
+
+.swal-error-popup {
+    border-radius: 12px !important;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15) !important;
+}
+
+.swal-error-title {
+    font-weight: 600 !important;
+    font-size: 1.4rem !important;
+}
+
+.swal-error-button {
+    border-radius: 8px !important;
+    padding: 12px 24px !important;
+    font-weight: 600 !important;
+    font-size: 0.95rem !important;
+    border: none !important;
+    transition: all 0.2s ease !important;
+}
+
+/* Fallback animations if Animate.css fails to load */
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes fadeOutDown {
+    from {
+        opacity: 1;
+        transform: translateY(0);
+    }
+    to {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+}
+
+@keyframes shakeX {
+    from, to {
+        transform: translate3d(0, 0, 0);
+    }
+    10%, 30%, 50%, 70%, 90% {
+        transform: translate3d(-10px, 0, 0);
+    }
+    20%, 40%, 60%, 80% {
+        transform: translate3d(10px, 0, 0);
+    }
+}
+
+.animate__animated {
+    animation-duration: 0.5s;
+    animation-fill-mode: both;
+}
+
+.animate__faster {
+    animation-duration: 0.3s;
+}
+
+.animate__fadeInUp {
+    animation-name: fadeInUp;
+}
+
+.animate__fadeOutDown {
+    animation-name: fadeOutDown;
+}
+
+.animate__shakeX {
+    animation-name: shakeX;
+}
+
+/* Global scrollbar hiding class */
+.hide-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+
+.hide-scrollbar {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+}
+
+</style>
+
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-1 px-md-2 px-lg-3">
+    <!-- Toast container for notifications -->
+    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+        <div id="validationToast" class="toast validation-toast" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-header">
+                <i class="bi bi-shield-check me-2 text-primary"></i>
+                <strong class="me-auto">TIN Validation</strong>
+                <small>Just now</small>
+                <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body">
+                TIN details reused from history.
+            </div>
+        </div>
+    </div>
+
+    <!-- Welcome Card - Full width -->
+    <div class="profile-welcome-section mb-4">
+        <!-- Welcome Card content -->
+        <div class="profile-welcome-card">
+            <div class="d-flex align-items-center justify-content-between">
+            <div class="d-flex align-items-center">
+                <div class="welcome-icon">
+                <i class="bi bi-box-arrow-in-right"></i>
+                </div>
+                <div class="welcome-content">
+                    <h3 class="text-xl font-semibold text-white-800 md:text-2xl tracking-tight">Outbound Manual</h3>
+                            <p class="mb-0 cursor-pointer" data-bs-placement="bottom" data-bs-html="true"
+                            title="">
+                    Manage and track your consolidated document submissions, including validation and submission status.
+                </p>
+                <!-- <button id="openTutorialBtn" class="btn btn-sm btn-outline-light mt-2">
+                    <i class="bi bi-question-circle me-1"></i> How to use this page
+                </button> -->
+                </div>
+            </div>
+            <div class="d-flex align-items-start">
+                <!-- Existing datetime section -->
+                <div class="welcome-datetime text-end">
+                <div class="current-time">
+                    <i class="bi bi-clock"></i>
+                    <span id="currentTime">00:00:00 AM</span>
+                </div>
+                <div class="current-date">
+                    <i class="bi bi-calendar3"></i>
+                    <span id="currentDate">Loading...</span>
+                </div>
+            </div>
+            </div>
+        </div>
+        
+        <div class="disclaimer-note mt-2">
+                            <i class="bi bi-exclamation-circle"></i>
+                            <span>For a smooth submission process, Try to split your invoices into  &lt;25 Invoices per file and verify all required fields are complete and accurate on your ERP System Before Submitting to LHDN. </br>
+                            <span>Pinnacle e-Invoice Portal performs initial validations for Mandatory fields before proceeding to LHDN submission</span>
+                            <a href="/help" class="text-decoration-none" target="_blank">
+                                <i class="bi bi-question-circle" data-bs-toggle="tooltip" title="Click for help documentation"></i>
+                            </a>
+                        </div> 
+                        
+        </div>
+        <!-- Content Section - With margins -->
+        <div class="content-section">
+      <!-- Cards Section -->
+         <div class="cards-container">
+        <!-- Invoices Card -->
+        <div class="info-card invoices-card">
+            <div class="card-info">
+                <div class="card-icon position-relative">
+                    <i class="bi bi-file-earmark-text"></i>
+                </div>
+                <div class="count-info">
+                    <div class="spinner-border text-primary loading-spinner" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <h6 class="total-invoice-count" style="display: none;">0</h6>
+                    <span class="text-muted">Total</span>
+                </div>
+            </div>
+            <span class="card-title-new">INVOICES</span>
+        </div>
+
+        <!-- Valid Card -->
+        <div class="info-card valid-card">
+            <div class="card-info">
+                <div class="card-icon position-relative">
+                    <i class="bi bi-check2-circle"></i>
+                </div>
+                <div class="count-info">
+                    <div class="spinner-border text-success loading-spinner" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <h6 class="total-submitted-count" style="display: none;">0</h6>
+                    <span class="text-muted">Total</span>
+                </div>
+            </div>
+            <span class="card-title-new">SUBMITTED</span>
+        </div>
+
+
+        <!-- Invalid Card -->
+        <div class="info-card invalid-card">
+            <div class="card-info">
+                <div class="card-icon position-relative">
+                    <i class="bi bi-file-earmark-excel-fill"></i>
+                </div>
+                <div class="count-info">
+                    <div class="spinner-border text-danger loading-spinner" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <h6 class="total-invalid-count" style="display: none;">0</h6>
+                    <span class="text-muted">Total</span>
+                </div>
+            </div>
+            <span class="card-title-new">INVALID</span>
+        </div>
+
+        <!-- PENDING Card -->
+        <div class="info-card pending-card">
+            <div class="card-info">
+                <div class="card-icon position-relative">
+                    <i class="bi bi-exclamation-circle-fill"></i>
+                </div>
+                <div class="count-info">
+                    <div class="spinner-border text-warning loading-spinner" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <h6 class="total-queue-value" style="display: none;">0</h6>
+                    <span class="text-muted">Total</span>
+                </div>
+            </div>
+            <span class="card-title-new">PENDING</span>
+        </div>
+    </div>
+
+
+
+
+    </div>
+
+            <!-- Table Section -->
+            <div class="table-container-wrapper">
+                <div class="table-card">
+                    <div class="table-header">
+                        <div class="table-header-content">
+                            <h2 class="table-title"></h2>
+                            <div class="table-actions">
+                              
+                        
+                            </div>
+                        </div>
+
+
+
+
+                    </div>
+                    <div class="table-controls">
+                        <div class="d-flex align-items-center gap-1">
+                            <div class="modern-length">
+                                <!-- Length control will be inserted by DataTables -->
+                            </div>
+                            <div class="modern-search">
+                                <!-- Search control will be inserted by DataTables -->
+                            </div>
+                        </div>
+                    </div>
+                    <div class="table-body-container">
+                        <div class="responsive-table-container">
+                            <div class="table-section">
+                                <div class="outbound-table-container">
+                                    <div>
+                                        <!-- Primary Filters Row -->
+                                        <div class="row g-3 mb-3">
+                                        
+                                            <!-- Global Search -->
+                                            <div class="col-md-4">
+                                                <div class="search-wrapper position-relative">
+                                                    <i class="bi bi-search position-absolute top-50 start-0 translate-middle-y ms-3 text-muted"></i>
+                                                    <input type="text" class="form-control form-control-lg ps-5" id="globalSearch"
+                                                        placeholder="Search documents...">
+                                                </div>
+                                                
+                                            </div>
+                                            
+                                            <!-- Quick Filters -->
+                                            <div class="col-md-8">
+                                                <div class="quick-filters d-flex gap-2">
+                                                    <button class="btn outbound-action-btn submit active" data-filter="all">
+                                                        <i class="bi bi-list me-1"></i>All List
+                                                    </button>
+                                                    <!-- <button class="btn outbound-action-btn submit" data-filter="pending">
+                                                        <i class="bi bi-clock-history me-1"></i>Pending
+                                                    </button> -->
+                                                    <div class="ms-auto">
+                                                        <!-- Manual page specific buttons can go here if needed -->
+
+                                                       <!-- Upload Excel Template Button -->
+                                <button class="btn outbound-action-btn submit btn-sm me-2" id="openExcelUploadModalBtn" data-bs-toggle="modal" data-bs-target="#flatFileUploadModal" title="Upload Excel template for processing">
+                                    <i class="bi bi-file-earmark-excel me-1"></i>Upload Excel Template
+                                </button>
+
+                                <!-- Bulk Submit Button -->
+                                <button class="btn outbound-action-btn submit btn-sm me-2" id="bulkSubmitBtn" disabled title="Submit selected files to LHDN">
+                                    <i class="bi bi-cloud-upload me-1"></i>Bulk Submit
+                                </button>
+
+                                <!-- Bulk Delete Button -->
+                                <button class="btn outbound-action-btn cancel btn-sm" id="bulkDeleteBtn" disabled title="Delete selected files">
+                                    <i class="bi bi-trash me-1"></i>Bulk Delete
+                                </button>
+
+                                                
+                                                 </div>
+
+                                            </div>
+                                        </div>
+
+                                        <!-- Advanced Filters (Collapsible) -->
+                                        <div class="collapse" id="advancedFilters">
+                                            <div class="advanced-filters-content border-top pt-3">
+                                                <div class="row g-3">
+                                                    <!-- Date Range -->
+                                                    <div class="col-md-6">
+                                                        <label class="form-label d-flex align-items-center">
+                                                            <i class="bi bi-calendar-range me-2"></i>Date Range
+                                                        </label>
+                                                        <div class="input-group">
+                                                            <input type="date" class="form-control" id="startDate" placeholder="Start date">
+                                                            <span class="input-group-text bg-light">to</span>
+                                                            <input type="date" class="form-control" id="endDate" placeholder="End date">
+                                                        </div>
+                                                        <small class="text-muted mt-1">
+                                                            <i class="bi bi-info-circle me-1"></i>
+                                                            Filter documents by their upload date
+                                                        </small>
+                                                    </div>
+
+
+                                                    </div>
+                                                    
+                                                </div>
+
+
+                                                <!-- Filter Note -->
+                                                <div class="filter-note alert alert-info mt-3" role="alert">
+                                                    <i class="bi bi-info-circle me-2"></i>
+                                                    <small>
+                                                        Use the filters above to narrow down your results. Active filters will appear below as tags that you can easily remove. Click the 'x' on any tag to remove that filter, or use 'Clear all filters' to reset.
+                                                    </small>
+                                                </div>
+
+                                                <!-- Active Filters Display -->
+                                                <div class="active-filters mt-3 pt-3 border-top">
+                                                    <div class="d-flex align-items-center">
+                                                        <small class="text-muted me-2">Active Filters:</small>
+                                                        <div class="active-filter-tags" id="activeFilterTags">
+                                                            <!-- Active filter tags will be added here dynamically -->
+                                                        </div>
+                                                    </div>
+                                                    
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                    </div>
+                               
+                                    <!-- End of new filter section -->
+                                        <table id="invoiceTable" class="">
+                                            <thead>
+                                                <tr>
+                                                    <th class="outbound-checkbox-column">
+                                                        <div class="outbound-checkbox-header">
+                                                            <input type="checkbox" class="outbound-checkbox" id="selectAll">
+                                                        </div>
+                                                    </th>
+                                                    <th>#</th>
+                                                    <th>FILE NAME.</th>
+                                                    <th>INVOICE NO.</th>
+                                                    <th>SUPPLIER</th>
+                                                    <th>RECEIVER</th>
+                                                    <th>DATE</th>
+                                                    <th>INV. DATE INFO</th>
+                                                    <th style="display:none"></th>
+                                                    <th>STATUS</th>
+                                                    <th>TOTAL AMOUNT</th>
+                                                    <th class="outbound-action-column">ACTION</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+
+                                            </tbody>
+                                        </table>
+                                        
+                                        <div class="pagination-container">
+                                        <!-- Pagination will be inserted by DataTables -->
+                                        </div>
+                                              <div class="disclaimer-note mt-2 mb-2" style="background: rgba(220, 53, 69, 0.1); color: #842029;">
+                            <i class="bi bi-exclamation-triangle"></i>
+                            <span><strong>Important Disclaimer:</strong> <br>
+                            Our platform provides validation services, but the ultimate responsibility for data accuracy lies with the user.
+                            <br>
+                            We are not liable for any consequences, penalties, or issues arising from submission of incomplete, inaccurate or non-compliant data to LHDN.
+                           <br>If there are some minor issues like duplication try to cancel it as long as its within 72hr rule.</span>
+                        </div>
+                                    </div>
+                                       
+
+                        <!-- Consolidation Guidelines -->
+                        <div class="mt-1 mb-4">
+                            <div class="middleware-disclaimer mb-3">
+                                <div class="disclaimer-icon">
+                                    <i class="bi bi-info-circle-fill text-primary"></i>
+                                </div>
+                                <div class="disclaimer-content">
+                                    <h6 class="mb-0 text-primary fw-bold">Important Information About Consolidation</h6>
+                                    <p class="mb-2">This section outlines critical requirements for LHDN e-Invoice consolidation. Please review carefully before proceeding.</p>
+                                </div>
+                            </div>
+
+                            <div class="d-flex align-items-center justify-content-between mb-3"
+                                 id="consolidationHeader">
+                                <div class="d-flex align-items-center">
+                                    <span class="badge rounded-pill bg-primary me-2" style="padding: 8px;" data-bs-toggle="tooltip" title="Consolidation allows grouping multiple invoices into a single submission">
+                                        <i class="bi bi-boxes"></i>
+                                    </span>
+                                    <h6 class="mb-0 text-primary fw-bold">LHDN e-Invoice Consolidation Requirements <i class="bi bi-info-circle-fill ms-1 small" data-bs-toggle="tooltip" data-bs-html="true"
+                                        title="<div class='p-2'>
+                                            <strong>Before Submitting a Consolidation:</strong><br>
+                                            • Must Group multiple invoices together<br>
+                                            • Must meet LHDN requirements<br>
+                                            • Streamlines submission process</div>">
+                                        </i>
+                                        </h6>
+                                </div>
+                                <div class="d-flex align-items-center gap-2">
+                                    <a href="https://www.hasil.gov.my/media/uwwehxwq/irbm-e-invoice-specific-guideline.pdf"
+                                       target="_blank"
+                                       class="btn btn-sm btn-link text-primary p-0 d-flex align-items-center hover-effect"
+                                       data-bs-toggle="tooltip"
+                                       data-bs-html="true"
+                                       title="<div class='p-2'>
+                                               <strong>LHDN Official Guidelines:</strong><br>
+                                               • Review consolidation requirements<br>
+                                               • Ensure compliance with LHDN standards<br>
+                                               • Understand submission protocols
+                                             </div>">
+                                        <i class="bi bi-file-pdf fs-5"></i>
+                                        <span class="ms-1 small">LHDN Guidelines</span>
+                                    </a>
+                                    <button class="btn btn-sm btn-link text-primary p-0 d-flex align-items-center"
+                                            type="button"
+                                            id="toggleConsolidation"
+                                            data-bs-toggle="collapse"
+                                            data-bs-target="#consolidationDetails"
+                                            aria-expanded="false"
+                                            aria-controls="consolidationDetails">
+                                        <i class="bi bi-chevron-down toggle-icon fs-5"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="collapse" id="consolidationDetails">
+                                <div class="consolidation-content bg-white p-3 border rounded mt-2">
+                                    <div class="row g-3">
+                                        <!-- Buyer's Details -->
+                                        <div class="col-md-6">
+                                            <div class="content-card h-100" style="border: 1px solid #e9ecef; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                                                <div class="card-header bg-light">
+                                                    <i class="bi bi-person-badge text-primary"></i>
+                                                    <span class="fw-bold">Buyer's Details</span>
+                                                </div>
+                                                <div class="card-content">
+                                                    <div class="detail-item">
+                                                        <span class="label">Name</span>
+                                                        <span class="value">"General Public"</span>
+                                                    </div>
+                                                    <div class="detail-item">
+                                                        <span class="label">TIN</span>
+                                                        <span class="value">"EI00000000010"</span>
+                                                    </div>
+                                                    <div class="detail-item">
+                                                        <span class="label">Registration/ID</span>
+                                                        <span class="value">"NA"</span>
+                                                    </div>
+                                                    <div class="detail-item">
+                                                        <span class="label">Other Details</span>
+                                                        <span class="value text-muted">Address/Contact/SST: "NA"</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Description Format -->
+                                        <div class="col-md-6">
+                                            <div class="content-card h-100" style="border: 1px solid #e9ecef; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                                                <div class="card-header bg-light">
+                                                    <i class="bi bi-list-check text-primary"></i>
+                                                    <span class="fw-bold">Description Format</span>
+                                                </div>
+                                                <div class="card-content">
+                                                    <div class="format-item">
+                                                        <i class="bi bi-check2 text-success"></i>
+                                                        <span>Summary per receipt as line items (Use Classification Code: 004)</span>
+                                                    </div>
+                                                    <div class="format-item">
+                                                        <i class="bi bi-check2 text-success"></i>
+                                                        <span>Continuous receipt number chain</span>
+                                                    </div>
+                                                    <div class="format-item">
+                                                        <i class="bi bi-check2 text-success"></i>
+                                                        <span>Branch consolidated submissions</span>
+                                                    </div>
+                                                    <div class="format-item text-danger">
+                                                        <i class="bi bi-exclamation-circle"></i>
+                                                        <span>Receipt reference numbers required</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <script>
+                            document.addEventListener('DOMContentLoaded', function() {
+                                // Get the consolidation elements
+                                const toggleBtn = document.getElementById('toggleConsolidation');
+                                const consolidationHeader = document.getElementById('consolidationHeader');
+                                const consolidationDetails = document.getElementById('consolidationDetails');
+
+                                if (toggleBtn && consolidationDetails && consolidationHeader) {
+                                    // Initialize collapse with Bootstrap
+                                    const bsCollapse = new bootstrap.Collapse(consolidationDetails, {
+                                        toggle: false
+                                    });
+
+                                    // Add hover effects to header
+                                    consolidationHeader.addEventListener('mouseenter', function() {
+                                        this.style.transform = 'translateY(-2px)';
+                                        this.style.boxShadow = '0 4px 8px rgba(0,0,0,0.1)';
+                                    });
+
+                                    consolidationHeader.addEventListener('mouseleave', function() {
+                                        this.style.transform = 'translateY(0)';
+                                        this.style.boxShadow = 'none';
+                                    });
+
+                                    // Handle header click
+                                    consolidationHeader.addEventListener('click', function(e) {
+                                        // Don't trigger if clicking the PDF link or toggle button
+                                        if (!e.target.closest('a') && !e.target.closest('button')) {
+                                            bsCollapse.toggle();
+                                        }
+                                    });
+
+                                    // Handle toggle button click
+                                    toggleBtn.addEventListener('click', function(e) {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        bsCollapse.toggle();
+                                    });
+
+                                    // Handle collapse events
+                                    consolidationDetails.addEventListener('show.bs.collapse', function () {
+                                        toggleBtn.setAttribute('aria-expanded', 'true');
+                                        const icon = toggleBtn.querySelector('.toggle-icon');
+                                        if (icon) {
+                                            icon.style.transform = 'rotate(180deg)';
+                                        }
+                                    });
+
+                                    consolidationDetails.addEventListener('hide.bs.collapse', function () {
+                                        toggleBtn.setAttribute('aria-expanded', 'false');
+                                        const icon = toggleBtn.querySelector('.toggle-icon');
+                                        if (icon) {
+                                            icon.style.transform = 'rotate(0deg)';
+                                        }
+                                    });
+
+                                    // Add transition to icon
+                                    const icon = toggleBtn.querySelector('.toggle-icon');
+                                    if (icon) {
+                                        icon.style.transition = 'transform 0.3s ease';
+                                    }
+                                }
+                            });
+                        </script>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Loading Overlay -->
+                        <div id="tableLoadingOverlay" class="table-loading-overlay d-none">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p class="mt-2">Fetching documents...</p>
+                        </div>
+                </div>
+            </div>
+
+
+{% endblock %}
+{% block scripts %}
+<!-- Toast Notification Utility -->
+<script src="/assets/js/utils/toast.js"></script>
+<!-- New submission orchestrator -->
+<script src="/assets/js/modules/submission/submission-client.js"></script>
+<script src="/assets/js/modules/excel/outbound-manual.js"></script>
+<!-- <script src="/assets/js/modules/tutorial/guided-tour.js"></script> -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+
+
+<!-- Modal for Validation Results -->
+<div class="modal fade" id="validationResultsModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="float-end">
+                    <a href="https://www.newpages.net/validate-tax-payer"
+                       target="_blank"
+                       class="btn btn-outline-secondary btn-sm"
+                       data-bs-toggle="tooltip"
+                       title="Alternative TIN validation via NewPages">
+                        <i class="bi bi-box-arrow-up-right me-1"></i>
+                        Alternative Validator
+                    </a>
+                </div>
+                <h5 class="modal-title">
+                    <i class="bi bi-shield-check"></i>
+                    TIN Validation Results
+                </h5>
+                <button type="button" class="btn-lhdn d-flex align-items-center justify-content-center" data-bs-dismiss="modal"></button>
+
+            </div>
+            <div class="modal-body">
+                <div id="validationResults">
+                    <!-- Validation results will be populated here -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Validation Error Modal -->
+<div class="modal fade" id="validationErrorModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    Validation Error
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="validationErrorList">
+                    <!-- Error details will be populated here -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+<!-- Alert Template -->
+<template id="alertTemplate">
+    <div class="custom-alert">
+        <i class="alert-icon"></i>
+        <div class="alert-content">
+            <div class="alert-title"></div>
+            <div class="alert-message"></div>
+        </div>
+        <button class="close-btn" onclick="this.parentElement.remove()">×</button>
+    </div>
+</template>
+
+<!-- Legacy progress modal removed. New animated submission flow is rendered dynamically by JS (showSubmissionFlowModal). -->
+
+<!-- Tutorial Modal -->
+<div class="guided-tour-overlay" id="guidedTourOverlay" style="display: none;"></div>
+<div class="guided-tour-tooltip" id="guidedTourTooltip" style="display: none;">
+    <div class="tooltip-header">
+        <div class="tooltip-step-indicator">
+            <span id="currentStepIndicator">1</span>/<span id="totalStepsIndicator">6</span>
+        </div>
+        <button type="button" class="tooltip-close-btn" id="closeTourBtn">
+            <i class="bi bi-x"></i>
+        </button>
+    </div>
+    <div class="tooltip-body">
+        <h4 class="tooltip-title" id="tooltipTitle">Welcome to Outbound</h4>
+        <div class="tooltip-content" id="tooltipContent">
+            <!-- Content will be dynamically inserted -->
+        </div>
+    </div>
+    <div class="tooltip-progress">
+        <div class="progress">
+            <div class="progress-bar" id="tourProgressBar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+        </div>
+        <div class="step-indicators d-flex justify-content-between px-3 mt-2" id="stepIndicators">
+            <!-- Step indicators will be dynamically inserted -->
+        </div>
+    </div>
+    <div class="tooltip-footer">
+        <button type="button" class="tooltip-btn tooltip-btn-prev" id="prevStepBtn" disabled>
+            <i class="bi bi-arrow-left"></i>
+        </button>
+        <button type="button" class="tooltip-btn tooltip-btn-skip" id="skipTourBtn">
+            Skip
+        </button>
+        <button type="button" class="tooltip-btn tooltip-btn-next" id="nextStepBtn">
+            Next <i class="bi bi-arrow-right"></i>
+        </button>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Get the advanced filters button and collapse element
+    const advancedFiltersBtn = document.querySelector('[data-bs-toggle="collapse"][data-bs-target="#advancedFilters"]');
+    const advancedFiltersCollapse = document.getElementById('advancedFilters');
+
+    if (advancedFiltersBtn && advancedFiltersCollapse) {
+        // Initialize the collapse manually
+        const bsCollapse = new bootstrap.Collapse(advancedFiltersCollapse, {
+            toggle: false
+        });
+
+        // Add click event listener to the button
+        advancedFiltersBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            bsCollapse.toggle();
+        });
+
+        // Update button icon on collapse events
+        advancedFiltersCollapse.addEventListener('show.bs.collapse', function () {
+            const icon = advancedFiltersBtn.querySelector('i.bi');
+            if (icon) {
+                icon.classList.remove('bi-sliders');
+                icon.classList.add('bi-x-lg');
+            }
+        });
+
+        advancedFiltersCollapse.addEventListener('hide.bs.collapse', function () {
+            const icon = advancedFiltersBtn.querySelector('i.bi');
+            if (icon) {
+                icon.classList.remove('bi-x-lg');
+                icon.classList.add('bi-sliders');
+            }
+        });
+    }
+});
+</script>
+
+<!-- Loading Backdrop Modal -->
+<div id="loadingBackdrop" class="loading-backdrop" style="display: none;">
+    <div class="loading-content">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+        <div class="loading-message">
+            <h5>Loading and Preparing Your Documents</h5>
+            <p>Please do not refresh the page...</p>
+        </div>
+    </div>
+</div>
+
+<!-- TIN Validation Modal -->
+<div class="modal fade" id="tinValidationModal" tabindex="-1" aria-labelledby="tinValidationModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="tinValidationModalLabel">
+                    <i class="bi bi-shield-check me-2"></i>
+                    Validate Tax Identification Number (TIN)
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-0">
+                <div class="row g-0">
+                    <!-- Left Column - Input Form -->
+                    <div class="col-md-5 border-end">
+                        <div class="p-4">
+                            <!-- Information Alert -->
+                            <div class="alert alert-info mb-3">
+                                <div class="d-flex">
+                                    <div class="flex-shrink-0">
+                                        <i class="bi bi-info-circle-fill"></i>
+                                    </div>
+                                    <div class="flex-grow-1 ms-2">
+                                        <p class="mb-0"><strong>LHDN Recommendation:</strong> Validate all TINs before using them in invoices.</p>
+                                        <small>Validated TINs are cached to reduce API calls and improve performance.</small>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- TIN Validation Form -->
+                            <form id="tinValidationForm" class="needs-validation" novalidate>
+                                <div class="mb-1">
+                                    <label for="tinNumber" class="form-label fw-medium">TIN Number <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="tinNumber" placeholder="Enter Tax Identification Number" required>
+                                    <div class="invalid-feedback">Please enter a valid TIN number.</div>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label for="idType" class="form-label fw-medium">ID Type <span class="text-danger">*</span></label>
+                                    <select class="form-select" id="idType" required>
+                                        <option value="" selected disabled>Select ID Type</option>
+                                        <option value="NRIC">NRIC (National Registration Identity Card)</option>
+                                        <option value="PASSPORT">Passport</option>
+                                        <option value="BRN">Business Registration Number</option>
+                                        <option value="ARMY">Army Number</option>
+                                    </select>
+                                    <div class="invalid-feedback">Please select an ID type.</div>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label for="idValue" class="form-label fw-medium">ID Value <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="idValue" placeholder="Enter ID value" required>
+                                    <div class="invalid-feedback">Please enter the ID value.</div>
+                                    <small class="text-muted mt-1">
+                                        <i class="bi bi-info-circle-fill me-1"></i>
+                                        For BRN, use your 12-digit business registration number
+                                    </small>
+                                </div>
+
+
+                                <div class="d-grid mt-4">
+                                    <button type="button" class="btn btn-lhdn" id="validateSingleTin">
+                                        <i class="bi bi-shield-check me-1"></i>
+                                        Validate TIN
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- Right Column - Validation Results -->
+                    <div class="col-md-7 bg-light" id="validationResultSection">
+                        <div class="p-4">
+                            <div class="d-flex align-items-center justify-content-center h-100">
+                                <div class="text-center text-muted" id="emptyResultState">
+                                    <i class="bi bi-shield-check display-1 mb-3 d-block opacity-50"></i>
+                                    <h5>Validation Results</h5>
+                                    <p class="mb-0">Enter TIN details and click "Validate TIN" to see validation results here.</p>
+                                </div>
+                                <div id="validationResultContent" class="w-100 d-none"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Flat File Upload Modal -->
+<div class="modal fade" id="flatFileUploadModal" tabindex="-1" aria-labelledby="flatFileUploadModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-xl">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header bg-gradient-primary text-white border-0 py-4">
+                <div class="d-flex align-items-center">
+                    <div class="modal-icon-wrapper me-3">
+                        <i class="bi bi-cloud-upload-fill fs-2"></i>
+                    </div>
+                    <div>
+                        <h3 class="modal-title mb-1" id="flatFileUploadModalLabel">Excel Template Upload</h3>
+                        <p class="mb-0 opacity-75 small">Upload your invoice data for processing</p>
+                    </div>
+                </div>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-0">
+                <!-- Two-column layout container -->
+                <div class="upload-layout-container">
+                    <!-- Upload Requirements -->
+                    <div class="requirements-section">
+                        <div class="requirements-card">
+                            <div class="requirements-header">
+                                <div class="requirements-icon">
+                                    <i class="bi bi-shield-check"></i>
+                                </div>
+                                <h5 class="requirements-title">Upload Requirements</h5>
+                            </div>
+                            <div class="requirements-grid">
+                                <div class="requirement-item">
+                                    <div class="requirement-icon">
+                                        <i class="bi bi-file-earmark-excel text-success"></i>
+                                    </div>
+                                    <div class="requirement-content">
+                                        <span class="requirement-label">Supported Formats</span>
+                                        <span class="requirement-value">.xlsx, .xls</span>
+                                    </div>
+                                </div>
+                                <div class="requirement-item">
+                                    <div class="requirement-icon">
+                                        <i class="bi bi-hdd text-primary"></i>
+                                    </div>
+                                    <div class="requirement-content">
+                                        <span class="requirement-label">Maximum Document Size</span>
+                                        <span class="requirement-value">300 KB per document</span>
+                                    </div>
+                                </div>
+                                <div class="requirement-item">
+                                    <div class="requirement-icon">
+                                        <i class="bi bi-collection text-info"></i>
+                                    </div>
+                                    <div class="requirement-content">
+                                        <span class="requirement-label">Batch Processing</span>
+                                        <span class="requirement-value">Up to 100 documents per batch</span>
+                                    </div>
+                                </div>
+                                <div class="requirement-item">
+                                    <div class="requirement-icon">
+                                        <i class="bi bi-archive text-warning"></i>
+                                    </div>
+                                    <div class="requirement-content">
+                                        <span class="requirement-label">Total Batch Size</span>
+                                        <span class="requirement-value">5 MB maximum</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Upload Area -->
+                    <div class="modern-upload-zone" id="uploadArea">
+                    <div class="upload-zone-inner">
+                        <div class="upload-animation-container">
+                            <div class="upload-icon-wrapper">
+                                <i class="bi bi-cloud-upload upload-icon"></i>
+                                <div class="upload-pulse"></div>
+                            </div>
+                        </div>
+
+                        <div class="upload-content mt-4">
+                            <h4 class="upload-title">Drop your Excel file here</h4>
+                            <p class="upload-subtitle">or click to browse from your computer</p>
+
+                            <input type="file" id="flatFileUpload" accept=".xlsx,.xls" style="display: none;">
+                            <label for="flatFileUpload" class="upload-btn" id="browseFilesLink">
+                                <i class="bi bi-folder2-open me-2"></i>
+                                <span>Choose File</span>
+                            </label>
+
+                            <div class="upload-info">
+                                <div class="format-badges">
+                                    <span class="format-badge">XLSX</span>
+                                    <span class="format-badge">XLS</span>
+                                </div>
+                                <p class="size-limit">Maximum file size: 10MB</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Upload Progress -->
+                    <div id="uploadProgress" class="upload-progress d-none">
+                        <div class="progress mb-3">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+                        </div>
+                        <div class="text-center">
+                            <small class="text-muted">Uploading file...</small>
+                        </div>
+                    </div>
+                </div>
+                    <!-- File Details -->
+                <div id="fileDetails" class="file-details-section d-none">
+                    <div class="file-details-card">
+                        <div class="file-details-header">
+                            <div class="header-content">
+                                <h5 class="file-status-title"></h5>
+                                <p class="file-status-subtitle"></p>
+                            </div>
+                        </div>
+
+                        <div class="file-details-body">
+                            <div id="fileInfo" class="file-info-section">
+                                <!-- File information will be populated here -->
+                            </div>
+
+                            <!-- File Preview -->
+                            <div id="filePreview" class="file-preview-section d-none">
+                                <div class="preview-header">
+                                    <h6 class="preview-title">
+                                        <i class="bi bi-table me-2"></i>Data Preview
+                                    </h6>
+                                </div>
+                                <div class="preview-content">
+                                    <div class="table-responsive">
+                                        <table class="table table-hover" id="previewTable">
+                                            <!-- Preview content will be populated here -->
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Action Buttons -->
+                            <div class="action-buttons">
+                                <button type="button" class="btn-action btn-primary" id="processFileBtn">
+                                    <i class="bi bi-upload me-2"></i>
+                                    <span>Upload & Process</span>
+                                </button>
+                                <!-- <button type="button" class="btn-action btn-secondary" id="previewFileBtn">
+                                    <i class="bi bi-eye me-2"></i>
+                                    <span>Preview Data</span>
+                                </button> -->
+                                <button type="button" class="btn-action btn-outline" id="clearFileBtn">
+                                    <i class="bi bi-arrow-left me-2"></i>
+                                    <span>Choose Different File</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Error Messages -->
+                <div id="uploadError" class="alert alert-danger mt-3 d-none">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    <span id="errorMessage"></span>
+                </div>
+                </div>
+
+            
+            </div>
+
+        </div>
+    </div>
+</div>
+
+
+<!-- Bulk Submit Modal -->
+<div class="modal fade" id="bulkSubmitModal" tabindex="-1" aria-labelledby="bulkSubmitModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="bulkSubmitModalLabel">
+                    <i class="bi bi-send me-2"></i>Bulk Submit to LHDN
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <!-- Summary Section -->
+                <div class="row mb-4">
+                    <div class="col-md-4">
+                        <div class="text-center p-3 bg-light rounded">
+                            <div class="h4 mb-1 text-primary" id="bulkSubmitFileCount">0</div>
+                            <div class="small text-muted">Files Selected</div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="text-center p-3 bg-light rounded">
+                            <div class="h4 mb-1 text-success" id="bulkSubmitDocumentCount">0</div>
+                            <div class="small text-muted">Total Documents</div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="text-center p-3 bg-light rounded">
+                            <div class="h4 mb-1 text-info" id="bulkSubmitTotalSize">0 MB</div>
+                            <div class="small text-muted">Total Size</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Warnings Section -->
+                <div id="bulkSubmitWarnings" class="d-none mb-3">
+                    <!-- Warnings will be populated here -->
+                </div>
+
+                <!-- LHDN Limitations Info -->
+                <div class="alert alert-info mb-3">
+                    <h6 class="alert-heading">
+                        <i class="bi bi-info-circle me-2"></i>LHDN Submission Limitations
+                    </h6>
+                    <ul class="mb-0 small">
+                        <li>Maximum 100 files per submission</li>
+                        <li>Maximum 100 documents per submission</li>
+                        <li>Maximum 5MB total size per submission</li>
+                        <li>Maximum 300KB per individual document</li>
+                    </ul>
+                </div>
+
+                <!-- Files List -->
+                <div class="mb-3">
+                    <h6>Selected Files:</h6>
+                    <div class="border rounded p-3" style="max-height: 300px; overflow-y: auto; scrollbar-width: none; -ms-overflow-style: none;" id="bulkSubmitFilesList" class="hide-scrollbar">
+                        <!-- Files list will be populated here -->
+                    </div>
+                </div>
+
+                <!-- Submission Options -->
+                <div class="mb-3">
+                    <label for="bulkSubmitVersion" class="form-label">LHDN API Version:</label>
+                    <select class="form-select" id="bulkSubmitVersion">
+                        <option value="1.0">Version 1.0</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="confirmBulkSubmitBtn" onclick="uploadedFilesManager.confirmBulkSubmit()">
+                    <i class="bi bi-send me-1"></i>Submit to LHDN
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
