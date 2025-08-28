@@ -30,6 +30,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 class ToastManager {
   static container = null;
+  static activeCountdowns = new Map();
 
   static init() {
     if (!this.container) {
@@ -41,45 +42,145 @@ class ToastManager {
     }
   }
 
-  static show(message, type = "success") {
+  static show(message, type = "success", duration = 3000, countdown = null) {
     this.init();
 
+    const toastId = `toast-${Date.now()}-${Math.random()
+      .toString(36)
+      .substr(2, 9)}`;
     const toastElement = document.createElement("div");
-    toastElement.className = `toast align-items-center border-0 ${
-      type === "success" ? "bg-success" : "bg-danger"
-    } text-white`;
+    toastElement.id = toastId;
+
+    // Enhanced styling based on type
+    let bgClass, iconClass, textClass;
+    switch (type) {
+      case "success":
+        bgClass = "bg-success";
+        iconClass = "bi-check-circle";
+        textClass = "text-white";
+        break;
+      case "error":
+        bgClass = "bg-danger";
+        iconClass = "bi-x-circle";
+        textClass = "text-white";
+        break;
+      case "warning":
+        bgClass = "bg-warning";
+        iconClass = "bi-exclamation-triangle";
+        textClass = "text-dark";
+        break;
+      case "info":
+        bgClass = "bg-info";
+        iconClass = "bi-info-circle";
+        textClass = "text-white";
+        break;
+      default:
+        bgClass = "bg-primary";
+        iconClass = "bi-info-circle";
+        textClass = "text-white";
+    }
+
+    toastElement.className = `toast align-items-center border-0 ${bgClass} ${textClass}`;
     toastElement.setAttribute("role", "alert");
     toastElement.setAttribute("aria-live", "assertive");
     toastElement.setAttribute("aria-atomic", "true");
-    toastElement.style.minWidth = "280px";
+    toastElement.style.minWidth = "320px";
+
+    const countdownHtml = countdown
+      ? `
+      <div class="mt-2 small">
+        <i class="bi bi-clock me-1"></i>
+        <span id="countdown-${toastId}">Retry in ${countdown}s</span>
+      </div>
+    `
+      : "";
 
     const toastContent = `
             <div class="d-flex">
                 <div class="toast-body">
-                    <i class="bi ${
-                      type === "success" ? "bi-check-circle" : "bi-x-circle"
-                    } me-2"></i>
-                    ${message}
+                    <div class="d-flex align-items-start">
+                        <i class="bi ${iconClass} me-2 mt-1" style="font-size: 1.1rem;"></i>
+                        <div class="flex-grow-1">
+                            <div class="fw-medium">${
+                              type.charAt(0).toUpperCase() + type.slice(1)
+                            }</div>
+                            <div class="small mt-1">${message}</div>
+                            ${countdownHtml}
+                        </div>
+                    </div>
                 </div>
-                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+                <button type="button" class="btn-close ${
+                  textClass === "text-dark" ? "" : "btn-close-white"
+                } me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
             </div>
         `;
     toastElement.innerHTML = toastContent;
 
     this.container.appendChild(toastElement);
 
+    // Handle countdown if provided
+    if (countdown && countdown > 0) {
+      this.startCountdown(toastId, countdown);
+    }
+
     const toast = new bootstrap.Toast(toastElement, {
       animation: true,
-      autohide: true,
-      delay: 3000,
+      autohide: !countdown, // Don't auto-hide if countdown is active
+      delay: countdown ? countdown * 1000 + 1000 : duration,
     });
 
     toast.show();
 
     // Remove the element after it's hidden
     toastElement.addEventListener("hidden.bs.toast", () => {
+      this.clearCountdown(toastId);
       toastElement.remove();
     });
+
+    return toastId;
+  }
+
+  static startCountdown(toastId, seconds) {
+    const countdownElement = document.getElementById(`countdown-${toastId}`);
+    if (!countdownElement) return;
+
+    let remaining = seconds;
+    const interval = setInterval(() => {
+      remaining--;
+      if (countdownElement) {
+        countdownElement.textContent = `Retry in ${remaining}s`;
+      }
+
+      if (remaining <= 0) {
+        clearInterval(interval);
+        this.clearCountdown(toastId);
+        // Auto-hide the toast when countdown reaches 0
+        const toastElement = document.getElementById(toastId);
+        if (toastElement) {
+          const toast = bootstrap.Toast.getInstance(toastElement);
+          if (toast) toast.hide();
+        }
+      }
+    }, 1000);
+
+    this.activeCountdowns.set(toastId, interval);
+  }
+
+  static clearCountdown(toastId) {
+    const interval = this.activeCountdowns.get(toastId);
+    if (interval) {
+      clearInterval(interval);
+      this.activeCountdowns.delete(toastId);
+    }
+  }
+
+  static showRateLimit(message, retryAfterSeconds) {
+    return this.show(
+      `${message} Please wait before trying again.`,
+      "warning",
+      (retryAfterSeconds + 2) * 1000,
+      retryAfterSeconds
+    );
   }
 }
 
@@ -119,6 +220,144 @@ class DateTimeManager {
   }
 }
 
+// Enhanced Rate Limiter for LHDN API compliance
+class RateLimiter {
+  constructor() {
+    // LHDN API rate limits per minute
+    this.limits = {
+      getDocument: { rpm: 60, minInterval: 1000 }, // 60 RPM = 1 per second
+      getDocumentDetails: { rpm: 125, minInterval: 480 }, // 125 RPM = ~480ms
+      getSubmission: { rpm: 300, minInterval: 200 }, // 300 RPM = ~200ms
+      searchDocuments: { rpm: 12, minInterval: 5000 }, // 12 RPM = 5 seconds
+      getRecentDocuments: { rpm: 12, minInterval: 5000 }, // 12 RPM = 5 seconds
+      cancelDocument: { rpm: 12, minInterval: 5000 }, // 12 RPM = 5 seconds
+      rejectDocument: { rpm: 12, minInterval: 5000 }, // 12 RPM = 5 seconds
+      taxpayerQR: { rpm: 60, minInterval: 1000 }, // 60 RPM = 1 per second
+      searchTIN: { rpm: 60, minInterval: 1000 }, // 60 RPM = 1 per second
+      login: { rpm: 12, minInterval: 5000 }, // 12 RPM = 5 seconds
+    };
+
+    this.lastCallTimes = new Map();
+    this.requestCounts = new Map();
+    this.windowStart = new Map();
+  }
+
+  async waitForSlot(endpoint) {
+    const config = this.limits[endpoint];
+    if (!config) {
+      console.warn(`No rate limit config for endpoint: ${endpoint}`);
+      return;
+    }
+
+    const now = Date.now();
+    const lastCall = this.lastCallTimes.get(endpoint) || 0;
+    const timeSinceLastCall = now - lastCall;
+
+    // Ensure minimum interval between calls
+    if (timeSinceLastCall < config.minInterval) {
+      const waitTime = config.minInterval - timeSinceLastCall;
+      console.log(`[RateLimit] Waiting ${waitTime}ms for ${endpoint}`);
+      await new Promise((resolve) => setTimeout(resolve, waitTime));
+    }
+
+    // Update tracking
+    this.lastCallTimes.set(endpoint, Date.now());
+
+    // Track requests per minute
+    const windowKey = Math.floor(Date.now() / 60000); // 1-minute windows
+    const currentWindow = this.windowStart.get(endpoint);
+
+    if (currentWindow !== windowKey) {
+      this.requestCounts.set(endpoint, 0);
+      this.windowStart.set(endpoint, windowKey);
+    }
+
+    const currentCount = this.requestCounts.get(endpoint) || 0;
+    this.requestCounts.set(endpoint, currentCount + 1);
+
+    // Log rate limit status
+    console.log(
+      `[RateLimit] ${endpoint}: ${currentCount + 1}/${
+        config.rpm
+      } requests this minute`
+    );
+  }
+
+  getRemainingRequests(endpoint) {
+    const config = this.limits[endpoint];
+    if (!config) return null;
+
+    const currentCount = this.requestCounts.get(endpoint) || 0;
+    return Math.max(0, config.rpm - currentCount);
+  }
+
+  getNextAvailableTime(endpoint) {
+    const lastCall = this.lastCallTimes.get(endpoint) || 0;
+    const config = this.limits[endpoint];
+    if (!config) return 0;
+
+    return Math.max(0, lastCall + config.minInterval - Date.now());
+  }
+}
+
+// Request Queue for managing concurrent requests
+class RequestQueue {
+  constructor(maxConcurrent = 3) {
+    this.maxConcurrent = maxConcurrent;
+    this.running = 0;
+    this.queue = [];
+  }
+
+  async add(requestFn, priority = 0) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({
+        fn: requestFn,
+        resolve,
+        reject,
+        priority,
+        timestamp: Date.now(),
+      });
+
+      // Sort by priority (higher first), then by timestamp (older first)
+      this.queue.sort((a, b) => {
+        if (a.priority !== b.priority) {
+          return b.priority - a.priority;
+        }
+        return a.timestamp - b.timestamp;
+      });
+
+      this.processNext();
+    });
+  }
+
+  async processNext() {
+    if (this.running >= this.maxConcurrent || this.queue.length === 0) {
+      return;
+    }
+
+    const item = this.queue.shift();
+    this.running++;
+
+    try {
+      const result = await item.fn();
+      item.resolve(result);
+    } catch (error) {
+      item.reject(error);
+    } finally {
+      this.running--;
+      this.processNext();
+    }
+  }
+
+  getQueueStatus() {
+    return {
+      running: this.running,
+      queued: this.queue.length,
+      maxConcurrent: this.maxConcurrent,
+    };
+  }
+}
+
 // Create a class for managing inbound invoices
 class InvoiceTableManager {
   static instance = null;
@@ -136,9 +375,215 @@ class InvoiceTableManager {
     }
     this.currentDataSource = "archive"; // Start with archive data to avoid rate limiting
     this.table = null;
+    this.isRefreshing = false; // Add refresh state tracking
+    this.lastRefreshTime = 0; // Track last refresh time for rate limiting
+    this.refreshCooldown = 5000; // 5 second cooldown between refreshes
+
+    // Enhanced rate limiting for LHDN API calls
+    this.rateLimiter = new RateLimiter();
+    this.requestQueue = new RequestQueue();
+    this.loadingStates = new Map(); // Track loading states for different operations
+
     this.initializeTable();
     this.initializeDataSourceToggle();
+
+    // Start rate limit monitoring after initialization
+    setTimeout(() => {
+      this.startRateLimitMonitoring();
+    }, 1000);
+
     InvoiceTableManager.instance = this;
+  }
+
+  // Create enhanced loading skeleton
+  createLoadingSkeleton(message = "Loading data...", detail = "") {
+    return `
+      <div class="loading-overlay">
+        <style>
+          .loading-skeleton {
+            background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+            background-size: 200% 100%;
+            animation: loading-shimmer 1.5s infinite;
+          }
+
+          @keyframes loading-shimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+          }
+
+          .loading-pulse {
+            animation: loading-pulse 2s infinite;
+          }
+
+          @keyframes loading-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+          }
+
+          .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(2px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            min-height: 400px;
+          }
+
+          .loading-content {
+            text-align: center;
+            max-width: 400px;
+            padding: 2rem;
+          }
+
+          .loading-icon {
+            width: 60px;
+            height: 60px;
+            border: 4px solid #e3f2fd;
+            border-top: 4px solid #1976d2;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1.5rem;
+          }
+
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+
+          .table-skeleton {
+            width: 100%;
+            margin-top: 2rem;
+          }
+
+          .skeleton-row {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 0.75rem;
+            align-items: center;
+          }
+
+          .skeleton-cell {
+            height: 20px;
+            border-radius: 4px;
+            background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+            background-size: 200% 100%;
+            animation: loading-shimmer 1.5s infinite;
+          }
+
+          .skeleton-cell.small { flex: 0 0 60px; }
+          .skeleton-cell.medium { flex: 0 0 120px; }
+          .skeleton-cell.large { flex: 1; }
+          .skeleton-cell.status { flex: 0 0 80px; height: 24px; border-radius: 12px; }
+
+          .btn-loading {
+            position: relative;
+            pointer-events: none;
+            opacity: 0.8;
+          }
+
+          .btn-loading::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 16px;
+            height: 16px;
+            margin: -8px 0 0 -8px;
+            border: 2px solid transparent;
+            border-top: 2px solid currentColor;
+            border-radius: 50%;
+            animation: btn-spin 1s linear infinite;
+            z-index: 1;
+          }
+
+          .btn-loading .bi {
+            opacity: 0;
+          }
+
+          @keyframes btn-spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+
+          .refresh-enhanced {
+            transition: all 0.2s ease;
+            position: relative;
+            overflow: hidden;
+          }
+
+          .refresh-enhanced:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+          }
+
+          .refresh-enhanced.processing {
+            background: linear-gradient(45deg, #007bff, #0056b3);
+            color: white;
+          }
+
+          .refresh-enhanced.success {
+            background: linear-gradient(45deg, #28a745, #1e7e34);
+            color: white;
+          }
+
+          .refresh-enhanced.error {
+            background: linear-gradient(45deg, #dc3545, #c82333);
+            color: white;
+          }
+        </style>
+
+        <div class="loading-content">
+          <div class="loading-icon"></div>
+
+          <h5 class="mb-2 text-primary fw-semibold" id="loadingMessage">${message}</h5>
+          <p class="text-muted small mb-3" id="loadingDetail">${detail}</p>
+
+          <div class="d-flex align-items-center justify-content-center mb-3">
+            <div class="spinner-grow spinner-grow-sm text-primary me-2" role="status"></div>
+            <div class="spinner-grow spinner-grow-sm text-primary me-2" role="status" style="animation-delay: 0.2s;"></div>
+            <div class="spinner-grow spinner-grow-sm text-primary" role="status" style="animation-delay: 0.4s;"></div>
+          </div>
+
+          <div class="table-skeleton">
+            <div class="skeleton-row">
+              <div class="skeleton-cell small"></div>
+              <div class="skeleton-cell medium"></div>
+              <div class="skeleton-cell large"></div>
+              <div class="skeleton-cell medium"></div>
+              <div class="skeleton-cell status"></div>
+            </div>
+            <div class="skeleton-row">
+              <div class="skeleton-cell small"></div>
+              <div class="skeleton-cell medium"></div>
+              <div class="skeleton-cell large"></div>
+              <div class="skeleton-cell medium"></div>
+              <div class="skeleton-cell status"></div>
+            </div>
+            <div class="skeleton-row">
+              <div class="skeleton-cell small"></div>
+              <div class="skeleton-cell medium"></div>
+              <div class="skeleton-cell large"></div>
+              <div class="skeleton-cell medium"></div>
+              <div class="skeleton-cell status"></div>
+            </div>
+          </div>
+
+          <div class="mt-3">
+            <small class="text-muted loading-pulse">
+              <i class="bi bi-shield-check me-1"></i>
+              Ensuring LHDN API compliance...
+            </small>
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   initializeTable() {
@@ -147,12 +592,14 @@ class InvoiceTableManager {
     }
     const self = this;
 
-    // Show loading indicator with more detailed message
+    // Show enhanced loading skeleton
     $("#invoiceTable").closest(".card").addClass("loading");
     $("#invoiceTable")
       .closest(".card")
       .append(
-        '<div class="loading-overlay"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div><div class="mt-2" id="loadingMessage">Initializing and checking authentication...</div><div class="small text-muted mt-1" id="loadingDetail"></div></div>'
+        this.createLoadingSkeleton(
+          "Initializing and checking authentication..."
+        )
       );
 
     // Update loading message
@@ -222,35 +669,99 @@ class InvoiceTableManager {
       }
     });
 
-    // Handle refresh button
-    $("#refreshDataSource").on("click", function () {
-      self.refreshCurrentDataSource();
+    // Handle refresh button with spam protection
+    $("#refreshDataSource").on("click", async function () {
+      const button = $(this);
+
+      // Prevent spam clicking
+      if (self.isRefreshing || button.prop("disabled")) {
+        console.log("Refresh already in progress or button disabled");
+        return;
+      }
+
+      // Disable button and show loading state
+      button.prop("disabled", true);
+      const originalHtml = button.html();
+      button.html(
+        '<i class="bi bi-arrow-clockwise me-1 spin"></i>Refreshing...'
+      );
+
+      try {
+        await self.refreshCurrentDataSource();
+
+        // Show success feedback
+        ToastManager.show("Data refreshed successfully", "success");
+      } catch (error) {
+        console.error("Error refreshing data:", error);
+        ToastManager.show("Failed to refresh data. Please try again.", "error");
+      } finally {
+        // Re-enable button and restore original text
+        setTimeout(() => {
+          button.prop("disabled", false);
+          button.html(originalHtml);
+        }, 1000); // 1 second delay to prevent rapid clicking
+      }
     });
   }
 
-  // Switch to live LHDN data
+  // Switch to live LHDN data with enhanced rate limiting
   async switchToLiveData() {
     try {
       this.currentDataSource = "live";
 
-      // Show loading state
-      this.showLoadingBackdrop("Loading Live LHDN Data");
+      // Check rate limits before switching
+      const remainingRequests =
+        this.rateLimiter.getRemainingRequests("getRecentDocuments");
+      const nextAvailable =
+        this.rateLimiter.getNextAvailableTime("getRecentDocuments");
 
-      // Update the table's AJAX URL to live endpoint
-      if (this.table) {
-        this.table.ajax.url("/api/lhdn/documents/recent").load(() => {
-          this.hideLoadingBackdrop();
-          this.updateCardTotals();
-        });
-      } else {
-        // If table doesn't exist, initialize it
-        await this.initializeTableWithData();
-        this.hideLoadingBackdrop();
+      if (remainingRequests === 0 || nextAvailable > 0) {
+        const waitTime = Math.max(nextAvailable, 5000); // Minimum 5 second wait
+        this.showLoadingBackdrop(
+          `Rate limit reached. Waiting ${Math.ceil(waitTime / 1000)}s...`
+        );
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
       }
+
+      // Show loading state with rate limit info
+      this.showLoadingBackdrop(
+        "Loading Live LHDN Data",
+        `${remainingRequests || 0} requests remaining this minute`
+      );
+
+      // Wait for rate limit slot
+      await this.rateLimiter.waitForSlot("getRecentDocuments");
+
+      // Queue the request to manage concurrency
+      await this.requestQueue.add(async () => {
+        // Update the table's AJAX URL to live endpoint
+        if (this.table) {
+          this.table.ajax.url("/api/lhdn/documents/recent").load(() => {
+            this.hideLoadingBackdrop();
+            this.updateCardTotals();
+          });
+        } else {
+          // If table doesn't exist, initialize it
+          await this.initializeTableWithData();
+          this.hideLoadingBackdrop();
+        }
+      }, 2); // Medium priority
     } catch (error) {
       console.error("Error switching to live data:", error);
       this.hideLoadingBackdrop();
-      this.showErrorMessage("Failed to load live data: " + error.message);
+
+      // Enhanced error handling for rate limits
+      if (
+        error.message.includes("429") ||
+        error.message.includes("rate limit")
+      ) {
+        this.showErrorMessage(
+          "LHDN server is busy. Please wait a moment and try again.",
+          "warning"
+        );
+      } else {
+        this.showErrorMessage("Failed to load live data: " + error.message);
+      }
     }
   }
 
@@ -292,15 +803,82 @@ class InvoiceTableManager {
     }
   }
 
-  // Refresh current data source
+  // Refresh current data source with enhanced throttling
   async refreshCurrentDataSource() {
-    if (this.currentDataSource === "live") {
-      // Force refresh live data
-      window.forceRefreshLHDN = true;
-      await this.switchToLiveData();
-    } else {
-      // Refresh archive data
-      await this.switchToArchiveData();
+    // Prevent concurrent refreshes
+    if (this.isRefreshing) {
+      console.log("Refresh already in progress, ignoring request");
+      return;
+    }
+
+    // Check cooldown period
+    const now = Date.now();
+    const timeSinceLastRefresh = now - this.lastRefreshTime;
+    if (timeSinceLastRefresh < this.refreshCooldown) {
+      const remainingTime = Math.ceil(
+        (this.refreshCooldown - timeSinceLastRefresh) / 1000
+      );
+      ToastManager.show(
+        `Please wait ${remainingTime} more seconds before refreshing again.`,
+        "info"
+      );
+      return;
+    }
+
+    this.isRefreshing = true;
+    this.lastRefreshTime = now;
+
+    try {
+      if (this.currentDataSource === "live") {
+        // Check LHDN rate limits before refreshing
+        const endpoint = "getRecentDocuments";
+        const remainingRequests =
+          this.rateLimiter.getRemainingRequests(endpoint);
+        const nextAvailable = this.rateLimiter.getNextAvailableTime(endpoint);
+
+        if (remainingRequests === 0 || nextAvailable > 0) {
+          const waitTime = Math.max(nextAvailable, 1000);
+          ToastManager.show(
+            `Rate limit reached. Waiting ${Math.ceil(
+              waitTime / 1000
+            )} seconds...`,
+            "warning"
+          );
+          await new Promise((resolve) => setTimeout(resolve, waitTime));
+        }
+
+        // Force refresh live data with rate limiting
+        window.forceRefreshLHDN = true;
+        await this.switchToLiveData();
+      } else {
+        // Refresh archive data (no rate limiting needed)
+        await this.switchToArchiveData();
+      }
+
+      // Update last refresh time on success
+      this.lastRefreshTime = Date.now();
+    } catch (error) {
+      console.error("Error refreshing data source:", error);
+
+      // Handle specific error types
+      if (
+        error.message.includes("429") ||
+        error.message.includes("rate limit")
+      ) {
+        ToastManager.show(
+          "LHDN server is busy. Please try again in a few minutes.",
+          "warning"
+        );
+      } else {
+        ToastManager.show(
+          "Failed to refresh data. Please try again later.",
+          "error"
+        );
+      }
+
+      throw error; // Re-throw for caller handling
+    } finally {
+      this.isRefreshing = false;
     }
   }
 
@@ -706,8 +1284,8 @@ class InvoiceTableManager {
                                            data-uuid="${row.uuid}" title="Cancel Document">
                                         <i class="bi bi-x-circle me-1"></i>Cancel
                                    </button>`
-                : `<button class="outbound-action-btn cancel btn-cancel-inbound" data-uuid="${row.uuid}" disabled
-                                           style="opacity:0.5;pointer-events:none;cursor:not-allowed;"
+                : `<button class="outbound-action-btn cancel btn-cancel-inbound" data-uuid="${row.uuid}"
+                                           style="opacity:0.5;cursor:not-allowed;"
                                            title="Cancellation window expired">
                                         <i class="bi bi-x-circle me-1"></i>Cancel
                                    </button>`
@@ -790,44 +1368,83 @@ class InvoiceTableManager {
     this.addExportButton();
     this.initializeTooltipsAndCopy();
 
-    // Add refresh button
+    // Add refresh button with enhanced styling and responsiveness
     const refreshButton = $(`
-            <button id="refreshLHDNData" class="outbound-action-btn submit btn-sm ms-2">
-                <i class="bi bi-arrow-clockwise me-1"></i>Refresh LHDN Data
-                <small class="text-muted ms-1 refresh-timer" style="display: none;"></small>
+            <button id="refreshLHDNData" class="btn btn-primary btn-sm ms-2 refresh-enhanced"
+                    data-bs-toggle="tooltip"
+                    data-bs-placement="top"
+                    title="Refresh data from LHDN server">
+                <i class="bi bi-arrow-clockwise me-1"></i>
+                <span class="btn-text">Refresh LHDN Data</span>
+                <small class="text-light ms-1 refresh-timer" style="display: none;"></small>
             </button>
         `);
 
     $(".dataTables_length").append(refreshButton);
+    refreshButton.tooltip(); // Initialize tooltip for the refresh button
 
-    // Handle refresh button click (guard against multiple bindings and concurrent refresh)
+    // Handle refresh button click with enhanced responsiveness
     $("#refreshLHDNData")
       .off("click")
-      .on("click", async () => {
-        if (this.isRefreshing) return; // prevent concurrent refreshes
-        this.isRefreshing = true;
-        let loadingModal,
-          progressBar,
-          statusText,
-          detailsText,
-          backdrop,
-          button;
-        try {
-          button = $("#refreshLHDNData");
+      .on("click", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
 
+        const button = $("#refreshLHDNData");
+
+        // Immediate visual feedback
+        button.addClass("btn-loading");
+
+        // Prevent spam clicking - check both isRefreshing flag and button state
+        if (this.isRefreshing || button.prop("disabled")) {
+          console.log("Refresh already in progress, ignoring click");
+          button.removeClass("btn-loading");
+          return;
+        }
+
+        // Rate limiting - prevent too frequent refreshes
+        const now = Date.now();
+        const timeSinceLastRefresh = now - this.lastRefreshTime;
+        if (timeSinceLastRefresh < this.refreshCooldown) {
+          const remainingTime = Math.ceil(
+            (this.refreshCooldown - timeSinceLastRefresh) / 1000
+          );
+          button.removeClass("btn-loading");
+          this.showRefreshCooldown(remainingTime);
+          ToastManager.showRateLimit(
+            "Too many refresh requests",
+            remainingTime
+          );
+          return;
+        }
+
+        this.isRefreshing = true;
+        this.lastRefreshTime = now; // Update last refresh time
+
+        // Enhanced button state management
+        button.prop("disabled", true);
+        button.addClass("processing btn-loading");
+        button.find(".btn-text").text("Processing...");
+
+        let loadingModal, progressBar, statusText, detailsText, backdrop;
+        try {
           // For local data tables (archive), just refresh the current data source
           if (this.currentDataSource === "archive") {
-            button.prop("disabled", true);
-            button.html(
-              '<i class="bi bi-arrow-clockwise me-1 spin"></i>Refreshing...'
-            );
+            button.find(".btn-text").text("Refreshing Archive...");
 
             await this.refreshCurrentDataSource();
 
-            button.prop("disabled", false);
-            button.html(
-              '<i class="bi bi-arrow-clockwise me-1"></i>Refresh LHDN Data'
-            );
+            // Success state
+            button.removeClass("processing").addClass("success");
+            button.find(".btn-text").text("Success!");
+
+            // Restore button after delay
+            setTimeout(() => {
+              button.removeClass("success btn-loading");
+              button.find(".btn-text").text("Refresh LHDN Data");
+              button.prop("disabled", false);
+            }, 2000);
+
             ToastManager.show("Archive data refreshed successfully", "success");
             return;
           }
@@ -855,7 +1472,12 @@ class InvoiceTableManager {
             }
           }
 
-          button.prop("disabled", true);
+          // Enhanced button loading state
+          button.addClass("loading");
+          button.html(
+            '<i class="bi bi-arrow-clockwise me-1 spin"></i>Connecting...'
+          );
+
           loadingModal.classList.add("show");
           loadingModal.style.display = "block";
           document.body.classList.add("modal-open");
@@ -866,6 +1488,7 @@ class InvoiceTableManager {
 
           progressBar.style.width = "10%";
           statusText.textContent = "Connecting to LHDN server...";
+          detailsText.textContent = "Please wait while we establish connection";
 
           // Call the new refresh endpoint
           const response = await fetch("/api/lhdn/documents/refresh", {
@@ -880,6 +1503,10 @@ class InvoiceTableManager {
 
           progressBar.style.width = "50%";
           statusText.textContent = "Refreshing data...";
+          detailsText.textContent = "Fetching latest documents from LHDN";
+          button.html(
+            '<i class="bi bi-arrow-clockwise me-1 spin"></i>Refreshing...'
+          );
 
           // Force a fresh fetch from the API
           window.forceRefreshLHDN = true;
@@ -893,6 +1520,8 @@ class InvoiceTableManager {
 
           progressBar.style.width = "100%";
           statusText.textContent = "Success! Your data is now up to date.";
+          detailsText.textContent = "Data refresh completed successfully";
+          button.html('<i class="bi bi-check-circle me-1"></i>Completed!');
 
           setTimeout(() => {
             loadingModal.classList.remove("show");
@@ -909,6 +1538,15 @@ class InvoiceTableManager {
           }, 1000);
         } catch (error) {
           console.error("Error refreshing LHDN data:", error);
+
+          // Restore button state on error
+          const refreshBtn = $("#refreshLHDNData");
+          refreshBtn.prop("disabled", false); // Ensure button is enabled
+          refreshBtn.removeClass("loading"); // Remove loading state if present
+          refreshBtn.html(
+            '<i class="bi bi-exclamation-triangle me-1"></i>Retry'
+          );
+
           ToastManager.show(
             error.message ||
               "Unable to fetch fresh data from LHDN. Please try again.",
@@ -925,14 +1563,114 @@ class InvoiceTableManager {
             if (progressBar) progressBar.style.width = "0%";
             if (detailsText) detailsText.textContent = "";
           } catch (_) {}
-          $("#refreshLHDNData").prop("disabled", false);
+
+          // Add delay before re-enabling button to prevent rapid clicking
+          setTimeout(() => {
+            $("#refreshLHDNData").removeClass("loading");
+            this.isRefreshing = false;
+          }, 2000); // 2 second delay
+
           window.forceRefreshLHDN = false;
-          this.isRefreshing = false;
         }
       });
 
     this.startRefreshTimer();
   }
+
+  // Enhanced loading backdrop with rate limit info
+  showLoadingBackdrop(message, detail = "") {
+    const backdrop = `
+      <div class="loading-backdrop" style="
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+      ">
+        <div class="loading-content" style="
+          background: white;
+          padding: 2rem;
+          border-radius: 8px;
+          text-align: center;
+          max-width: 400px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+        ">
+          <div class="spinner-border text-primary mb-3" role="status">
+            <span class="visually-hidden">Loading...</span>
+          </div>
+          <h5 class="mb-2">${message}</h5>
+          ${detail ? `<p class="text-muted small mb-0">${detail}</p>` : ""}
+          <div class="mt-3">
+            <small class="text-muted">
+              Queue: ${this.requestQueue.getQueueStatus().running}/${
+      this.requestQueue.getQueueStatus().maxConcurrent
+    } active,
+              ${this.requestQueue.getQueueStatus().queued} waiting
+            </small>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Remove existing backdrop
+    $(".loading-backdrop").remove();
+    $("body").append(backdrop);
+  }
+
+  hideLoadingBackdrop() {
+    $(".loading-backdrop").fadeOut(300, function () {
+      $(this).remove();
+    });
+  }
+
+  // Enhanced error message display
+  showErrorMessage(message, type = "error") {
+    const alertClass = type === "warning" ? "alert-warning" : "alert-danger";
+    const icon = type === "warning" ? "exclamation-triangle" : "x-circle";
+
+    const errorHtml = `
+      <div class="alert ${alertClass} alert-dismissible fade show" role="alert">
+        <i class="bi bi-${icon} me-2"></i>
+        <strong>${type === "warning" ? "Warning" : "Error"}:</strong> ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      </div>
+    `;
+
+    // Show error in table container
+    $("#invoiceTable").closest(".card-body").prepend(errorHtml);
+
+    // Auto-dismiss after 10 seconds
+    setTimeout(() => {
+      $(".alert").fadeOut(300, function () {
+        $(this).remove();
+      });
+    }, 10000);
+  }
+
+  // Rate limit status display
+  // showRateLimitStatus() {
+  //   const status = Object.keys(this.rateLimiter.limits)
+  //     .map((endpoint) => {
+  //       const remaining = this.rateLimiter.getRemainingRequests(endpoint);
+  //       const nextAvailable = this.rateLimiter.getNextAvailableTime(endpoint);
+  //       return `${endpoint}: ${remaining || 0} remaining${
+  //         nextAvailable > 0 ? ` (wait ${Math.ceil(nextAvailable / 1000)}s)` : ""
+  //       }`;
+  //     })
+  //     .join("<br>");
+
+  //   return `
+  //     <div class="rate-limit-status small text-muted mt-2">
+  //       <strong>LHDN API Status:</strong><br>
+  //       ${status}
+  //     </div>
+  //   `;
+  // }
 
   initializeTableWithData() {
     const self = this;
@@ -1054,8 +1792,16 @@ class InvoiceTableManager {
           } else if (xhr.status === 404) {
             errorMessage = "Data endpoint not found. Please contact support.";
           } else if (xhr.status === 429) {
-            errorMessage =
-              "Too many requests. Please wait a moment and try again.";
+            // Extract retry-after from headers if available
+            const retryAfter = xhr.getResponseHeader("retry-after") || 30;
+            const retrySeconds = parseInt(retryAfter);
+
+            ToastManager.showRateLimit(
+              "Too many requests to LHDN server",
+              retrySeconds
+            );
+
+            errorMessage = `Rate limited. Please wait ${retrySeconds} seconds before trying again.`;
           } else if (xhr.status === 0) {
             errorMessage =
               "Network connection issue. Please check your internet connection.";
@@ -1496,31 +2242,53 @@ class InvoiceTableManager {
     this.addExportButton();
     this.initializeTooltipsAndCopy();
 
-    // Add refresh button
+    // Add refresh button with enhanced styling
     const refreshButton = $(`
-            <button id="refreshLHDNData" class="outbound-action-btn submit btn-sm ms-2">
+            <button id="refreshLHDNData" class="outbound-action-btn submit btn-sm ms-2"
+                    data-bs-toggle="tooltip"
+                    data-bs-placement="top"
+                    title="Refresh data from LHDN server">
                 <i class="bi bi-arrow-clockwise me-1"></i>Refresh LHDN Data
                 <small class="text-muted ms-1 refresh-timer" style="display: none;"></small>
             </button>
         `);
 
     $(".dataTables_length").append(refreshButton);
+    refreshButton.tooltip(); // Initialize tooltip for the refresh button
 
-    // Handle refresh button click
+    // Handle refresh button click (guard against multiple bindings and concurrent refresh)
     // Guard the second handler as well
     $("#refreshLHDNData")
       .off("click")
       .on("click", async () => {
-        if (this.isRefreshing) return;
+        const button = $("#refreshLHDNData");
+
+        // Prevent spam clicking - check both isRefreshing flag and button state
+        if (this.isRefreshing || button.prop("disabled")) {
+          console.log("Refresh already in progress, ignoring click");
+          return;
+        }
+
+        // Rate limiting - prevent too frequent refreshes
+        const now = Date.now();
+        const timeSinceLastRefresh = now - this.lastRefreshTime;
+        if (timeSinceLastRefresh < this.refreshCooldown) {
+          const remainingTime = Math.ceil(
+            (this.refreshCooldown - timeSinceLastRefresh) / 1000
+          );
+          this.showRefreshCooldown(remainingTime);
+          ToastManager.show(
+            `Please wait ${remainingTime} more seconds before refreshing again.`,
+            "info"
+          );
+          return;
+        }
+
         this.isRefreshing = true;
-        let loadingModal,
-          progressBar,
-          statusText,
-          detailsText,
-          backdrop,
-          button;
+        this.lastRefreshTime = now; // Update last refresh time
+        button.prop("disabled", true);
+        let loadingModal, progressBar, statusText, detailsText, backdrop;
         try {
-          button = $("#refreshLHDNData");
           loadingModal = document.getElementById("loadingModal");
           progressBar = document.querySelector("#loadingModal .progress-bar");
           statusText = document.getElementById("loadingStatus");
@@ -1540,7 +2308,6 @@ class InvoiceTableManager {
             if (!result.isConfirmed) return;
           }
 
-          button.prop("disabled", true);
           loadingModal.classList.add("show");
           loadingModal.style.display = "block";
           document.body.classList.add("modal-open");
@@ -1605,9 +2372,19 @@ class InvoiceTableManager {
             if (progressBar) progressBar.style.width = "0%";
             if (detailsText) detailsText.textContent = "";
           } catch (_) {}
-          $("#refreshLHDNData").prop("disabled", false);
+
+          // Add delay before re-enabling button to prevent rapid clicking
+          setTimeout(() => {
+            const refreshBtn = $("#refreshLHDNData");
+            refreshBtn.removeClass("loading");
+            refreshBtn.prop("disabled", false);
+            refreshBtn.html(
+              '<i class="bi bi-arrow-clockwise me-1"></i>Refresh LHDN Data'
+            );
+            this.isRefreshing = false;
+          }, 2000); // 2 second delay
+
           window.forceRefreshLHDN = false;
-          this.isRefreshing = false;
         }
       });
 
@@ -1702,7 +2479,7 @@ class InvoiceTableManager {
       $("#documentTypeFilter, #sourceFilter").val("");
 
       // Reset quick filters
-      $('.quick-filters .btn[data-filter="all"]')
+      $(".quick-filters .btn[data-filter='all']")
         .addClass("active")
         .siblings()
         .removeClass("active");
@@ -1779,7 +2556,7 @@ class InvoiceTableManager {
   }
 
   renderDateInfo(validatedDate, row) {
-    console.log(validatedDate);
+    // console.log(validatedDate);
     const validatedFormatted = validatedDate
       ? this.formatDate(validatedDate)
       : null;
@@ -2202,10 +2979,38 @@ class InvoiceTableManager {
         submitted: 0,
       };
 
-      // Count totals
+      // Calculate average processing time
+      let processingTimes = [];
+      let totalAmount = 0;
+
+      // Count totals and collect processing times
       if (data && data.length) {
         data.each((row) => {
           totals.invoices++;
+
+          // Calculate processing time if dates are available
+          if (row.dateTimeIssued && row.dateTimeValidated) {
+            try {
+              const issued = new Date(row.dateTimeIssued);
+              const validated = new Date(row.dateTimeValidated);
+              if (!isNaN(issued.getTime()) && !isNaN(validated.getTime())) {
+                const processingTime =
+                  (validated.getTime() - issued.getTime()) / (1000 * 60 * 60); // hours
+                if (processingTime >= 0 && processingTime <= 168) {
+                  // reasonable range (0-168 hours)
+                  processingTimes.push(processingTime);
+                }
+              }
+            } catch (e) {
+              console.warn("Error parsing dates for processing time:", e);
+            }
+          }
+
+          // Sum total amounts
+          if (row.totalSales && !isNaN(parseFloat(row.totalSales))) {
+            totalAmount += parseFloat(row.totalSales);
+          }
+
           switch (row.status) {
             case "Valid":
               totals.valid++;
@@ -2225,6 +3030,13 @@ class InvoiceTableManager {
           }
         });
       }
+
+      // Calculate average processing time
+      const avgProcessingTime =
+        processingTimes.length > 0
+          ? processingTimes.reduce((sum, time) => sum + time, 0) /
+            processingTimes.length
+          : 0;
 
       // Update card values and hide spinners
       $(".total-invoice-value")
@@ -2281,6 +3093,49 @@ class InvoiceTableManager {
           `<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-info">${totals.submitted}</span>`
         );
 
+      // Update average processing time
+      const avgTimeElement = $(".avg-processing-time");
+      if (avgTimeElement.length > 0) {
+        if (avgProcessingTime > 0) {
+          let timeDisplay;
+          if (avgProcessingTime < 1) {
+            // Less than 1 hour, show in minutes
+            const minutes = Math.round(avgProcessingTime * 60);
+            timeDisplay = `${minutes}m`;
+          } else if (avgProcessingTime < 24) {
+            // Less than 24 hours, show in hours
+            timeDisplay = `${avgProcessingTime.toFixed(1)}h`;
+          } else {
+            // More than 24 hours, show in days
+            const days = (avgProcessingTime / 24).toFixed(1);
+            timeDisplay = `${days}d`;
+          }
+
+          avgTimeElement.text(timeDisplay).show();
+
+          // Add tooltip with detailed info
+          avgTimeElement.attr(
+            "title",
+            `Average processing time: ${avgProcessingTime.toFixed(2)} hours\n` +
+              `Based on ${processingTimes.length} processed documents\n` +
+              `Total amount: MYR ${totalAmount.toLocaleString("en-US", {
+                minimumFractionDigits: 2,
+              })}`
+          );
+
+          // Initialize tooltip if not already done
+          if (typeof bootstrap !== "undefined" && bootstrap.Tooltip) {
+            new bootstrap.Tooltip(avgTimeElement[0]);
+          }
+        } else {
+          avgTimeElement.text("N/A").show();
+          avgTimeElement.attr("title", "No processing time data available");
+        }
+      }
+
+      // Update detailed processing analytics
+      this.updateProcessingAnalytics(processingTimes, avgProcessingTime);
+
       // Hide all spinners
       $(".loading-spinner").hide();
 
@@ -2289,6 +3144,79 @@ class InvoiceTableManager {
     } catch (error) {
       console.error("Error updating card totals:", error);
       // Don't hide spinners if there was an error
+    }
+  }
+
+  // Update processing analytics in the chart section
+  updateProcessingAnalytics(processingTimes, avgProcessingTime) {
+    try {
+      if (processingTimes.length > 0) {
+        // Calculate statistics
+        const fastest = Math.min(...processingTimes);
+        const slowest = Math.max(...processingTimes);
+
+        // Format time display function
+        const formatTime = (hours) => {
+          if (hours < 1) {
+            return `${Math.round(hours * 60)}m`;
+          } else if (hours < 24) {
+            return `${hours.toFixed(1)}h`;
+          } else {
+            return `${(hours / 24).toFixed(1)}d`;
+          }
+        };
+
+        // Update analytics display
+        $("#avgProcessingHours").text(formatTime(avgProcessingTime));
+        $("#fastestProcessing").text(formatTime(fastest));
+        $("#slowestProcessing").text(formatTime(slowest));
+
+        // Add tooltips with detailed information
+        $("#avgProcessingHours").attr(
+          "title",
+          `Average: ${avgProcessingTime.toFixed(2)} hours\nBased on ${
+            processingTimes.length
+          } documents`
+        );
+        $("#fastestProcessing").attr(
+          "title",
+          `Fastest processing: ${fastest.toFixed(2)} hours`
+        );
+        $("#slowestProcessing").attr(
+          "title",
+          `Slowest processing: ${slowest.toFixed(2)} hours`
+        );
+
+        // Initialize tooltips
+        if (typeof bootstrap !== "undefined" && bootstrap.Tooltip) {
+          [
+            "#avgProcessingHours",
+            "#fastestProcessing",
+            "#slowestProcessing",
+          ].forEach((selector) => {
+            const element = document.querySelector(selector);
+            if (element) {
+              new bootstrap.Tooltip(element);
+            }
+          });
+        }
+      } else {
+        // No data available
+        $("#avgProcessingHours").text("-");
+        $("#fastestProcessing").text("-");
+        $("#slowestProcessing").text("-");
+
+        // Clear tooltips
+        [
+          "#avgProcessingHours",
+          "#fastestProcessing",
+          "#slowestProcessing",
+        ].forEach((selector) => {
+          $(selector).attr("title", "No processing time data available");
+        });
+      }
+    } catch (error) {
+      console.error("Error updating processing analytics:", error);
     }
   }
 
@@ -2729,6 +3657,100 @@ class InvoiceTableManager {
     }
   }
 
+  // Show refresh cooldown timer
+  showRefreshCooldown(remainingTime) {
+    const button = $("#refreshLHDNData");
+    const originalHtml = button.html();
+
+    // Disable button during cooldown
+    button.prop("disabled", true);
+    button.addClass("btn-secondary").removeClass("btn-primary");
+
+    let countdown = remainingTime;
+    const timer = setInterval(() => {
+      button.html(`<i class="bi bi-clock me-1"></i>Wait ${countdown}s`);
+      countdown--;
+
+      if (countdown < 0) {
+        clearInterval(timer);
+        button.html(originalHtml);
+        button.prop("disabled", false);
+        button.removeClass("btn-secondary").addClass("btn-primary");
+      }
+    }, 1000);
+  }
+
+  // Enhanced rate limit status display
+  updateRateLimitStatus() {
+    const statusContainer = $("#rateLimitStatus");
+    if (statusContainer.length === 0) {
+      // Create status container if it doesn't exist
+      $(".dataTables_length").append(`
+        <div id="rateLimitStatus" class="small text-muted mt-2" style="max-width: 300px;">
+          <div class="d-flex align-items-center">
+            <i class="bi bi-speedometer2 me-1"></i>
+            <span>LHDN API Status</span>
+          </div>
+          <div id="rateLimitDetails" class="mt-1"></div>
+        </div>
+      `);
+    }
+
+    // Update status details
+    const criticalEndpoints = [
+      "getRecentDocuments",
+      "getDocumentDetails",
+      "getDocument",
+    ];
+    const statusDetails = criticalEndpoints
+      .map((endpoint) => {
+        const remaining = this.rateLimiter.getRemainingRequests(endpoint);
+        const nextAvailable = this.rateLimiter.getNextAvailableTime(endpoint);
+        const status =
+          remaining === 0 || nextAvailable > 0 ? "warning" : "success";
+        const color = status === "warning" ? "#ffc107" : "#198754";
+
+        return `
+        <div class="d-flex justify-content-between align-items-center">
+          <span style="font-size: 0.75rem;">${endpoint
+            .replace("get", "")
+            .replace("Documents", "Docs")}:</span>
+          <span style="color: ${color}; font-weight: 500; font-size: 0.75rem;">
+            ${remaining || 0}/min
+            ${nextAvailable > 0 ? ` (${Math.ceil(nextAvailable / 1000)}s)` : ""}
+          </span>
+        </div>
+      `;
+      })
+      .join("");
+
+    $("#rateLimitDetails").html(statusDetails);
+
+    // Update queue status
+    const queueStatus = this.requestQueue.getQueueStatus();
+    if (queueStatus.running > 0 || queueStatus.queued > 0) {
+      $("#rateLimitDetails").append(`
+        <div class="d-flex justify-content-between align-items-center mt-1 pt-1" style="border-top: 1px solid #dee2e6;">
+          <span style="font-size: 0.75rem;">Queue:</span>
+          <span style="color: #0d6efd; font-weight: 500; font-size: 0.75rem;">
+            ${queueStatus.running}/${queueStatus.maxConcurrent} active, ${queueStatus.queued} waiting
+          </span>
+        </div>
+      `);
+    }
+  }
+
+  // Start periodic rate limit status updates
+  startRateLimitMonitoring() {
+    // Update immediately
+    this.updateRateLimitStatus();
+
+    // Update every 5 seconds
+    setInterval(() => {
+      this.updateRateLimitStatus();
+    }, 5000);
+  }
+
   cleanup() {
     if (this.table) {
       this.table.destroy();
@@ -2749,9 +3771,23 @@ class InvoiceTableManager {
   }
 }
 
-// Inbound document cancellation
+// Inbound document cancellation with rate limiting
 async function cancelInboundDocument(uuid) {
+  const manager = InvoiceTableManager.getInstance();
+
   try {
+    // Check rate limits for cancel operations
+    const endpoint = "cancelDocument";
+    const remainingRequests =
+      manager.rateLimiter.getRemainingRequests(endpoint);
+    const nextAvailable = manager.rateLimiter.getNextAvailableTime(endpoint);
+
+    if (remainingRequests === 0 || nextAvailable > 0) {
+      const waitTime = Math.ceil(Math.max(nextAvailable, 1000) / 1000);
+      ToastManager.showRateLimit("Cancel operation rate limited", waitTime);
+      return;
+    }
+
     const modalEl = document.getElementById("inboundCancelModal");
     if (!modalEl) {
       throw new Error("Cancellation modal not found on page");
@@ -2812,21 +3848,50 @@ async function cancelInboundDocument(uuid) {
 
         Swal.fire({
           title: "Cancelling...",
+          text: "Please wait while we process your cancellation request",
           allowOutsideClick: false,
           didOpen: () => Swal.showLoading(),
         });
 
-        const response = await fetch(`/api/outbound-files/${uuid}/cancel`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reason: value }),
-        });
-        const data = await response.json();
-        if (!response.ok || data.success === false) {
-          throw new Error(
-            data.message || data.error?.message || "Failed to cancel document"
-          );
-        }
+        // Wait for rate limit slot before making the API call
+        await manager.rateLimiter.waitForSlot("cancelDocument");
+
+        // Queue the cancel request to manage concurrency
+        const data = await manager.requestQueue.add(async () => {
+          const response = await fetch(`/api/outbound-files/${uuid}/cancel`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reason: value }),
+          });
+
+          if (!response.ok) {
+            // Handle rate limiting specifically
+            if (response.status === 429) {
+              const retryAfter = response.headers.get("retry-after") || 30;
+              throw new Error(
+                `Rate limited. Please wait ${retryAfter} seconds before trying again.`
+              );
+            }
+
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(
+              errorData.message ||
+                errorData.error?.message ||
+                `HTTP ${response.status}: Failed to cancel document`
+            );
+          }
+
+          const result = await response.json();
+          if (result.success === false) {
+            throw new Error(
+              result.message ||
+                result.error?.message ||
+                "Failed to cancel document"
+            );
+          }
+
+          return result;
+        }, 3); // Highest priority for cancel operations
 
         Swal.fire({
           icon: "success",
@@ -2896,9 +3961,9 @@ async function cancelInboundDocument(uuid) {
           `.btn-cancel-inbound[data-uuid="${uuid}"]`
         );
         if (btn) {
-          btn.setAttribute("disabled", "disabled");
+          //btn.setAttribute("disabled", "disabled");
           btn.style.opacity = "0.5";
-          btn.style.pointerEvents = "none";
+          btn.style.cursor = "not-allowed";
         }
         return;
       }
@@ -2914,8 +3979,130 @@ async function cancelInboundDocument(uuid) {
   setInterval(update, 1000);
 })();
 
+// Add CSS styles for loading states
+const loadingStyles = `
+  <style id="invoice-loading-styles">
+    .outbound-action-btn.loading {
+      opacity: 0.7;
+      cursor: not-allowed;
+    }
+
+    .spinner-border-sm {
+      width: 0.875rem;
+      height: 0.875rem;
+    }
+  </style>
+`;
+
+// Inject styles if not already present
+if (!document.getElementById("invoice-loading-styles")) {
+  document.head.insertAdjacentHTML("beforeend", loadingStyles);
+}
+
+// Rate limiting and loading state management
+const viewInvoiceState = {
+  activeRequests: new Set(),
+  lastRequestTime: new Map(),
+  RATE_LIMIT_MS: 2000, // 2 seconds between requests for same UUID
+};
+
+// Use global toast notification utility
+// Available via window.toastNotification.success() and window.toastNotification.error()
+// Helper function to map old API to new global toast API
+function showToast(message, type = "info", duration = 3000) {
+  if (type === "success") {
+    return window.toastNotification.success("Success", message, duration);
+  } else if (type === "error") {
+    return window.toastNotification.error("Error", message, duration);
+  } else if (type === "warning") {
+    return window.toastNotification.error("Warning", message, duration);
+  } else {
+    return window.toastNotification.success("Info", message, duration);
+  }
+}
+
+// Enhanced button state management
+function setButtonLoading(uuid, loading = true) {
+  const button = document.querySelector(`button[data-uuid="${uuid}"]`);
+  if (!button) return;
+
+  if (loading) {
+    button.disabled = true;
+    button.innerHTML =
+      '<i class="spinner-border spinner-border-sm me-1"></i>Loading...';
+    button.classList.add("loading");
+  } else {
+    button.disabled = false;
+    button.innerHTML = '<i class="bi bi-eye me-1"></i>View';
+    button.classList.remove("loading");
+  }
+}
+
 async function viewInvoiceDetails(uuid) {
+  const manager = InvoiceTableManager.getInstance();
+
   try {
+    // Check if request is already in progress
+    if (viewInvoiceState.activeRequests.has(uuid)) {
+      showToast("Request already in progress. Please wait...", "warning");
+      return;
+    }
+
+    // Check client-side cache first (15 minute cache)
+    const cacheKey = `document_details_${uuid}`;
+    const cachedData = sessionStorage.getItem(cacheKey);
+    const cacheExpiry = sessionStorage.getItem(`${cacheKey}_expiry`);
+
+    if (cachedData && cacheExpiry && Date.now() < parseInt(cacheExpiry)) {
+      console.log(`Using cached document details for ${uuid}`);
+      try {
+        const parsedData = JSON.parse(cachedData);
+        populateInvoiceModal(parsedData.documentInfo, uuid);
+
+        // Show cache indicator
+        showToast("Loaded from cache (faster response)", "info", 2000);
+        return;
+      } catch (e) {
+        console.warn("Failed to parse cached data, fetching fresh data");
+        sessionStorage.removeItem(cacheKey);
+        sessionStorage.removeItem(`${cacheKey}_expiry`);
+      }
+    }
+
+    // Enhanced rate limiting using the new RateLimiter
+    const endpoint = "getDocumentDetails";
+    const remainingRequests =
+      manager.rateLimiter.getRemainingRequests(endpoint);
+    const nextAvailable = manager.rateLimiter.getNextAvailableTime(endpoint);
+
+    if (remainingRequests === 0 || nextAvailable > 0) {
+      const waitTime = Math.max(nextAvailable, 1000);
+      const waitSeconds = Math.ceil(waitTime / 1000);
+      ToastManager.showRateLimit("Document details rate limited", waitSeconds);
+      return;
+    }
+
+    // Check legacy rate limiting for backward compatibility
+    const lastRequest = viewInvoiceState.lastRequestTime.get(uuid);
+    const now = Date.now();
+    if (lastRequest && now - lastRequest < viewInvoiceState.RATE_LIMIT_MS) {
+      const remainingTime = Math.ceil(
+        (viewInvoiceState.RATE_LIMIT_MS - (now - lastRequest)) / 1000
+      );
+      showToast(
+        `Please wait ${remainingTime} seconds before trying again`,
+        "warning"
+      );
+      return;
+    }
+
+    // Mark request as active and update timestamp
+    viewInvoiceState.activeRequests.add(uuid);
+    viewInvoiceState.lastRequestTime.set(uuid, now);
+
+    // Set button loading state
+    setButtonLoading(uuid, true);
+
     // Get the table row data first
     const table = $("#invoiceTable").DataTable();
     const rowData = table
@@ -2924,33 +4111,104 @@ async function viewInvoiceDetails(uuid) {
       .toArray()
       .find((row) => row.uuid === uuid);
 
-    console.log("Table Row Data:", rowData);
-
-    // Show loading state
+    // Show loading state with rate limit info
     $("#modalLoadingOverlay").removeClass("d-none");
 
-    // Fetch document details
-    const response = await fetch(`/api/lhdn/documents/${uuid}/display-details`);
-    const result = await response.json();
+    // Show enhanced loading toast with queue info
+    const queueStatus = manager.requestQueue.getQueueStatus();
+    showToast(
+      `Loading document details... (Queue: ${queueStatus.running}/${queueStatus.maxConcurrent} active)`,
+      "info",
+      3000
+    );
 
-    console.log("API Response:", result);
+    // Wait for rate limit slot
+    await manager.rateLimiter.waitForSlot(endpoint);
 
-    if (!response.ok) {
-      throw new Error(
-        result.message ||
-          `Failed to fetch document details (Status: ${response.status})`
+    // Queue the request to manage concurrency
+    const result = await manager.requestQueue.add(async () => {
+      console.log(`Fetching document details for UUID: ${uuid}`);
+
+      const response = await fetch(
+        `/api/lhdn/documents/${uuid}/display-details`
       );
-    }
+
+      console.log(`Response status: ${response.status} ${response.statusText}`);
+      console.log(
+        `Response headers:`,
+        Object.fromEntries(response.headers.entries())
+      );
+
+      if (!response.ok) {
+        // Handle rate limiting specifically
+        if (response.status === 429) {
+          const retryAfter = response.headers.get("retry-after") || 30;
+          throw new Error(
+            `Rate limited. Please wait ${retryAfter} seconds before trying again.`
+          );
+        }
+
+        // Try to get error details
+        let errorData = {};
+        const contentType = response.headers.get("content-type");
+
+        if (contentType && contentType.includes("application/json")) {
+          try {
+            errorData = await response.json();
+          } catch (e) {
+            console.warn("Failed to parse error response as JSON:", e);
+          }
+        } else {
+          // If not JSON, get text for debugging
+          const errorText = await response.text();
+          console.error(
+            "Non-JSON error response:",
+            errorText.substring(0, 500)
+          );
+          errorData.message = `Server returned ${response.status}: ${response.statusText}`;
+        }
+
+        throw new Error(
+          errorData.message ||
+            `Failed to fetch document details (Status: ${response.status})`
+        );
+      }
+
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const responseText = await response.text();
+        console.error("Expected JSON but got:", contentType);
+        console.error("Response text:", responseText.substring(0, 500));
+        throw new Error("Server returned non-JSON response");
+      }
+
+      return response.json();
+    }, 2); // High priority for document details
+
+    //console.log("API Response:", result);
 
     if (!result.success) {
       throw new Error(result.message || "Failed to fetch invoice details");
     }
 
+    // // Cache the successful response (15 minute cache)
+    // const cacheKey = `document_details_${uuid}`;
+    // const cacheExpiry = Date.now() + 15 * 60 * 1000; // 15 minutes
+    // try {
+    //   sessionStorage.setItem(cacheKey, JSON.stringify(result));
+    //   sessionStorage.setItem(`${cacheKey}_expiry`, cacheExpiry.toString());
+    //   console.log(
+    //     `Cached document details for ${uuid} (expires in 15 minutes)`
+    //   );
+    // } catch (e) {
+    //   console.warn("Failed to cache document details:", e);
+    // }
+
     // Parse document data if it exists
     if (result.documentInfo?.document) {
       try {
         const documentData = JSON.parse(result.documentInfo.document);
-        console.log("Parsed Document Data:", documentData);
+        //console.log("Parsed Document Data:", documentData);
         result.documentInfo.parsedDocument = documentData;
       } catch (parseError) {
         console.warn("Failed to parse document data:", parseError);
@@ -2958,7 +4216,7 @@ async function viewInvoiceDetails(uuid) {
     }
 
     const documentInfo = result.documentInfo;
-    console.log("Document Info:", documentInfo);
+    //console.log("Document Info:", documentInfo);
 
     // Check document status first
     if (documentInfo.status === "Invalid") {
@@ -3002,9 +4260,35 @@ async function viewInvoiceDetails(uuid) {
       modal.show();
 
       // Only load PDF for valid documents
-      await loadPDF(uuid, result);
+      try {
+        const pdfLoaded = await loadPDF(uuid, result);
+        if (pdfLoaded) {
+          // Show success toast only after PDF is loaded successfully
+          showToast(
+            "Document details and PDF loaded successfully",
+            "success",
+            2000
+          );
+        } else {
+          // PDF loading was skipped (document not Valid/Cancelled)
+          showToast("Document details loaded successfully", "success", 2000);
+        }
+      } catch (pdfError) {
+        console.warn("PDF loading failed, but modal is still shown:", pdfError);
+        // Show partial success toast if PDF fails but modal loads
+        showToast(
+          "Document details loaded (PDF generation failed)",
+          "warning",
+          3000
+        );
+      }
     } else {
       // For any other status
+      showToast(
+        `Document cannot be viewed when status is ${documentInfo.status}`,
+        "warning",
+        3000
+      );
       Swal.fire({
         icon: "info",
         title: "Document Unavailable",
@@ -3014,12 +4298,34 @@ async function viewInvoiceDetails(uuid) {
     }
   } catch (error) {
     console.error("Error showing document details:", error);
-    Swal.fire({
-      icon: "error",
-      title: "Error",
-      text: error.message || "Failed to show document details",
-    });
+
+    // Show error toast instead of SweetAlert for better UX
+    let errorMessage = "Failed to show document details";
+    if (error.message) {
+      if (error.message.includes("429")) {
+        errorMessage = "Too many requests. Please wait a moment and try again.";
+      } else if (error.message.includes("500")) {
+        errorMessage = "Server error. Please try again later.";
+      } else {
+        errorMessage = error.message;
+      }
+    }
+
+    showToast(errorMessage, "error", 5000);
+
+    // Also show SweetAlert for critical errors
+    if (!error.message?.includes("429")) {
+      Swal.fire({
+        icon: "error",
+        title: "Error",
+        text: errorMessage,
+      });
+    }
   } finally {
+    // Clean up loading states and active requests
+    setButtonLoading(uuid, false);
+    viewInvoiceState.activeRequests.delete(uuid);
+
     // Hide loading state
     $("#modalLoadingOverlay").addClass("d-none");
   }
@@ -3028,6 +4334,16 @@ async function viewInvoiceDetails(uuid) {
 // Function to populate the view details modal
 async function populateViewDetailsModal(modalElement, rowData, result) {
   const documentInfo = result.documentInfo;
+
+  // Debug logging to help identify mapping issues
+  console.log("Modal Population Debug:", {
+    result: result,
+    documentInfo: documentInfo,
+    rowData: rowData,
+    supplierInfo: result.supplierInfo,
+    customerInfo: result.customerInfo,
+    paymentInfo: result.paymentInfo,
+  });
   // Update modal header content
   const modalTitle = modalElement.querySelector(".modal-title");
   const modalInvoiceNumber = modalElement.querySelector(
@@ -3040,55 +4356,112 @@ async function populateViewDetailsModal(modalElement, rowData, result) {
   statusBadge.className = `badge-status ${documentInfo.status} me-3`;
   statusBadge.textContent = documentInfo.status;
 
-  // Prepare supplier info using rowData and supplierInfo
+  // Use the enhanced supplier info from the API response
   const supplierInfo = {
     company:
-      rowData.issuerName || rowData.supplierName || documentInfo.supplierName,
+      result.supplierInfo?.company ||
+      documentInfo.supplierInfo?.company ||
+      documentInfo.supplierName ||
+      rowData.issuerName ||
+      "N/A",
     tin:
+      result.supplierInfo?.tin ||
+      documentInfo.supplierInfo?.tin ||
       documentInfo.supplierTIN ||
       rowData.issuerTIN ||
-      rowData.supplierTIN ||
-      documentInfo.supplierTin,
+      null,
     registrationNo:
-      rowData.issuerID || documentInfo.supplierRegistrationNo || "N/A",
-    taxRegNo: documentInfo.supplierSstNo || rowData.issuerTaxRegNo || "N/A",
-    msicCode: documentInfo.supplierMsicCode || rowData.issuerMsicCode || "N/A",
-    address: documentInfo.supplierAddress || rowData.issuerAddress || "N/A",
+      result.supplierInfo?.registrationNo ||
+      documentInfo.supplierInfo?.registrationNo ||
+      documentInfo.supplierRegistrationNo ||
+      rowData.issuerID ||
+      null,
+    taxRegNo:
+      result.supplierInfo?.taxRegNo ||
+      documentInfo.supplierInfo?.taxRegNo ||
+      documentInfo.supplierSstNo ||
+      rowData.issuerTaxRegNo ||
+      null,
+    msicCode:
+      result.supplierInfo?.msicCode ||
+      documentInfo.supplierInfo?.msicCode ||
+      documentInfo.supplierMsicCode ||
+      rowData.issuerMsicCode ||
+      null,
+    address:
+      result.supplierInfo?.address ||
+      documentInfo.supplierInfo?.address ||
+      documentInfo.supplierAddress ||
+      rowData.issuerAddress ||
+      null,
   };
 
-  // Prepare buyer info using rowData and documentInfo
+  // Use the enhanced customer info from the API response
   const customerInfo = {
-    company: rowData.receiverName || rowData.buyerName || rowData.customerName,
+    company:
+      result.customerInfo?.company ||
+      documentInfo.customerInfo?.company ||
+      documentInfo.receiverName ||
+      rowData.receiverName ||
+      "N/A",
     tin:
+      result.customerInfo?.tin ||
+      documentInfo.customerInfo?.tin ||
       documentInfo.receiverTIN ||
       rowData.receiverTIN ||
-      rowData.buyerTIN ||
-      rowData.receivedTin,
+      null,
     registrationNo:
+      result.customerInfo?.registrationNo ||
+      documentInfo.customerInfo?.registrationNo ||
       documentInfo.receiverRegistrationNo ||
       rowData.receiverId ||
-      documentInfo.receiverRegistrationNo ||
-      "N/A",
+      null,
     taxRegNo:
+      result.customerInfo?.taxRegNo ||
+      documentInfo.customerInfo?.taxRegNo ||
       documentInfo.receiverSstNo ||
       rowData.receiverTaxRegNo ||
-      rowData.receiverId ||
-      "N/A",
-    address: documentInfo.receiverAddress || rowData.receiverAddress || "N/A",
+      null,
+    address:
+      result.customerInfo?.address ||
+      documentInfo.customerInfo?.address ||
+      documentInfo.receiverAddress ||
+      rowData.receiverAddress ||
+      null,
   };
 
-  // Prepare payment info using rowData and result
+  // Use the enhanced payment info from the API response
   const paymentInfo = {
-    totalIncludingTax: result.paymentInfo?.totalIncludingTax || 0,
-    totalExcludingTax: result.paymentInfo?.totalExcludingTax || 0,
-    taxAmount: result.paymentInfo?.taxAmount || 0,
-    irbmUniqueNo: documentInfo.uuid,
+    totalIncludingTax:
+      result.paymentInfo?.totalIncludingTax ||
+      documentInfo.paymentInfo?.totalIncludingTax ||
+      documentInfo.totalIncludingTax ||
+      documentInfo.totalSales ||
+      rowData.totalSales ||
+      0,
+    totalExcludingTax:
+      result.paymentInfo?.totalExcludingTax ||
+      documentInfo.paymentInfo?.totalExcludingTax ||
+      documentInfo.totalExcludingTax ||
+      rowData.totalExcludingTax ||
+      0,
+    taxAmount:
+      result.paymentInfo?.taxAmount ||
+      documentInfo.paymentInfo?.taxAmount ||
+      documentInfo.taxAmount ||
+      rowData.taxAmount ||
+      0,
+    totalPayableAmount:
+      result.paymentInfo?.totalPayableAmount ||
+      documentInfo.paymentInfo?.totalPayableAmount ||
+      documentInfo.totalPayableAmount ||
+      rowData.totalPayableAmount ||
+      0,
+    irbmUniqueNo: documentInfo.uuid || documentInfo.irbmUniqueNo,
     irbmlongId: documentInfo.longId || documentInfo.irbmlongId,
-    irbmURL:
-      "https://myinvois.hasil.gov.my/" +
-      documentInfo.uuid +
-      "/share/" +
-      documentInfo.longId,
+    irbmURL: documentInfo.longId
+      ? `https://myinvois.hasil.gov.my/${documentInfo.uuid}/share/${documentInfo.longId}`
+      : "N/A",
     uuid: documentInfo.uuid,
     longId: documentInfo.longId,
   };
@@ -3213,6 +4586,7 @@ function createPaymentContent(paymentInfo) {
   const totalAmount = parseFloat(paymentInfo?.totalIncludingTax || 0);
   const subtotal = parseFloat(paymentInfo?.totalExcludingTax || 0);
   const taxAmount = parseFloat(paymentInfo?.taxAmount || 0);
+  const totalPayableAmount = parseFloat(paymentInfo?.totalPayableAmount || 0);
   const uuid = paymentInfo?.uuid || "N/A";
 
   return `
@@ -3320,6 +4694,10 @@ function createPaymentContent(paymentInfo) {
             <div class="info-row">
                 <div class="label">TAX AMOUNT</div>
                 <div class="value">${formatCurrency(taxAmount)}</div>
+            </div>
+            <div class="info-row">
+                <div class="label">TOTAL PAYABLE AMOUNT</div>
+                <div class="value">${formatCurrency(totalPayableAmount)}</div>
             </div>
             <div class="info-row highlight-row">
                 <div class="label">IRBM UNIQUE IDENTIFIER NO</div>
@@ -3505,11 +4883,32 @@ async function loadPDF(uuid, documentData) {
       "PDF generation skipped - document status:",
       documentData.documentInfo.status
     );
-    return;
+    return false; // Return false to indicate PDF was not loaded
   }
 
+  const manager = InvoiceTableManager.getInstance();
+  const loadingKey = `pdf_${uuid}`;
+
+  // Prevent concurrent PDF loads for the same document
+  if (manager.loadingStates.has(loadingKey)) {
+    console.log(`PDF already loading for ${uuid}, skipping duplicate request`);
+    return false;
+  }
+
+  // Check if PDF is already loaded in the viewer
+  const currentPdfViewer = $("#pdfViewer");
+  if (currentPdfViewer.length > 0) {
+    const currentSrc = currentPdfViewer.attr("src");
+    if (currentSrc && currentSrc.includes(uuid)) {
+      console.log(`PDF already loaded for ${uuid}, skipping reload`);
+      return true;
+    }
+  }
+
+  manager.loadingStates.set(loadingKey, true);
+
   try {
-    // Initial loading state with progress container
+    // Initial loading state with enhanced progress container
     $(".pdf-viewer-container").html(`
             <div class="d-flex flex-column align-items-center justify-content-center h-100">
                 <div class="spinner-border text-primary mb-3" role="status">
@@ -3518,67 +4917,164 @@ async function loadPDF(uuid, documentData) {
                 <div id="pdf-progress" class="text-center">
                     <p class="text-muted mb-2" id="pdf-main-status">Initializing PDF generation...</p>
                     <small class="text-muted d-block" id="pdf-status-message"></small>
+                    <div class="progress mt-2" style="width: 200px; height: 4px;">
+                        <div class="progress-bar" role="progressbar" style="width: 0%"></div>
+                    </div>
                 </div>
             </div>
         `);
 
-    // Function to update both main status and detail message
-    const updateStatus = (mainStatus, detailMessage = "") => {
+    // Function to update status with progress
+    const updateStatus = (mainStatus, detailMessage = "", progress = 0) => {
       $("#pdf-main-status").text(mainStatus);
       $("#pdf-status-message").text(detailMessage);
+      $(".progress-bar").css("width", `${progress}%`);
     };
 
-    updateStatus("Checking PDF status...", "Looking for existing PDF file");
+    updateStatus(
+      "Checking rate limits...",
+      "Ensuring compliance with LHDN limits",
+      10
+    );
 
-    // Try to get PDF
-    const response = await fetch(`/api/lhdn/documents/${uuid}/pdf`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(documentData),
-    });
+    // Use rate limiter for PDF generation requests
+    await manager.rateLimiter.waitForSlot("getDocument");
 
-    const data = await response.json();
-    console.log("PDF response:", data);
+    updateStatus("Checking PDF status...", "Looking for existing PDF file", 25);
 
-    if (!data.success) {
-      throw new Error(data.message || "Failed to load PDF");
+    // Queue the PDF request to manage concurrency
+    const pdfData = await manager.requestQueue.add(async () => {
+      updateStatus("Processing request...", "Generating or retrieving PDF", 50);
+
+      const response = await fetch(`/api/lhdn/documents/${uuid}/pdf`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(documentData),
+      });
+
+      if (!response.ok) {
+        // Handle rate limiting specifically
+        if (response.status === 429) {
+          const retryAfter = response.headers.get("retry-after") || 30;
+          throw new Error(
+            `Rate limited. Please wait ${retryAfter} seconds before trying again.`
+          );
+        }
+
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(
+          errorData.message || `HTTP ${response.status}: Failed to load PDF`
+        );
+      }
+
+      return response.json();
+    }, 1); // High priority for PDF requests
+
+    console.log("PDF response:", pdfData);
+
+    if (!pdfData.success) {
+      throw new Error(pdfData.message || "Failed to load PDF");
     }
 
-    if (data.cached) {
-      updateStatus("Loading cached PDF...", "Using existing PDF from cache");
+    if (pdfData.cached) {
+      updateStatus(
+        "Loading cached PDF...",
+        "Using existing PDF from cache",
+        75
+      );
     } else {
-      updateStatus("Generating new PDF...", "This might take a few moments");
+      updateStatus("PDF generated successfully...", "Loading PDF viewer", 90);
     }
 
-    // Load the PDF
+    // Load the PDF with cache busting
     const timestamp = new Date().getTime();
-    const pdfUrl = `${data.url}?t=${timestamp}`;
+    const pdfUrl = `${pdfData.url}?t=${timestamp}`;
 
-    // Show final status before loading PDF viewer
-    updateStatus(data.message || "Loading PDF viewer...", "Almost done");
+    updateStatus("Loading PDF viewer...", "Almost done", 95);
 
     // Short delay to show the final status message
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 800));
 
-    // Create iframe for PDF
-    $(".pdf-viewer-container").html(`
-            <iframe id="pdfViewer" class="w-100 h-100" style="border: none;" src="${pdfUrl}"></iframe>
-        `);
+    // Create iframe for PDF with loading handler
+    const iframeHtml = `
+      <iframe id="pdfViewer"
+              class="w-100 h-100"
+              style="border: none;"
+              src="${pdfUrl}"
+              onload="this.style.opacity='1'"
+              style="opacity: 0; transition: opacity 0.3s ease;">
+      </iframe>
+    `;
+
+    $(".pdf-viewer-container").html(iframeHtml);
+    updateStatus("PDF loaded successfully", "Ready for viewing", 100);
+
+    // Hide progress after a short delay
+    setTimeout(() => {
+      $("#pdf-progress").fadeOut(300);
+    }, 1000);
+
+    // PDF loaded successfully
+    return true;
   } catch (error) {
     console.error("Error loading PDF:", error);
+
+    // Enhanced error handling with specific messages
+    let errorMessage = error.message;
+    let retryButton = "";
+
+    if (error.message.includes("Rate limited")) {
+      errorMessage =
+        "Server is busy processing requests. Please wait a moment before trying again.";
+      retryButton = `
+        <button class="btn btn-outline-warning btn-sm ms-3"
+                onclick="setTimeout(() => loadPDF('${uuid}', ${JSON.stringify(
+        documentData
+      ).replace(/"/g, "&quot;")}), 5000)">
+          <i class="bi bi-clock me-1"></i>Retry in 5s
+        </button>
+      `;
+    } else if (
+      error.message.includes("Failed to launch") ||
+      error.message.includes("chrome-pdf")
+    ) {
+      errorMessage =
+        "PDF generation service is temporarily unavailable. Please try again later.";
+      retryButton = `
+        <button class="btn btn-outline-danger btn-sm ms-3"
+                onclick="loadPDF('${uuid}', ${JSON.stringify(
+        documentData
+      ).replace(/"/g, "&quot;")})">
+          <i class="bi bi-arrow-clockwise me-1"></i>Retry
+        </button>
+      `;
+    } else {
+      retryButton = `
+        <button class="btn btn-outline-danger btn-sm ms-3"
+                onclick="loadPDF('${uuid}', ${JSON.stringify(
+        documentData
+      ).replace(/"/g, "&quot;")})">
+          <i class="bi bi-arrow-clockwise me-1"></i>Retry
+        </button>
+      `;
+    }
+
     $(".pdf-viewer-container").html(`
             <div class="alert alert-danger m-3">
                 <i class="bi bi-exclamation-triangle me-2"></i>
-                Failed to load PDF: ${error.message}
-                <button class="btn btn-outline-danger btn-sm ms-3" onclick="loadPDF('${uuid}', ${JSON.stringify(
-      documentData
-    )})">
-                    <i class="bi bi-arrow-clockwise me-1"></i>Retry
-                </button>
+                <strong>PDF Loading Failed</strong><br>
+                <small class="text-muted">${errorMessage}</small>
+                ${retryButton}
             </div>
         `);
+
+    // Re-throw the error so the calling function can handle it
+    throw error;
+  } finally {
+    // Always clean up loading state
+    manager.loadingStates.delete(loadingKey);
   }
 }
 
@@ -3882,42 +5378,42 @@ function initializeCharts() {
   });
 
   // Processing Time Chart
-  const timeCtx = document
-    .getElementById("processingTimeChart")
-    .getContext("2d");
-  const timeChart = new Chart(timeCtx, {
-    type: "bar",
-    data: {
-      labels: ["< 1min", "1-5min", "5-15min", "15-30min", "> 30min"],
-      datasets: [
-        {
-          label: "Documents",
-          data: [4, 8, 15, 3, 1],
-          backgroundColor: "rgba(13, 110, 253, 0.8)",
-          borderRadius: 4,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          display: false,
-        },
-      },
-      scales: {
-        y: {
-          beginAtZero: true,
-          ticks: {
-            stepSize: 1,
-          },
-        },
-      },
-    },
-  });
+  // const timeCtx = document
+  //   .getElementById("processingTimeChart")
+  //   .getContext("2d");
+  // const timeChart = new Chart(timeCtx, {
+  //   type: "bar",
+  //   data: {
+  //     labels: ["< 1min", "1-5min", "5-15min", "15-30min", "> 30min"],
+  //     datasets: [
+  //       {
+  //         label: "Documents",
+  //         data: [4, 8, 15, 3, 1],
+  //         backgroundColor: "rgba(13, 110, 253, 0.8)",
+  //         borderRadius: 4,
+  //       },
+  //     ],
+  //   },
+  //   options: {
+  //     responsive: true,
+  //     maintainAspectRatio: false,
+  //     plugins: {
+  //       legend: {
+  //         display: false,
+  //       },
+  //     },
+  //     scales: {
+  //       y: {
+  //         beginAtZero: true,
+  //         ticks: {
+  //           stepSize: 1,
+  //         },
+  //       },
+  //     },
+  //   },
+  // });
 
-  return { statusChart, submissionsChart, timeChart };
+  return { statusChart, submissionsChart };
 }
 
 // Quick Actions Event Handlers
@@ -4371,35 +5867,35 @@ function updateCharts() {
       submissionsChart.update();
     }
 
-    // Processing Time Chart Update
-    const processingTimes = [0, 0, 0, 0, 0]; // [<1min, 1-5min, 5-15min, 15-30min, >30min]
+    // // Processing Time Chart Update
+    // const processingTimes = [0, 0, 0, 0, 0]; // [<1min, 1-5min, 5-15min, 15-30min, >30min]
 
-    allData.forEach((row) => {
-      // Use processingTimeMinutes from backend if available
-      const processingTime =
-        typeof row.processingTimeMinutes === "number"
-          ? row.processingTimeMinutes
-          : null;
-      if (processingTime !== null && !isNaN(processingTime)) {
-        if (processingTime < 1) processingTimes[0]++;
-        else if (processingTime < 5) processingTimes[1]++;
-        else if (processingTime < 15) processingTimes[2]++;
-        else if (processingTime < 30) processingTimes[3]++;
-        else processingTimes[4]++;
-      }
-    });
+    // allData.forEach((row) => {
+    //   // Use processingTimeMinutes from backend if available
+    //   const processingTime =
+    //     typeof row.processingTimeMinutes === "number"
+    //       ? row.processingTimeMinutes
+    //       : null;
+    //   if (processingTime !== null && !isNaN(processingTime)) {
+    //     if (processingTime < 1) processingTimes[0]++;
+    //     else if (processingTime < 5) processingTimes[1]++;
+    //     else if (processingTime < 15) processingTimes[2]++;
+    //     else if (processingTime < 30) processingTimes[3]++;
+    //     else processingTimes[4]++;
+    //   }
+    // });
 
     // Update Processing Time Chart
-    const timeChart = Chart.getChart("processingTimeChart");
-    if (timeChart) {
-      timeChart.data.datasets[0].data = processingTimes;
-      timeChart.update();
-    }
+    // const timeChart = Chart.getChart("processingTimeChart");
+    // if (timeChart) {
+    //   timeChart.data.datasets[0].data = processingTimes;
+    //   timeChart.update();
+    // }
 
     console.log("Charts updated with table data:", {
       statusCounts,
       dailySubmissions: Object.fromEntries(dailySubmissions),
-      processingTimes,
+      // processingTimes,
     });
   } catch (error) {
     console.error("Error updating charts:", error);

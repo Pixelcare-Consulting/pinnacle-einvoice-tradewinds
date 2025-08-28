@@ -79,6 +79,86 @@
     border-bottom: none;
 }
 
+/* Processing Time Card Styling */
+.processing-time-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 12px;
+    transition: all 0.3s ease;
+}
+
+.processing-time-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+}
+
+.processing-time-card .card-icon i {
+    color: white;
+    font-size: 2rem;
+    opacity: 0.9;
+}
+
+.processing-time-card .avg-processing-time {
+    color: white;
+    font-weight: 600;
+    font-size: 1.5rem;
+}
+
+.processing-time-card .text-muted {
+    color: rgba(255, 255, 255, 0.8) !important;
+    font-size: 0.875rem;
+}
+
+.processing-time-card .card-title-new {
+    color: white;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+.processing-time-card .loading-spinner {
+    border-color: rgba(255, 255, 255, 0.3);
+    border-top-color: white;
+}
+
+/* Responsive adjustments for processing time card */
+@media (max-width: 768px) {
+    .processing-time-card {
+        margin-top: 1rem;
+    }
+}
+
+/* Processing Analytics Styling */
+.processing-stats .stat-item {
+    padding: 0.5rem;
+    border-radius: 8px;
+    background: rgba(0, 123, 255, 0.05);
+    transition: all 0.2s ease;
+}
+
+.processing-stats .stat-item:hover {
+    background: rgba(0, 123, 255, 0.1);
+    transform: translateY(-1px);
+}
+
+.processing-stats .stat-value {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.processing-stats .stat-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 500;
+}
+
+/* Enhanced chart container */
+#processingTimeChart {
+    border-radius: 8px;
+    background: rgba(248, 249, 250, 0.5);
+}
+
 .document-preview-frame {
     min-height: 300px;
     border: 1px solid #dee2e6;
@@ -523,13 +603,33 @@
               </div>
               <span class="card-title-new">QUEUE</span>
           </div>
+
+          <!-- Average Processing Time Card -->
+          <!-- <div class="info-card processing-time-card">
+              <div class="card-info">
+                  <div class="card-icon position-relative">
+                      <i class="bi bi-clock-history"></i>
+                  </div>
+                  <div class="count-info">
+                      <div class="spinner-border text-info loading-spinner" role="status">
+                          <span class="visually-hidden">Loading...</span>
+                      </div>
+                      <h6 class="avg-processing-time" style="display: none;"
+                         data-bs-toggle="tooltip"
+                         data-bs-placement="top"
+                         title="Average time from submission to LHDN validation">N/A</h6>
+                      <span class="text-muted">Average</span>
+                  </div>
+              </div>
+              <span class="card-title-new">PROCESSING TIME</span>
+          </div> -->
       </div>
 
       <!-- Statistics Section -->
       <div class="statistics-section mb-4">
         <div class="row">
           <!-- Document Status Chart -->
-          <div class="col-md-4">
+          <div class="col-md-6">
             <div class="card shadow-sm">
               <div class="card-body">
                 <h6 class="card-title d-flex align-items-center">
@@ -542,7 +642,7 @@
           </div>
 
           <!-- Daily Submissions Chart -->
-          <div class="col-md-4">
+          <div class="col-md-6">
             <div class="card shadow-sm">
               <div class="card-body">
                 <h6 class="card-title d-flex align-items-center">
@@ -555,17 +655,45 @@
           </div>
 
           <!-- Processing Time Chart -->
-          <div class="col-md-4">
+          <!-- <div class="col-md-4">
             <div class="card shadow-sm">
               <div class="card-body">
                 <h6 class="card-title d-flex align-items-center">
-                  <i class="bi bi-clock-history me-2"></i>
-                  Average Processing Time
+                  <i class="bi bi-clock-history me-2 text-primary"></i>
+                  LHDN Processing Analytics
                 </h6>
-                <canvas id="processingTimeChart" height="200"></canvas>
+                <div class="processing-stats mb-3">
+                  <div class="row text-center">
+                    <div class="col-4">
+                      <div class="stat-item">
+                        <div class="stat-value text-primary" id="avgProcessingHours">-</div>
+                        <div class="stat-label small text-muted">Avg Hours</div>
+                      </div>
+                    </div>
+                    <div class="col-4">
+                      <div class="stat-item">
+                        <div class="stat-value text-success" id="fastestProcessing">-</div>
+                        <div class="stat-label small text-muted">Fastest</div>
+                      </div>
+                    </div>
+                    <div class="col-4">
+                      <div class="stat-item">
+                        <div class="stat-value text-warning" id="slowestProcessing">-</div>
+                        <div class="stat-label small text-muted">Slowest</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <canvas id="processingTimeChart" height="150"></canvas>
+                <div class="mt-2">
+                  <small class="text-muted">
+                    <i class="bi bi-info-circle me-1"></i>
+                    Time from submission to LHDN validation
+                  </small>
+                </div>
               </div>
             </div>
-          </div>
+          </div> -->
         </div>
       </div>
 
@@ -1056,6 +1184,9 @@
 
 {% endblock %}
 {% block scripts %}
+<!-- Toast Notification Utility -->
+<script src="/assets/js/utils/toast.js"></script>
+
 <!-- Authentication and Fetch Utilities -->
 <script src="/assets/js/utils/auth-status-global.js"></script>
 <script src="/assets/js/utils/fetch-wrapper-global.js"></script>

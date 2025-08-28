@@ -98,6 +98,123 @@ const limiter = rateLimit({
   },
 });
 
+// Enhanced caching system for LHDN API responses
+class LHDNCache {
+  constructor() {
+    this.cache = new Map();
+    this.cacheExpiry = new Map();
+    this.defaultTTL = 15 * 60 * 1000; // 15 minutes default TTL
+    this.maxCacheSize = 1000; // Maximum cache entries
+
+    // Different TTL for different types of data
+    this.ttlConfig = {
+      'document-details': 30 * 60 * 1000, // 30 minutes for document details
+      'document-raw': 30 * 60 * 1000, // 30 minutes for raw document data
+      'pdf-template': 60 * 60 * 1000, // 1 hour for PDF template data
+      'validation-results': 10 * 60 * 1000, // 10 minutes for validation results
+    };
+
+    // Start cleanup interval
+    this.startCleanup();
+  }
+
+  generateKey(type, uuid, userId = null) {
+    return `${type}:${uuid}${userId ? `:${userId}` : ''}`;
+  }
+
+  set(type, uuid, data, userId = null) {
+    const key = this.generateKey(type, uuid, userId);
+    const ttl = this.ttlConfig[type] || this.defaultTTL;
+    const expiryTime = Date.now() + ttl;
+
+    // Check cache size and cleanup if needed
+    if (this.cache.size >= this.maxCacheSize) {
+      this.cleanup();
+    }
+
+    this.cache.set(key, {
+      data: JSON.parse(JSON.stringify(data)), // Deep clone to prevent mutations
+      timestamp: Date.now(),
+      ttl: ttl
+    });
+    this.cacheExpiry.set(key, expiryTime);
+
+    console.log(`[Cache] Stored ${type} for ${uuid} (TTL: ${ttl/1000}s)`);
+  }
+
+  get(type, uuid, userId = null) {
+    const key = this.generateKey(type, uuid, userId);
+    const expiryTime = this.cacheExpiry.get(key);
+
+    if (!expiryTime || Date.now() > expiryTime) {
+      // Cache expired or doesn't exist
+      this.cache.delete(key);
+      this.cacheExpiry.delete(key);
+      return null;
+    }
+
+    const cached = this.cache.get(key);
+    if (cached) {
+      console.log(`[Cache] Hit for ${type}:${uuid} (age: ${(Date.now() - cached.timestamp)/1000}s)`);
+      return JSON.parse(JSON.stringify(cached.data)); // Return deep clone
+    }
+
+    return null;
+  }
+
+  has(type, uuid, userId = null) {
+    const key = this.generateKey(type, uuid, userId);
+    const expiryTime = this.cacheExpiry.get(key);
+    return expiryTime && Date.now() <= expiryTime;
+  }
+
+  invalidate(type, uuid, userId = null) {
+    const key = this.generateKey(type, uuid, userId);
+    this.cache.delete(key);
+    this.cacheExpiry.delete(key);
+    console.log(`[Cache] Invalidated ${type} for ${uuid}`);
+  }
+
+  cleanup() {
+    const now = Date.now();
+    let cleanedCount = 0;
+
+    for (const [key, expiryTime] of this.cacheExpiry.entries()) {
+      if (now > expiryTime) {
+        this.cache.delete(key);
+        this.cacheExpiry.delete(key);
+        cleanedCount++;
+      }
+    }
+
+    if (cleanedCount > 0) {
+      console.log(`[Cache] Cleaned up ${cleanedCount} expired entries`);
+    }
+  }
+
+  startCleanup() {
+    // Run cleanup every 5 minutes
+    setInterval(() => {
+      this.cleanup();
+    }, 5 * 60 * 1000);
+  }
+
+  getStats() {
+    return {
+      size: this.cache.size,
+      maxSize: this.maxCacheSize,
+      types: [...this.cache.keys()].reduce((acc, key) => {
+        const type = key.split(':')[0];
+        acc[type] = (acc[type] || 0) + 1;
+        return acc;
+      }, {})
+    };
+  }
+}
+
+// Create global cache instance
+const lhdnCache = new LHDNCache();
+
 axiosRetry.default(axios, {
   retries: 3,
   retryDelay: axiosRetry.exponentialDelay,
@@ -184,7 +301,7 @@ function getPortalUrl(environment) {
   return portalUrls[environment] || portalUrls.sandbox; // Default to sandbox if environment not specified
 }
 
-// Enhanced document fetching function with smart caching
+// Enhanced document fetching function with smart caching and incremental sync
 const fetchRecentDocuments = async (req) => {
   console.log("Starting enhanced document fetch process...");
 
@@ -197,6 +314,11 @@ const fetchRecentDocuments = async (req) => {
       timeout: lhdnConfig.timeout,
     });
 
+    // Check sync strategy from query parameters
+    const incrementalSync = req.query.incrementalSync !== "false"; // Default to true
+    const forceRefresh = req.query.forceRefresh === "true";
+    const maxIncrementalPages = parseInt(req.query.maxIncrementalPages) || 5; // Limit incremental sync pages
+
     // First, check if we have data in the database
     const dbDocuments = await prisma.wP_INBOUND_STATUS.findMany({
       orderBy: {
@@ -204,6 +326,29 @@ const fetchRecentDocuments = async (req) => {
       },
       take: 1000, // Limit to latest 1000 records
     });
+
+    // Get the most recent document timestamp for incremental sync
+    let lastSyncTimestamp = null;
+    if (incrementalSync && dbDocuments.length > 0) {
+      const mostRecentDoc = await prisma.wP_INBOUND_STATUS.findFirst({
+        orderBy: {
+          dateTimeValidated: "desc",
+        },
+        select: {
+          dateTimeValidated: true,
+          dateTimeReceived: true,
+        },
+      });
+
+      if (mostRecentDoc) {
+        // Use the most recent validation or received timestamp
+        lastSyncTimestamp =
+          mostRecentDoc.dateTimeValidated || mostRecentDoc.dateTimeReceived;
+        console.log(
+          `Incremental sync enabled. Last document timestamp: ${lastSyncTimestamp}`
+        );
+      }
+    }
 
     // If we have database records, use them as the initial data source
     if (dbDocuments && dbDocuments.length > 0) {
@@ -221,7 +366,6 @@ const fetchRecentDocuments = async (req) => {
 
       const currentTime = new Date();
       const syncThreshold = 15 * 60 * 1000; // 15 minutes in milliseconds
-      const forceRefresh = req.query.forceRefresh === "true";
 
       // Only fetch from API if forced or if last sync is older than threshold
       if (
@@ -246,7 +390,13 @@ const fetchRecentDocuments = async (req) => {
       }
 
       // If we're here, we need to refresh from API but still have DB records as fallback
-      console.log("Database records exist but need refresh from API");
+      if (incrementalSync && lastSyncTimestamp) {
+        console.log(
+          "Database records exist, performing incremental sync from API"
+        );
+      } else {
+        console.log("Database records exist but need full refresh from API");
+      }
     } else {
       console.log("No documents found in database, will fetch from API");
     }
@@ -387,16 +537,77 @@ const fetchRecentDocuments = async (req) => {
             console.log(
               `Mapped ${mappedDocuments.length} documents from API response`
             );
-            documents.push(...mappedDocuments);
-            console.log(
-              `Successfully fetched page ${pageNo} with ${mappedDocuments.length} documents`
-            );
 
-            // Check if we have more pages based on pagination info
-            if (pagination) {
-              hasMorePages = pageNo < pagination.totalPages;
+            // Smart pagination control for incremental sync
+            let newDocumentsFound = 0;
+            let existingDocumentsFound = 0;
+
+            if (incrementalSync && lastSyncTimestamp) {
+              // Filter out documents that are older than our last sync timestamp
+              const newDocuments = [];
+
+              for (const doc of mappedDocuments) {
+                const docTimestamp =
+                  doc.dateTimeValidated || doc.dateTimeReceived;
+
+                if (
+                  docTimestamp &&
+                  new Date(docTimestamp) > new Date(lastSyncTimestamp)
+                ) {
+                  newDocuments.push(doc);
+                  newDocumentsFound++;
+                } else {
+                  existingDocumentsFound++;
+                  // If we're finding old documents, we can stop pagination early
+                  if (existingDocumentsFound >= 10) {
+                    // Stop if we find 10 consecutive old documents
+                    console.log(
+                      `Found ${existingDocumentsFound} existing documents, stopping pagination early`
+                    );
+                    hasMorePages = false;
+                    break;
+                  }
+                }
+              }
+
+              documents.push(...newDocuments);
+              console.log(
+                `Incremental sync: ${newDocumentsFound} new documents, ${existingDocumentsFound} existing documents from page ${pageNo}`
+              );
+
+              // If we found mostly existing documents, stop pagination
+              if (
+                existingDocumentsFound > newDocumentsFound &&
+                existingDocumentsFound >= 5
+              ) {
+                console.log(
+                  "Mostly existing documents found, stopping incremental sync"
+                );
+                hasMorePages = false;
+              }
             } else {
-              hasMorePages = result.length === pageSize;
+              // Full sync - add all documents
+              documents.push(...mappedDocuments);
+              console.log(
+                `Full sync: Added ${mappedDocuments.length} documents from page ${pageNo}`
+              );
+            }
+
+            // Limit incremental sync to maxIncrementalPages to prevent excessive API calls
+            if (incrementalSync && pageNo >= maxIncrementalPages) {
+              console.log(
+                `Reached maximum incremental pages (${maxIncrementalPages}), stopping sync`
+              );
+              hasMorePages = false;
+            }
+
+            // Check if we have more pages based on pagination info (only if not stopped by incremental logic)
+            if (hasMorePages) {
+              if (pagination) {
+                hasMorePages = pageNo < pagination.totalPages;
+              } else {
+                hasMorePages = result.length === pageSize;
+              }
             }
 
             // Reset consecutive errors counter on success
@@ -404,9 +615,29 @@ const fetchRecentDocuments = async (req) => {
             success = true;
             pageNo++;
 
-            // Add a small delay between requests to be considerate
+            // Adaptive delay between requests based on rate limit headers
             if (hasMorePages) {
-              await delay(500);
+              let adaptiveDelay = 500; // Base delay
+
+              // Adjust delay based on remaining rate limit
+              if (rateLimitRemaining !== null && rateLimitRemaining >= 0) {
+                if (rateLimitRemaining < 10) {
+                  adaptiveDelay = 2000; // Slow down when approaching limit
+                } else if (rateLimitRemaining < 50) {
+                  adaptiveDelay = 1000; // Moderate slowdown
+                }
+              }
+
+              // Add jitter to prevent thundering herd
+              const jitter = Math.random() * 200; // 0-200ms jitter
+              adaptiveDelay += jitter;
+
+              console.log(
+                `Adaptive delay: ${Math.round(
+                  adaptiveDelay
+                )}ms (remaining: ${rateLimitRemaining})`
+              );
+              await delay(adaptiveDelay);
             }
           } catch (error) {
             retryCount++;
@@ -462,23 +693,47 @@ const fetchRecentDocuments = async (req) => {
               }
             }
 
-            // Handle rate limiting
+            // Enhanced rate limiting handling
             if (error.response?.status === 429) {
+              const retryAfter = error.response.headers["retry-after"];
               const resetTime = error.response.headers["x-rate-limit-reset"];
-              rateLimitRemaining = 0;
+              const remaining =
+                error.response.headers["x-rate-limit-remaining"];
+
+              rateLimitRemaining = parseInt(remaining) || 0;
               rateLimitReset = resetTime;
 
-              const waitTime = new Date(resetTime).getTime() - Date.now();
-              if (waitTime > 0) {
-                console.log(
-                  `Rate limited. Waiting ${Math.round(
-                    waitTime / 1000
-                  )}s before retry...`
-                );
-                await delay(waitTime);
-                retryCount--; // Don't count rate limit retries
-                continue;
+              // Calculate wait time with multiple strategies
+              let waitTime = 0;
+
+              if (retryAfter) {
+                // Use Retry-After header if available (in seconds)
+                waitTime = parseInt(retryAfter) * 1000;
+              } else if (resetTime) {
+                // Use rate limit reset time
+                waitTime = new Date(resetTime).getTime() - Date.now();
+              } else {
+                // Fallback: exponential backoff with jitter
+                const baseDelay = 2000; // 2 seconds base
+                const exponentialDelay = baseDelay * Math.pow(2, retryCount);
+                const jitter = Math.random() * 1000; // Add up to 1 second jitter
+                waitTime = Math.min(exponentialDelay + jitter, 60000); // Max 60 seconds
               }
+
+              // Ensure minimum wait time and add buffer
+              waitTime = Math.max(waitTime, 1000) + 500; // Minimum 1.5 seconds
+
+              console.log(
+                `Rate limited (429). Waiting ${Math.round(
+                  waitTime / 1000
+                )}s before retry (attempt ${retryCount}/${
+                  lhdnConfig.maxRetries
+                })...`
+              );
+
+              await delay(waitTime);
+              retryCount--; // Don't count rate limit retries against max retries
+              continue;
             }
 
             // Track consecutive errors
@@ -529,31 +784,31 @@ const fetchRecentDocuments = async (req) => {
       await saveInboundStatus({ result: documents }, req);
 
       // If we have submission UIDs, poll their status
-      const uniqueSubmissionUids = [
-        ...new Set(documents.map((doc) => doc.submissionUid).filter(Boolean)),
+      const uniquesubmissionuids = [
+        ...new set(documents.map((doc) => doc.submissionuid).filter(boolean)),
       ];
-      if (uniqueSubmissionUids.length > 0) {
-        console.log(
-          `Found ${uniqueSubmissionUids.length} unique submission UIDs to poll`
-        );
+       if (uniquesubmissionuids.length > 0) {
+         console.log(
+           `found ${uniquesubmissionuids.length} unique submission uids to poll`
+         );
 
-        // Poll each submission in sequence to avoid rate limiting
-        for (const submissionUid of uniqueSubmissionUids) {
-          try {
-            console.log(`Polling submission status for: ${submissionUid}`);
-            await pollSubmissionStatus(submissionUid, 5); // Limit to 5 attempts for background polling
-          } catch (pollError) {
-            console.error(
-              `Error polling submission ${submissionUid}:`,
-              pollError
-            );
-            // Continue with next submission even if this one fails
-          }
+         // poll each submission in sequence to avoid rate limiting
+         for (const submissionuid of uniquesubmissionuids) {
+           try {
+             console.log(`polling submission status for: ${submissionuid}`);
+             await pollsubmissionstatus(submissionuid, 5); // limit to 5 attempts for background polling
+           } catch (pollerror) {
+             console.error(
+              `error polling submission ${submissionuid}:`,
+              pollerror
+             );
+             // continue with next submission even if this one fails
+           }
 
-          // Add a small delay between submissions to avoid rate limiting
-          await delay(1000);
-        }
-      }
+           // add a small delay between submissions to avoid rate limiting
+           await delay(1000);
+         }
+       }
 
       // Log successful document fetch
       await LoggingService.log({
@@ -824,352 +1079,352 @@ const generateTemplateHash = (templateData) => {
   return crypto.createHash("md5").update(keyData).digest("hex");
 };
 
-// Helper function to generate JSON response file
-const generateResponseFile = async (item, req = null) => {
-  try {
-    // Get username from session if available
-    const username = req?.session?.user?.username || "System";
-    // Only generate for valid documents with required fields
-    if (
-      !item.uuid ||
-      !item.submissionUid ||
-      !item.longId ||
-      item.status !== "Valid"
-    ) {
-      console.log(
-        `Skipping response file generation for ${item.uuid}: missing required fields or invalid status`
-      );
-      return {
-        success: false,
-        message: "Skipped: Missing required fields or invalid status",
-      };
-    }
+// // Helper function to generate JSON response file
+// const generateResponseFile = async (item, req = null) => {
+//   try {
+//     // Get username from session if available
+//     const username = req?.session?.user?.username || "System";
+//     // Only generate for valid documents with required fields
+//     if (
+//       !item.uuid ||
+//       !item.submissionUid ||
+//       !item.longId ||
+//       item.status !== "Valid"
+//     ) {
+//       console.log(
+//         `Skipping response file generation for ${item.uuid}: missing required fields or invalid status`
+//       );
+//       return {
+//         success: false,
+//         message: "Skipped: Missing required fields or invalid status",
+//       };
+//     }
 
-    // Get LHDN configuration
-    const lhdnConfig = await getLHDNConfig();
+//     // Get LHDN configuration
+//     const lhdnConfig = await getLHDNConfig();
 
-    // Get outgoing path configuration using Prisma
-    const outgoingConfig = await prisma.wP_CONFIGURATION.findFirst({
-      where: {
-        Type: "OUTGOING",
-        IsActive: true,
-      },
-      orderBy: {
-        CreateTS: "desc",
-      },
-    });
+//     // Get outgoing path configuration using Prisma
+//     const outgoingConfig = await prisma.wP_CONFIGURATION.findFirst({
+//       where: {
+//         Type: "OUTGOING",
+//         IsActive: true,
+//       },
+//       orderBy: {
+//         CreateTS: "desc",
+//       },
+//     });
 
-    if (!outgoingConfig || !outgoingConfig.Settings) {
-      console.log(
-        `No outgoing path configuration found, skipping response file generation for ${item.uuid}`
-      );
-      return {
-        success: false,
-        message: "No outgoing path configuration found",
-      };
-    }
+//     if (!outgoingConfig || !outgoingConfig.Settings) {
+//       console.log(
+//         `No outgoing path configuration found, skipping response file generation for ${item.uuid}`
+//       );
+//       return {
+//         success: false,
+//         message: "No outgoing path configuration found",
+//       };
+//     }
 
-    let settings =
-      typeof outgoingConfig.Settings === "string"
-        ? JSON.parse(outgoingConfig.Settings)
-        : outgoingConfig.Settings;
+//     let settings =
+//       typeof outgoingConfig.Settings === "string"
+//         ? JSON.parse(outgoingConfig.Settings)
+//         : outgoingConfig.Settings;
 
-    if (!settings.networkPath) {
-      console.log(
-        `No network path configured in outgoing settings for ${item.uuid}`
-      );
-      return { success: false, message: "No network path configured" };
-    }
+//     if (!settings.networkPath) {
+//       console.log(
+//         `No network path configured in outgoing settings for ${item.uuid}`
+//       );
+//       return { success: false, message: "No network path configured" };
+//     }
 
-    // Try to get user registration details
-    const userRegistration = await prisma.wP_USER_REGISTRATION.findFirst({
-      where: { ValidStatus: "1" }, // ValidStatus is a CHAR(1) field, not a boolean
-      orderBy: {
-        CreateTS: "desc",
-      },
-    });
+//     // Try to get user registration details
+//     const userRegistration = await prisma.wP_USER_REGISTRATION.findFirst({
+//       where: { ValidStatus: "1" }, // ValidStatus is a CHAR(1) field, not a boolean
+//       orderBy: {
+//         CreateTS: "desc",
+//       },
+//     });
 
-    if (!userRegistration || !userRegistration.TIN) {
-      console.log(`No active user registration found with TIN`);
-      return { success: false, message: "No active user registration found" };
-    }
+//     if (!userRegistration || !userRegistration.TIN) {
+//       console.log(`No active user registration found with TIN`);
+//       return { success: false, message: "No active user registration found" };
+//     }
 
-    // Try to get company settings based on user's TIN
-    let companySettings = await prisma.wP_COMPANY_SETTINGS.findFirst({
-      where: { TIN: userRegistration.TIN },
-    });
+//     // Try to get company settings based on user's TIN
+//     let companySettings = await prisma.wP_COMPANY_SETTINGS.findFirst({
+//       where: { TIN: userRegistration.TIN },
+//     });
 
-    // If no company settings found with user's TIN, try with document TINs
-    if (!companySettings) {
-      console.log(
-        `No company settings found for user TIN: ${userRegistration.TIN}, trying document TINs`
-      );
+//     // If no company settings found with user's TIN, try with document TINs
+//     if (!companySettings) {
+//       console.log(
+//         `No company settings found for user TIN: ${userRegistration.TIN}, trying document TINs`
+//       );
 
-      // Check if the document's issuerTin or receiverId matches any company settings
-      if (
-        item.issuerTin === userRegistration.TIN ||
-        item.receiverId === userRegistration.TIN
-      ) {
-        companySettings = await prisma.wP_COMPANY_SETTINGS.findFirst({
-          where: {
-            TIN: {
-              in: [item.issuerTin, item.receiverId].filter(Boolean),
-            },
-          },
-        });
-      }
-    }
+//       // Check if the document's issuerTin or receiverId matches any company settings
+//       if (
+//         item.issuerTin === userRegistration.TIN ||
+//         item.receiverId === userRegistration.TIN
+//       ) {
+//         companySettings = await prisma.wP_COMPANY_SETTINGS.findFirst({
+//           where: {
+//             TIN: {
+//               in: [item.issuerTin, item.receiverId].filter(Boolean),
+//             },
+//           },
+//         });
+//       }
+//     }
 
-    if (!companySettings) {
-      console.log(
-        `No matching company settings found for TINs: User(${userRegistration.TIN}), Issuer(${item.issuerTin}), Receiver(${item.receiverId})`
-      );
-      return { success: false, message: "No matching company settings found" };
-    }
+//     if (!companySettings) {
+//       console.log(
+//         `No matching company settings found for TINs: User(${userRegistration.TIN}), Issuer(${item.issuerTin}), Receiver(${item.receiverId})`
+//       );
+//       return { success: false, message: "No matching company settings found" };
+//     }
 
-    // Set company name from settings
-    const companyName = companySettings.CompanyName;
+//     // Set company name from settings
+//     const companyName = companySettings.CompanyName;
 
-    // Get document details from outbound status using Prisma
-    // Note: UUID is not a unique field, so we need to use findFirst instead of findUnique
-    const outboundDoc = await prisma.wP_OUTBOUND_STATUS.findFirst({
-      where: { UUID: item.uuid },
-    });
+//     // Get document details from outbound status using Prisma
+//     // Note: UUID is not a unique field, so we need to use findFirst instead of findUnique
+//     const outboundDoc = await prisma.wP_OUTBOUND_STATUS.findFirst({
+//       where: { UUID: item.uuid },
+//     });
 
-    let type, company, date;
-    let invoiceTypeCode = "01"; // Default invoice type code
-    let invoiceNo = item.internalId || "";
+//     let type, company, date;
+//     let invoiceTypeCode = "01"; // Default invoice type code
+//     let invoiceNo = item.internalId || "";
 
-    // Define sanitization function early so we can use it for all path components and IDs
-    const sanitizePath = (str) => {
-      if (!str) return "";
-      // Replace all characters that are problematic in file paths
-      return String(str).replace(/[<>:"/\\|?*]/g, "_");
-    };
+//     // Define sanitization function early so we can use it for all path components and IDs
+//     const sanitizePath = (str) => {
+//       if (!str) return "";
+//       // Replace all characters that are problematic in file paths
+//       return String(str).replace(/[<>:"/\\|?*]/g, "_");
+//     };
 
-    // Sanitize the invoiceNo immediately
-    invoiceNo = sanitizePath(invoiceNo);
+//     // Sanitize the invoiceNo immediately
+//     invoiceNo = sanitizePath(invoiceNo);
 
-    // Always try to get inbound data first using Prisma
-    const inboundDoc = await prisma.wP_INBOUND_STATUS.findUnique({
-      where: { uuid: item.uuid },
-    });
+//     // Always try to get inbound data first using Prisma
+//     const inboundDoc = await prisma.wP_INBOUND_STATUS.findUnique({
+//       where: { uuid: item.uuid },
+//     });
 
-    if (inboundDoc) {
-      // Use the helper function to get invoice type code from typeName
-      invoiceTypeCode = getInvoiceTypeCode(inboundDoc.typeName);
-      // Get and sanitize the internal ID
-      invoiceNo = sanitizePath(inboundDoc.internalId || item.internalId || "");
-    }
+//     if (inboundDoc) {
+//       // Use the helper function to get invoice type code from typeName
+//       invoiceTypeCode = getInvoiceTypeCode(inboundDoc.typeName);
+//       // Get and sanitize the internal ID
+//       invoiceNo = sanitizePath(inboundDoc.internalId || item.internalId || "");
+//     }
 
-    // Try to use outbound data if available
-    if (outboundDoc && outboundDoc.filePath) {
-      try {
-        // Extract type, company, and date from filePath
-        const pathParts = outboundDoc.filePath.split(path.sep);
-        if (pathParts.length >= 4) {
-          const dateIndex = pathParts.length - 2;
-          // const companyIndex = pathParts.length - 3; // Not used but kept for reference
-          const typeIndex = pathParts.length - 4;
+//     // Try to use outbound data if available
+//     if (outboundDoc && outboundDoc.filePath) {
+//       try {
+//         // Extract type, company, and date from filePath
+//         const pathParts = outboundDoc.filePath.split(path.sep);
+//         if (pathParts.length >= 4) {
+//           const dateIndex = pathParts.length - 2;
+//           // const companyIndex = pathParts.length - 3; // Not used but kept for reference
+//           const typeIndex = pathParts.length - 4;
 
-          type = pathParts[typeIndex] || "LHDN";
-          company = companyName; // Use company name from settings
-          date = pathParts[dateIndex] || moment().format("YYYY-MM-DD");
+//           type = pathParts[typeIndex] || "LHDN";
+//           company = companyName; // Use company name from settings
+//           date = pathParts[dateIndex] || moment().format("YYYY-MM-DD");
 
-          // Only update invoice number if we got it from outbound
-          if (outboundDoc.internalId) {
-            invoiceNo = sanitizePath(outboundDoc.internalId);
-          }
+//           // Only update invoice number if we got it from outbound
+//           if (outboundDoc.internalId) {
+//             invoiceNo = sanitizePath(outboundDoc.internalId);
+//           }
 
-          // Try to get invoice type code from typeName if available
-          if (outboundDoc.typeName) {
-            const typeMatch = outboundDoc.typeName.match(/^(\d{2})/);
-            if (typeMatch) {
-              invoiceTypeCode = typeMatch[1];
-            }
-          }
-        } else {
-          console.log(
-            `Invalid path structure in outbound doc for UUID: ${item.uuid}, using default values`
-          );
-          throw new Error("Invalid path structure");
-        }
-      } catch (pathError) {
-        console.log(
-          `Using default values due to path error for UUID: ${item.uuid}`
-        );
-        type = "LHDN";
-        company = companyName;
-        date = moment().format("YYYY-MM-DD");
-      }
-    } else {
-      // Use default values if no outbound document
-      console.log(
-        `No outbound document or path for UUID: ${item.uuid}, using default values`
-      );
-      type = "LHDN";
-      company = companyName;
-      date = moment().format("YYYY-MM-DD");
-    }
+//           // Try to get invoice type code from typeName if available
+//           if (outboundDoc.typeName) {
+//             const typeMatch = outboundDoc.typeName.match(/^(\d{2})/);
+//             if (typeMatch) {
+//               invoiceTypeCode = typeMatch[1];
+//             }
+//           }
+//         } else {
+//           console.log(
+//             `Invalid path structure in outbound doc for UUID: ${item.uuid}, using default values`
+//           );
+//           throw new Error("Invalid path structure");
+//         }
+//       } catch (pathError) {
+//         console.log(
+//           `Using default values due to path error for UUID: ${item.uuid}`
+//         );
+//         type = "LHDN";
+//         company = companyName;
+//         date = moment().format("YYYY-MM-DD");
+//       }
+//     } else {
+//       // Use default values if no outbound document
+//       console.log(
+//         `No outbound document or path for UUID: ${item.uuid}, using default values`
+//       );
+//       type = "LHDN";
+//       company = companyName;
+//       date = moment().format("YYYY-MM-DD");
+//     }
 
-    // Ensure all path components are strings and valid
-    type = String(type || "LHDN");
-    company = String(company || companyName);
-    date = String(date || moment().format("YYYY-MM-DD"));
+//     // Ensure all path components are strings and valid
+//     type = String(type || "LHDN");
+//     company = String(company || companyName);
+//     date = String(date || moment().format("YYYY-MM-DD"));
 
-    // Sanitize path components
-    type = sanitizePath(type);
-    company = sanitizePath(company);
-    date = sanitizePath(date);
+//     // Sanitize path components
+//     type = sanitizePath(type);
+//     company = sanitizePath(company);
+//     date = sanitizePath(date);
 
-    // Ensure invoiceNo is sanitized again (in case it was updated after initial sanitization)
-    invoiceNo = sanitizePath(invoiceNo);
+//     // Ensure invoiceNo is sanitized again (in case it was updated after initial sanitization)
+//     invoiceNo = sanitizePath(invoiceNo);
 
-    // Generate filename with new format: {invoiceTypeCode}_{invoiceNo}_{uuid}.json
-    const fileName = `${invoiceTypeCode}_${invoiceNo}_${item.uuid}.json`;
+//     // Generate filename with new format: {invoiceTypeCode}_{invoiceNo}_{uuid}.json
+//     const fileName = `${invoiceTypeCode}_${invoiceNo}_${item.uuid}.json`;
 
-    // Construct paths for outgoing files using configured network path
-    const outgoingBasePath = path.join(settings.networkPath, type, company);
+//     // Construct paths for outgoing files using configured network path
+//     const outgoingBasePath = path.join(settings.networkPath, type, company);
 
-    // CHANGE: Previously tried to use a specific path from outboundDoc which might not exist
-    // Now use a simpler path structure for all documents
-    const outgoingJSONPath = outgoingBasePath;
+//     // CHANGE: Previously tried to use a specific path from outboundDoc which might not exist
+//     // Now use a simpler path structure for all documents
+//     const outgoingJSONPath = outgoingBasePath;
 
-    // Create directory structure recursively
-    await fsPromises.mkdir(outgoingBasePath, { recursive: true });
+//     // Create directory structure recursively
+//     await fsPromises.mkdir(outgoingBasePath, { recursive: true });
 
-    const jsonFilePath = path.join(outgoingJSONPath, fileName);
+//     const jsonFilePath = path.join(outgoingJSONPath, fileName);
 
-    // Check if JSON response file already exists
-    try {
-      await fsPromises.access(jsonFilePath);
-      console.log(
-        `Response file already exists for ${item.uuid}, skipping generation`
-      );
-      return {
-        success: true,
-        message: "Response file already exists",
-        path: jsonFilePath,
-        fileName: fileName,
-        company: company,
-      };
-    } catch (err) {
-      // File doesn't exist, continue with creation
-    }
+//     // Check if JSON response file already exists
+//     try {
+//       await fsPromises.access(jsonFilePath);
+//       console.log(
+//         `Response file already exists for ${item.uuid}, skipping generation`
+//       );
+//       return {
+//         success: true,
+//         message: "Response file already exists",
+//         path: jsonFilePath,
+//         fileName: fileName,
+//         company: company,
+//       };
+//     } catch (err) {
+//       // File doesn't exist, continue with creation
+//     }
 
-    const portalUrl = getPortalUrl(lhdnConfig.environment);
-    const LHDNUrl = `https://${portalUrl}/${item.uuid}/share/${item.longId}`;
+//     const portalUrl = getPortalUrl(lhdnConfig.environment);
+//     const LHDNUrl = `https://${portalUrl}/${item.uuid}/share/${item.longId}`;
 
-    // Create JSON content
-    const jsonContent = {
-      issueDate: moment(date).format("YYYY-MM-DD"),
-      issueTime: new Date().toISOString().split("T")[1].split(".")[0] + "Z",
-      invoiceTypeCode: invoiceTypeCode,
-      invoiceNo: invoiceNo,
-      uuid: item.uuid,
-      submissionUid: item.submissionUid,
-      longId: item.longId,
-      status: item.status,
-      lhdnUrl: LHDNUrl,
-    };
+//     // Create JSON content
+//     const jsonContent = {
+//       issueDate: moment(date).format("YYYY-MM-DD"),
+//       issueTime: new Date().toISOString().split("T")[1].split(".")[0] + "Z",
+//       invoiceTypeCode: invoiceTypeCode,
+//       invoiceNo: invoiceNo,
+//       uuid: item.uuid,
+//       submissionUid: item.submissionUid,
+//       longId: item.longId,
+//       status: item.status,
+//       lhdnUrl: LHDNUrl,
+//     };
 
-    try {
-      // Make sure the directory exists (extra check)
-      const dirPath = path.dirname(jsonFilePath);
-      await fsPromises.mkdir(dirPath, { recursive: true });
+//     try {
+//       // Make sure the directory exists (extra check)
+//       const dirPath = path.dirname(jsonFilePath);
+//       await fsPromises.mkdir(dirPath, { recursive: true });
 
-      // Write JSON file
-      await fsPromises.writeFile(
-        jsonFilePath,
-        JSON.stringify(jsonContent, null, 2)
-      );
-      console.log(`Generated response file: ${jsonFilePath}`);
+//       // Write JSON file
+//       await fsPromises.writeFile(
+//         jsonFilePath,
+//         JSON.stringify(jsonContent, null, 2)
+//       );
+//       console.log(`Generated response file: ${jsonFilePath}`);
 
-      // Update the outbound status record with the username
-      try {
-        // Find the outbound record first
-        const outboundRecord = await prisma.wP_OUTBOUND_STATUS.findFirst({
-          where: { UUID: item.uuid },
-        });
+//       // // Update the outbound status record with the username
+//       // try {
+//       //   // Find the outbound record first
+//       //   const outboundRecord = await prisma.wP_OUTBOUND_STATUS.findFirst({
+//       //     where: { UUID: item.uuid },
+//       //   });
 
-        if (outboundRecord) {
-          // Update the record with the username
-          await prisma.wP_OUTBOUND_STATUS.update({
-            where: { id: outboundRecord.id },
-            data: {
-              submitted_by: username,
-              updated_at: new Date(),
-            },
-          });
-          console.log(
-            `Updated outbound record with username: ${username} for UUID: ${item.uuid}`
-          );
-        }
-      } catch (updateError) {
-        console.error(
-          `Error updating outbound record with username for ${item.uuid}:`,
-          updateError
-        );
-        // Continue even if this fails
-      }
+//       //   if (outboundRecord) {
+//       //     // Update the record with the username
+//       //     await prisma.wP_OUTBOUND_STATUS.update({
+//       //       where: { id: outboundRecord.id },
+//       //       data: {
+//       //         submitted_by: username,
+//       //         updated_at: new Date(),
+//       //       },
+//       //     });
+//       //     console.log(
+//       //       `Updated outbound record with username: ${username} for UUID: ${item.uuid}`
+//       //     );
+//       //   }
+//       // } catch (updateError) {
+//       //   console.error(
+//       //     `Error updating outbound record with username for ${item.uuid}:`,
+//       //     updateError
+//       //   );
+//       //   // Continue even if this fails
+//       // }
 
-      return {
-        success: true,
-        message: "Response file generated successfully",
-        path: jsonFilePath,
-        fileName: fileName,
-        company: company,
-      };
-    } catch (writeError) {
-      console.error(
-        `Error writing response file for ${item.uuid}:`,
-        writeError
-      );
+//       return {
+//         success: true,
+//         message: "Response file generated successfully",
+//         path: jsonFilePath,
+//         fileName: fileName,
+//         company: company,
+//       };
+//     } catch (writeError) {
+//       console.error(
+//         `Error writing response file for ${item.uuid}:`,
+//         writeError
+//       );
 
-      // If original path fails, try a fallback path - simplify the path further
-      try {
-        // Create a simpler fallback path without any potential problematic components
-        const fallbackDirName = `LHDN_Fallback_${moment().format("YYYYMMDD")}`;
-        const fallbackPath = path.join(settings.networkPath, fallbackDirName);
-        await fsPromises.mkdir(fallbackPath, { recursive: true });
+//       // If original path fails, try a fallback path - simplify the path further
+//       try {
+//         // Create a simpler fallback path without any potential problematic components
+//         const fallbackDirName = `LHDN_Fallback_${moment().format("YYYYMMDD")}`;
+//         const fallbackPath = path.join(settings.networkPath, fallbackDirName);
+//         await fsPromises.mkdir(fallbackPath, { recursive: true });
 
-        // Use a very simple filename pattern that removes all special characters
-        const simplifiedUuid = item.uuid.replace(/[^a-zA-Z0-9]/g, "");
-        const fallbackFileName = `document_${simplifiedUuid}.json`;
-        const fallbackFilePath = path.join(fallbackPath, fallbackFileName);
+//         // Use a very simple filename pattern that removes all special characters
+//         const simplifiedUuid = item.uuid.replace(/[^a-zA-Z0-9]/g, "");
+//         const fallbackFileName = `document_${simplifiedUuid}.json`;
+//         const fallbackFilePath = path.join(fallbackPath, fallbackFileName);
 
-        await fsPromises.writeFile(
-          fallbackFilePath,
-          JSON.stringify(jsonContent, null, 2)
-        );
-        console.log(
-          `Generated response file at fallback location: ${fallbackFilePath}`
-        );
+//         await fsPromises.writeFile(
+//           fallbackFilePath,
+//           JSON.stringify(jsonContent, null, 2)
+//         );
+//         console.log(
+//           `Generated response file at fallback location: ${fallbackFilePath}`
+//         );
 
-        return {
-          success: true,
-          message: "Response file generated at fallback location",
-          path: fallbackFilePath,
-          fileName: fallbackFileName,
-          company: company,
-        };
-      } catch (fallbackError) {
-        console.error(
-          `Fallback path also failed for ${item.uuid}:`,
-          fallbackError
-        );
-        throw writeError; // throw the original error
-      }
-    }
-  } catch (error) {
-    console.error(`Error generating response file for ${item.uuid}:`, error);
-    return {
-      success: false,
-      message: `Error generating response file: ${error.message}`,
-      error: error,
-    };
-  }
-};
+//         return {
+//           success: true,
+//           message: "Response file generated at fallback location",
+//           path: fallbackFilePath,
+//           fileName: fallbackFileName,
+//           company: company,
+//         };
+//       } catch (fallbackError) {
+//         console.error(
+//           `Fallback path also failed for ${item.uuid}:`,
+//           fallbackError
+//         );
+//         throw writeError; // throw the original error
+//       }
+//     }
+//   } catch (error) {
+//     console.error(`Error generating response file for ${item.uuid}:`, error);
+//     return {
+//       success: false,
+//       message: `Error generating response file: ${error.message}`,
+//       error: error,
+//     };
+//   }
+// };
 
 // --- Concurrency-safe DB helpers (retries for deadlocks/write conflicts) ---
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1193,6 +1448,35 @@ async function withDbRetry(fn, { retries = 5, baseDelay = 200 } = {}) {
         const delay = baseDelay * Math.pow(2, attempt - 1) + jitter;
         console.warn(
           `[DB-RETRY] attempt ${attempt}/${retries} after ${delay}ms due to:`,
+          err.code || err.message
+        );
+        await wait(delay);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+// Enhanced transaction wrapper for database operations
+async function withTransaction(fn, { retries = 3, baseDelay = 300 } = {}) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        return await fn(tx);
+      }, {
+        maxWait: 10000, // 10 seconds
+        timeout: 30000, // 30 seconds
+        isolationLevel: 'ReadCommitted' // Use READ COMMITTED to reduce deadlocks
+      });
+    } catch (err) {
+      if (isRetryableDbError(err) && attempt < retries) {
+        attempt++;
+        const jitter = Math.floor(Math.random() * 200);
+        const delay = baseDelay * Math.pow(2, attempt - 1) + jitter;
+        console.warn(
+          `[TX-RETRY] attempt ${attempt}/${retries} after ${delay}ms due to:`,
           err.code || err.message
         );
         await wait(delay);
@@ -1254,7 +1538,7 @@ const saveInboundStatus = async (data, req = null) => {
   // Process batches sequentially to reduce concurrency
   for (const batch of batches) {
     // Process documents in smaller chunks to reduce deadlock probability
-    const chunkSize = 10;
+    const chunkSize = 5; // Reduced from 10 to 5 to minimize transaction conflicts
     for (let i = 0; i < batch.length; i += chunkSize) {
       const chunk = batch.slice(i, i + chunkSize);
       const results = await Promise.all(
@@ -1263,9 +1547,9 @@ const saveInboundStatus = async (data, req = null) => {
             // Ensure issuerName is set from supplierName if missing
             const issuerName = item.issuerName || item.supplierName || null;
 
-            // Use Prisma upsert for WP_INBOUND_STATUS
-            await withDbRetry(() =>
-              prisma.wP_INBOUND_STATUS.upsert({
+            // Use transaction wrapper for WP_INBOUND_STATUS upsert
+            await withTransaction(async (tx) => {
+              return await tx.wP_INBOUND_STATUS.upsert({
                 where: { uuid: item.uuid },
                 update: {
                   submissionUid: item.submissionUid,
@@ -1333,8 +1617,8 @@ const saveInboundStatus = async (data, req = null) => {
                   created_at: new Date().toISOString(),
                   updated_at: new Date().toISOString(),
                 },
-              })
-            );
+              });
+            });
 
             // Log if we fixed a missing issuerName
             if (!item.issuerName && item.supplierName) {
@@ -2185,7 +2469,41 @@ router.get("/documents/archive-staging", async (req, res) => {
     console.log("Fetching archive staging data from WP_INBOUND_STATUS");
 
     // Get all records from WP_INBOUND_STATUS table
+    // Use select to avoid issues with missing columns
     const archiveRecords = await prisma.wP_INBOUND_STATUS.findMany({
+      select: {
+        uuid: true,
+        submissionUid: true,
+        longId: true,
+        internalId: true,
+        typeName: true,
+        typeVersionName: true,
+        issuerTin: true,
+        issuerName: true,
+        receiverId: true,
+        receiverName: true,
+        dateTimeReceived: true,
+        dateTimeValidated: true,
+        status: true,
+        documentStatusReason: true,
+        cancelDateTime: true,
+        rejectRequestDateTime: true,
+        createdByUserId: true,
+        dateTimeIssued: true,
+        totalSales: true,
+        totalExcludingTax: true,
+        totalDiscount: true,
+        totalNetAmount: true,
+        totalPayableAmount: true,
+        // documentCurrency: true, // Commented out until column is added
+        last_sync_date: true,
+        sync_status: true,
+        documentDetails: true,
+        created_at: true,
+        updated_at: true,
+        document: true,
+        validationResults: true,
+      },
       orderBy: {
         dateTimeReceived: "desc",
       },
@@ -2217,7 +2535,7 @@ router.get("/documents/archive-staging", async (req, res) => {
       totalDiscount: record.totalDiscount,
       totalNetAmount: record.totalNetAmount,
       totalPayableAmount: record.totalPayableAmount,
-      documentCurrency: record.documentCurrency || null,
+      documentCurrency: record.documentCurrency || "MYR", // Default to MYR if column doesn't exist
       source: "Archive Staging", // Mark as archive staging
       last_sync_date: record.last_sync_date,
     }));
@@ -2837,18 +3155,46 @@ router.post("/documents/refresh", async (req, res) => {
   }
 });
 
-// Update display-details endpoint to fetch all required data
+// Test endpoint to verify server and LHDN config
+router.get("/test/config", async (req, res) => {
+  try {
+    const lhdnConfig = await getLHDNConfig();
+    res.json({
+      success: true,
+      message: "LHDN configuration is working",
+      config: {
+        baseUrl: lhdnConfig.baseUrl,
+        timeout: lhdnConfig.timeout,
+        environment: lhdnConfig.environment || "unknown"
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "LHDN configuration error",
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Enhanced display-details endpoint with intelligent caching
 router.get("/documents/:uuid/display-details", async (req, res) => {
   const lhdnConfig = await getLHDNConfig();
 
   try {
     const { uuid } = req.params;
+    const userId = req.session?.user?.id;
+    const forceRefresh = req.query.force === 'true';
 
     // Log the request details
     console.log("Fetching details for document:", {
       uuid,
       user: req.session.user,
       timestamp: new Date().toISOString(),
+      forceRefresh,
+      cacheEnabled: !forceRefresh
     });
 
     // Check if user is logged in
@@ -2856,429 +3202,1035 @@ router.get("/documents/:uuid/display-details", async (req, res) => {
       return res.redirect("/login");
     }
 
-    // Get document details directly from LHDN API using raw endpoint
+    // Check cache first (unless force refresh is requested)
+    if (!forceRefresh) {
+      const cachedRawData = lhdnCache.get('document-raw', uuid, userId);
+      const cachedDetailsData = lhdnCache.get('document-details', uuid, userId);
+
+      if (cachedRawData && cachedDetailsData) {
+        console.log(`[Cache] Using cached data for document ${uuid}`);
+
+        // Process cached data and return
+        const processedData = await processDocumentData(cachedRawData, cachedDetailsData, uuid);
+        return res.json({
+          success: true,
+          documentInfo: processedData,
+          cached: true,
+          cacheAge: Date.now() - (cachedRawData.timestamp || 0)
+        });
+      }
+    }
+
+    // Fetch fresh data from LHDN API
+    console.log("Fetching fresh data from LHDN API...");
+
+    // Get raw document with correct headers per LHDN SDK
     console.log("Fetching raw document from LHDN API...");
-    const response = await axios.get(
+    const rawResponse = await axios.get(
       `${lhdnConfig.baseUrl}/api/v1.0/documents/${uuid}/raw`,
       {
         headers: {
           Authorization: `Bearer ${req.session.accessToken}`,
+          "Accept": "application/json",
           "Content-Type": "application/json",
         },
+        timeout: 30000,
       }
     );
 
-    const documentData = response.data;
-    console.log("Raw document data:", JSON.stringify(documentData, null, 2));
+    const documentData = rawResponse.data;
+    console.log("Raw document data received");
 
-    // Get document details from LHDN API
+    // Get document details with correct headers per LHDN SDK
     const detailsResponse = await axios.get(
       `${lhdnConfig.baseUrl}/api/v1.0/documents/${uuid}/details`,
       {
         headers: {
           Authorization: `Bearer ${req.session.accessToken}`,
+          "Accept": "application/json",
           "Content-Type": "application/json",
         },
+        timeout: 30000,
       }
     );
 
     const detailsData = detailsResponse.data;
-    console.log("Raw document details:", JSON.stringify(detailsData, null, 2));
+    console.log("Document details received");
 
-    // Helper function to get ID information
+    // Cache the fresh data
+    lhdnCache.set('document-raw', uuid, documentData, userId);
+    lhdnCache.set('document-details', uuid, detailsData, userId);
+    console.log(`[Cache] Stored fresh data for document ${uuid}`);
+
+    // Process the data
+    const processedData = await processDocumentData(documentData, detailsData, uuid);
+
+    return res.json({
+      success: true,
+      documentInfo: processedData,
+      cached: false,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error("Error fetching document details:", error);
+
+    // Enhanced error logging for debugging
+    if (error.response) {
+      console.error("LHDN API Error Response:", {
+        status: error.response.status,
+        statusText: error.response.statusText,
+        headers: error.response.headers,
+        data: typeof error.response.data === 'string' ?
+          error.response.data.substring(0, 500) + '...' :
+          error.response.data
+      });
+    }
+
+    // Fallback to cache on error
+    if (!req.query.force) {
+      const cachedRawData = lhdnCache.get('document-raw', uuid, userId);
+      const cachedDetailsData = lhdnCache.get('document-details', uuid, userId);
+
+      if (cachedRawData && cachedDetailsData) {
+        console.log(`[Cache] Using cached data as fallback for document ${uuid}`);
+        const processedData = await processDocumentData(cachedRawData, cachedDetailsData, uuid);
+        return res.json({
+          success: true,
+          documentInfo: processedData,
+          cached: true,
+          fallback: true,
+          warning: "Using cached data due to API error"
+        });
+      }
+    }
+
+    // Determine error type and provide appropriate message
+    let errorMessage = "Failed to fetch document details";
+    let statusCode = 500;
+
+    if (error.response) {
+      statusCode = error.response.status;
+      if (error.response.status === 401) {
+        errorMessage = "Authentication failed. Please login again.";
+      } else if (error.response.status === 403) {
+        errorMessage = "Access denied. You don't have permission to view this document.";
+      } else if (error.response.status === 404) {
+        errorMessage = "Document not found in LHDN system.";
+      } else if (error.response.status === 429) {
+        errorMessage = "Rate limit exceeded. Please try again later.";
+      } else if (error.response.data && typeof error.response.data === 'string' &&
+                 error.response.data.includes('<!DOCTYPE')) {
+        errorMessage = "LHDN API returned HTML instead of JSON. Check API endpoint and headers.";
+      }
+    } else if (error.code === 'ECONNREFUSED') {
+      errorMessage = "Cannot connect to LHDN API. Please check your connection.";
+      statusCode = 503;
+    }
+
+    return res.status(statusCode).json({
+      success: false,
+      message: errorMessage,
+      error: error.message,
+      details: error.response ? {
+        status: error.response.status,
+        statusText: error.response.statusText
+      } : null
+    });
+  }
+});
+
+// Helper function to process document data
+async function processDocumentData(documentData, detailsData, uuid) {
+  try {
+    // Safe JSON parser
+    function safeJsonParse(str) {
+      if (!str || typeof str !== "string") return null;
+      try {
+        return JSON.parse(str);
+      } catch (e) {
+        console.error("JSON parse error:", e);
+        return null;
+      }
+    }
+
+    // Extract document content
+    let parsedDocument = null;
+    if (documentData?.document) {
+      parsedDocument = safeJsonParse(documentData.document);
+    }
+
+    // Fallback: return basic info if parsing fails
+    function getBasicInfo() {
+      return {
+        uuid: uuid,
+        status: detailsData.status || "Unknown",
+        submissionUid: detailsData.submissionUid || "N/A",
+        longId: detailsData.longId || "N/A",
+        internalId: detailsData.internalId || "N/A",
+        typeName: detailsData.typeName || "Unknown",
+        typeVersionName: detailsData.typeVersionName || "Unknown",
+        issuerTin: detailsData.issuerTin || "N/A",
+        issuerName: detailsData.issuerName || "N/A",
+        receiverTin: detailsData.receiverTin || "N/A",
+        receiverName: detailsData.receiverName || "N/A",
+        dateTimeIssued: detailsData.dateTimeIssued || "N/A",
+        dateTimeReceived: detailsData.dateTimeReceived || "N/A",
+        dateTimeValidated: detailsData.dateTimeValidated || "N/A",
+        totalSales: detailsData.totalSales || 0,
+        totalPayableAmount: detailsData.totalPayableAmount || 0,
+        totalExcludingTax: detailsData.totalExcludingTax || 0,
+        taxAmount: (detailsData.totalSales || 0) - (detailsData.totalExcludingTax || 0),
+        irbmUniqueNo: uuid,
+        irbmlongId: detailsData.longId || "N/A",
+        lineItems: [],
+        supplierInfo: { tin: null, registrationNo: null, taxRegNo: null, idType: "NA", idNumber: "NA" },
+        customerInfo: { tin: null, registrationNo: null, taxRegNo: null, idType: "NA", idNumber: "NA" },
+      };
+    }
+
+    // Extract party identification with enhanced error handling
     function getPartyIdentification(partyIdentification) {
-      const idTypes = ["TIN", "BRN", "NRIC", "Passport", "Army", "SST"];
+      const idTypes = ["TIN", "BRN", "NRIC", "Passport", "Army", "SST", "TTX"];
       const result = {
         tin: null,
         registrationNo: null,
         taxRegNo: null,
-        idType: "NA",
-        idNumber: "NA",
+        idType: "N/A",
+        idNumber: "N/A",
       };
 
-      if (!partyIdentification) return result;
-
-      // Get TIN
-      const tinInfo = partyIdentification.find(
-        (id) => id.ID[0].schemeID === "TIN"
-      );
-      if (tinInfo) {
-        result.tin = tinInfo.ID[0]._;
+      if (!partyIdentification || !Array.isArray(partyIdentification)) {
+        return result;
       }
 
-      // Get Registration Number (try BRN first, then other types)
-      const brnInfo = partyIdentification.find(
-        (id) => id.ID[0].schemeID === "BRN"
-      );
-      if (brnInfo) {
-        result.registrationNo = brnInfo.ID[0]._;
-        result.idType = "BRN";
-        result.idNumber = brnInfo.ID[0]._;
-      } else {
-        // Try other ID types in order
-        for (const idType of idTypes) {
-          if (idType === "TIN" || idType === "SST") continue;
-          const idInfo = partyIdentification.find(
-            (id) => id.ID[0].schemeID === idType
-          );
-          if (idInfo) {
-            result.registrationNo = idInfo.ID[0]._;
-            result.idType = idType;
-            result.idNumber = idInfo.ID[0]._;
-            break;
+      try {
+        // Get TIN
+        const tinInfo = partyIdentification.find(id => id.ID?.[0]?.schemeID === "TIN");
+        if (tinInfo && tinInfo.ID?.[0]?._) {
+          result.tin = tinInfo.ID[0]._;
+        }
+
+        // Get Registration Number (try BRN first, then other types)
+        const brnInfo = partyIdentification.find(id => id.ID?.[0]?.schemeID === "BRN");
+        if (brnInfo && brnInfo.ID?.[0]?._) {
+          result.registrationNo = brnInfo.ID[0]._;
+          result.idType = "BRN";
+          result.idNumber = brnInfo.ID[0]._;
+        } else {
+          // Try other ID types in order
+          for (const idType of idTypes) {
+            if (["TIN", "SST"].includes(idType)) continue;
+            const idInfo = partyIdentification.find(id => id.ID?.[0]?.schemeID === idType);
+            if (idInfo && idInfo.ID?.[0]?._) {
+              result.registrationNo = idInfo.ID[0]._;
+              result.idType = idType;
+              result.idNumber = idInfo.ID[0]._;
+              break;
+            }
           }
         }
-      }
 
-      // Get Tax Registration Number (SST)
-      const sstInfo = partyIdentification.find(
-        (id) => id.ID[0].schemeID === "SST"
-      );
-      if (sstInfo) {
-        result.taxRegNo = sstInfo.ID[0]._;
+        // Get Tax Registration Number (SST)
+        const sstInfo = partyIdentification.find(id => id.ID?.[0]?.schemeID === "SST");
+        if (sstInfo && sstInfo.ID?.[0]?._) {
+          result.taxRegNo = sstInfo.ID[0]._;
+        }
+
+        // If no registration number found, try TTX
+        if (!result.registrationNo) {
+          const ttxInfo = partyIdentification.find(id => id.ID?.[0]?.schemeID === "TTX");
+          if (ttxInfo && ttxInfo.ID?.[0]?._) {
+            result.registrationNo = ttxInfo.ID[0]._;
+            result.idType = "TTX";
+            result.idNumber = ttxInfo.ID[0]._;
+          }
+        }
+      } catch (error) {
+        console.warn("Error extracting party identification:", error);
       }
 
       return result;
     }
 
-    // Process validation results
-    // This section processes validation results but doesn't use them
-    // Keeping the code for future reference
-    if (detailsData.validationResults) {
-      /* Commented out unused code
-            const processedResults = {
-                status: detailsData.status,
-                validationSteps: detailsData.validationResults.validationSteps?.map(step => {
-                    let errors = [];
-                    if (step.error) {
-                        if (Array.isArray(step.error.errors)) {
-                            errors = step.error.errors.map(err => ({
-                                code: err.code || 'VALIDATION_ERROR',
-                                message: err.message || err.toString(),
-                                field: err.field || null,
-                                value: err.value || null,
-                                details: err.details || null
-                            }));
-                        } else if (typeof step.error === 'object') {
-                            errors = [{
-                                code: step.error.code || 'VALIDATION_ERROR',
-                                message: step.error.message || step.error.toString(),
-                                field: step.error.field || null,
-                                value: step.error.value || null,
-                                details: step.error.details || null
-                            }];
-                        } else {
-                            errors = [{
-                                code: 'VALIDATION_ERROR',
-                                message: step.error.toString(),
-                                field: null,
-                                value: null,
-                                details: null
-                            }];
-                        }
-                    }
+    // Helper function to get basic info when parsing fails
+    function getBasicInfo() {
+      return {
+        uuid: uuid,
+        status: detailsData.status || "Unknown",
+        submissionUid: detailsData.submissionUid || "N/A",
+        longId: detailsData.longId || "N/A",
+        internalId: detailsData.internalId || "N/A",
+        typeName: detailsData.typeName || "Unknown",
+        typeVersionName: detailsData.typeVersionName || "Unknown",
+        issuerTin: detailsData.issuerTin || "N/A",
+        issuerName: detailsData.issuerName || "N/A",
+        receiverTin: detailsData.receiverTin || "N/A",
+        receiverName: detailsData.receiverName || "N/A",
+        dateTimeIssued: detailsData.dateTimeIssued || "N/A",
+        dateTimeReceived: detailsData.dateTimeReceived || "N/A",
+        dateTimeValidated: detailsData.dateTimeValidated || "N/A",
+        totalSales: detailsData.totalSales || 0,
+        totalPayableAmount: detailsData.totalPayableAmount || 0,
+        totalExcludingTax: detailsData.totalExcludingTax || 0,
+        taxAmount: (detailsData.totalSales || 0) - (detailsData.totalExcludingTax || 0),
+        irbmUniqueNo: uuid,
+        irbmlongId: detailsData.longId || "N/A",
 
-                    return {
-                        name: step.name || 'Validation Step',
-                        status: step.status || 'Invalid',
-                        error: errors.length > 0 ? { errors } : null,
-                        timestamp: step.timestamp || new Date().toISOString()
-                    };
-                }) || [],
-                summary: {
-                    totalSteps: detailsData.validationResults.validationSteps?.length || 0,
-                    failedSteps: detailsData.validationResults.validationSteps?.filter(step => step.status === 'Invalid' || step.error)?.length || 0,
-                    lastUpdated: new Date().toISOString()
-                }
-            };
-            */
+        // Basic supplier info from detailsData
+        supplierInfo: {
+          company: detailsData.issuerName || "N/A",
+          tin: detailsData.issuerTin || null,
+          registrationNo: null,
+          taxRegNo: null,
+          idType: "N/A",
+          idNumber: "N/A",
+          msicCode: null,
+          address: null,
+        },
+
+        // Basic customer info from detailsData
+        customerInfo: {
+          company: detailsData.receiverName || "N/A",
+          tin: detailsData.receiverTin || null,
+          registrationNo: null,
+          taxRegNo: null,
+          idType: "N/A",
+          idNumber: "N/A",
+          address: null,
+        },
+
+        // Basic payment info
+        paymentInfo: {
+          totalIncludingTax: detailsData.totalSales || 0,
+          totalExcludingTax: detailsData.totalExcludingTax || 0,
+          taxAmount: (detailsData.totalSales || 0) - (detailsData.totalExcludingTax || 0),
+          totalPayableAmount: detailsData.totalPayableAmount || 0,
+          irbmUniqueNo: uuid,
+          irbmlongId: detailsData.longId || "N/A",
+        },
+
+        lineItems: [],
+      };
     }
 
-    // Helper function to safely parse JSON
-    function safeJsonParse(jsonString) {
-      if (!jsonString || typeof jsonString !== "string") {
-        return null;
-      }
-
-      // Trim whitespace and check if it looks like JSON
-      const trimmed = jsonString.trim();
-      if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) {
-        return null;
-      }
-
-      try {
-        return JSON.parse(trimmed);
-      } catch (error) {
-        console.error("JSON parsing error:", error.message);
-        console.error(
-          "Invalid JSON content (first 200 chars):",
-          trimmed.substring(0, 200)
-        );
-        return null;
-      }
+    if (!parsedDocument || !parsedDocument.Invoice) {
+      console.log("Could not parse document or missing Invoice, returning basic info");
+      return getBasicInfo();
     }
 
-    // Helper function to return basic document info (fallback)
-    function getBasicDocumentInfo() {
-      const supplierIdentification = getPartyIdentification([
-        { ID: [{ schemeID: "TIN", _: documentData.supplierTin }] },
-        { ID: [{ schemeID: "BRN", _: documentData.supplierRegistrationNo }] },
-        { ID: [{ schemeID: "SST", _: documentData.supplierSstNo }] },
-      ]);
+    const invoice = parsedDocument.Invoice;
+    const supplierParty = invoice.AccountingSupplierParty?.[0]?.Party?.[0];
+    const customerParty = invoice.AccountingCustomerParty?.[0]?.Party?.[0];
 
-      const customerIdentification = getPartyIdentification([
-        { ID: [{ schemeID: "TIN", _: documentData.receiverTin }] },
-        { ID: [{ schemeID: "BRN", _: documentData.receiverRegistrationNo }] },
-        { ID: [{ schemeID: "SST", _: documentData.receiverSstNo }] },
-      ]);
+    const supplierIdentification = getPartyIdentification(supplierParty?.PartyIdentification);
+    const customerIdentification = getPartyIdentification(customerParty?.PartyIdentification);
+
+    // Extract line items
+    const lineItems = (invoice.InvoiceLine || []).map((line, index) => {
+      const item = line.Item?.[0];
+      const price = line.Price?.[0];
+      const quantity = parseFloat(line.InvoicedQuantity?.[0]?._ || 0);
+      const unitPrice = parseFloat(price?.PriceAmount?.[0]?._ || 0);
+      const lineExtensionAmount = parseFloat(line.LineExtensionAmount?.[0]?._ || 0);
+      const allowanceCharges = parseFloat(line.AllowanceCharge?.[0]?.Amount?.[0]?._ || 0);
+      const unitCode = line.InvoicedQuantity?.[0]?.unitCode || "NA";
 
       return {
-        success: true,
-        documentInfo: {
-          uuid: documentData.uuid,
-          submissionUid: documentData.submissionUid,
-          longId: detailsData.longId,
-          internalId: documentData.internalId,
-          status: documentData.status,
-          validationResults: detailsData.validationResults,
-          supplierName: documentData.supplierName,
-          supplierTIN: supplierIdentification.tin,
-          supplierRegistrationNo: supplierIdentification.registrationNo,
-          supplierSstNo: supplierIdentification.taxRegNo,
-          supplierMsicCode: documentData.supplierMsicCode,
-          supplierAddress: documentData.supplierAddress,
-          receiverName: documentData.receiverName,
-          receiverTIN: customerIdentification.tin,
-          receiverRegistrationNo: customerIdentification.registrationNo,
-          receiverSstNo: customerIdentification.taxRegNo,
-          receiverAddress: documentData.receiverAddress,
-        },
-        supplierInfo: {
-          company: documentData.supplierName,
-          tin: supplierIdentification.tin,
-          registrationNo: supplierIdentification.registrationNo,
-          taxRegNo: supplierIdentification.taxRegNo,
-          idType: supplierIdentification.idType,
-          idNumber: supplierIdentification.idNumber,
-          msicCode: documentData.supplierMsicCode,
-          address: documentData.supplierAddress,
-        },
-        customerInfo: {
-          company: documentData.receiverName,
-          tin: customerIdentification.tin,
-          registrationNo: customerIdentification.registrationNo,
-          taxRegNo: customerIdentification.taxRegNo,
-          idType: customerIdentification.idType,
-          idNumber: customerIdentification.idNumber,
-          address: documentData.receiverAddress,
-        },
-        paymentInfo: {
-          totalIncludingTax: documentData.totalSales,
-          totalExcludingTax: documentData.totalExcludingTax,
-          taxAmount:
-            documentData.totalSales - (documentData.totalExcludingTax || 0),
-          irbmUniqueNo: documentData.uuid,
-          irbmlongId: documentData.longId,
-        },
+        lineNo: index + 1,
+        description: item?.Description?.[0] || "N/A",
+        quantity,
+        unitPrice,
+        unitCode,
+        subtotal: lineExtensionAmount,
+        allowanceCharges,
+        total: lineExtensionAmount - allowanceCharges,
       };
-    }
-
-    // Check if document field exists and can be parsed
-    const parsedDocument = safeJsonParse(documentData.document);
-    if (!parsedDocument) {
-      // Handle case when document field is not present or invalid JSON
-      console.log(
-        "Document field missing or contains invalid JSON, using basic document info"
-      );
-      const basic = getBasicDocumentInfo();
-      // Enrich with cancellation details from DB
-      try {
-        const inboundRecord = await prisma.wP_INBOUND_STATUS.findUnique({
-          where: { uuid },
-        });
-        let cancelledByUsername = null;
-        if (inboundRecord?.createdByUserId) {
-          try {
-            const byId = await prisma.wP_USER_REGISTRATION.findFirst({
-              where: { ID: Number(inboundRecord.createdByUserId) || -1 },
-            });
-            const byUsername = !byId
-              ? await prisma.wP_USER_REGISTRATION.findFirst({
-                  where: { Username: String(inboundRecord.createdByUserId) },
-                })
-              : null;
-            cancelledByUsername =
-              byId?.Username ||
-              byUsername?.Username ||
-              inboundRecord.createdByUserId ||
-              null;
-          } catch {}
-        }
-        basic.documentInfo.cancelDateTime =
-          inboundRecord?.cancelDateTime || null;
-        basic.documentInfo.documentStatusReason =
-          inboundRecord?.documentStatusReason ||
-          basic.documentInfo.documentStatusReason ||
-          null;
-        basic.documentInfo.cancelledByUsername = cancelledByUsername;
-      } catch (e) {
-        console.warn("Cancellation enrichment failed:", e?.message);
-      }
-      return res.json(basic);
-    }
-
-    // If document field exists and was successfully parsed, extract detailed info
-    try {
-      const validationResults = detailsData.validationResults;
-      const invoice = parsedDocument.Invoice[0];
-      const supplierParty = invoice.AccountingSupplierParty[0].Party[0];
-      const customerParty = invoice.AccountingCustomerParty[0].Party[0];
-
-      // Get identification info for both parties
-      const supplierIdentification = getPartyIdentification(
-        supplierParty.PartyIdentification
-      );
-      const customerIdentification = getPartyIdentification(
-        customerParty.PartyIdentification
-      );
-
-      // Enrich with cancellation details from DB for parsed branch
-      let cancelEnrichment = {
-        cancelDateTime: null,
-        documentStatusReason: null,
-        cancelledByUsername: null,
-      };
-      try {
-        const inboundRecord = await prisma.wP_INBOUND_STATUS.findUnique({
-          where: { uuid: documentData.uuid },
-        });
-        if (inboundRecord) {
-          cancelEnrichment.cancelDateTime =
-            inboundRecord.cancelDateTime || null;
-          cancelEnrichment.documentStatusReason =
-            inboundRecord.documentStatusReason || null;
-          if (inboundRecord.createdByUserId) {
-            const byId = await prisma.wP_USER_REGISTRATION.findFirst({
-              where: { ID: Number(inboundRecord.createdByUserId) || -1 },
-            });
-            const byUsername = !byId
-              ? await prisma.wP_USER_REGISTRATION.findFirst({
-                  where: { Username: String(inboundRecord.createdByUserId) },
-                })
-              : null;
-            cancelEnrichment.cancelledByUsername =
-              byId?.Username ||
-              byUsername?.Username ||
-              inboundRecord.createdByUserId ||
-              null;
-          }
-        }
-      } catch {}
-
-      return res.json({
-        success: true,
-        documentInfo: {
-          uuid: documentData.uuid,
-          submissionUid: documentData.submissionUid,
-          longId: detailsData.longId,
-          irbmlongId: documentData.longId,
-          internalId: documentData.internalId,
-          status: documentData.status,
-          validationResults: validationResults,
-          supplierName: documentData.issuerName,
-          supplierTIN: supplierIdentification.tin,
-          supplierRegistrationNo: supplierIdentification.registrationNo,
-          supplierSstNo: supplierIdentification.taxRegNo,
-          supplierMsicCode:
-            supplierParty.IndustryClassificationCode?.[0]._ ||
-            documentData.supplierMsicCode,
-          supplierAddress:
-            supplierParty.PostalAddress[0].AddressLine.map(
-              (line) => line.Line[0]._
-            )
-              .filter(Boolean)
-              .join(", ") || documentData.supplierAddress,
-          receiverName: documentData.receiverName,
-          receiverTIN: customerIdentification.tin,
-          receiverRegistrationNo: customerIdentification.registrationNo,
-          receiverSstNo: customerIdentification.taxRegNo,
-          receiverAddress:
-            customerParty.PostalAddress[0].AddressLine.map(
-              (line) => line.Line[0]._
-            )
-              .filter(Boolean)
-              .join(", ") || documentData.receiverAddress,
-          ...cancelEnrichment,
-        },
-        supplierInfo: {
-          company:
-            supplierParty.PartyLegalEntity[0].RegistrationName[0]._ ||
-            documentData.supplierName,
-          tin: supplierIdentification.tin,
-          registrationNo: supplierIdentification.registrationNo,
-          taxRegNo: supplierIdentification.taxRegNo,
-          idType: supplierIdentification.idType,
-          idNumber: supplierIdentification.idNumber,
-          msicCode:
-            supplierParty.IndustryClassificationCode?.[0]._ ||
-            documentData.supplierMsicCode,
-          address:
-            supplierParty.PostalAddress[0].AddressLine.map(
-              (line) => line.Line[0]._
-            )
-              .filter(Boolean)
-              .join(", ") || documentData.supplierAddress,
-        },
-        customerInfo: {
-          company:
-            customerParty.PartyLegalEntity[0].RegistrationName[0]._ ||
-            documentData.receiverName,
-          tin: customerIdentification.tin,
-          registrationNo: customerIdentification.registrationNo,
-          taxRegNo: customerIdentification.taxRegNo,
-          idType: customerIdentification.idType,
-          idNumber: customerIdentification.idNumber,
-          address:
-            customerParty.PostalAddress[0].AddressLine.map(
-              (line) => line.Line[0]._
-            )
-              .filter(Boolean)
-              .join(", ") || documentData.receiverAddress,
-        },
-        paymentInfo: {
-          totalIncludingTax:
-            invoice.LegalMonetaryTotal?.[0]?.TaxInclusiveAmount?.[0]._ ||
-            documentData.totalSales,
-          totalExcludingTax:
-            invoice.LegalMonetaryTotal?.[0]?.TaxExclusiveAmount?.[0]._ ||
-            documentData.totalExcludingTax,
-          taxAmount:
-            invoice.TaxTotal?.[0]?.TaxAmount?.[0]._ ||
-            documentData.totalSales - (documentData.totalExcludingTax || 0),
-          irbmUniqueNo: documentData.uuid,
-          irbmlongId: documentData.longId,
-        },
-      });
-    } catch (parseError) {
-      console.error("Error processing parsed document:", parseError);
-      console.log(
-        "Falling back to basic document info due to processing error"
-      );
-      // Handle processing error by returning basic info
-      return res.json(getBasicDocumentInfo());
-    }
-  } catch (error) {
-    console.error("Error fetching document details:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message || "Failed to fetch document details",
-      error: {
-        name: error.name,
-        details: error.response?.data || error.stack,
-      },
     });
+
+    // Enrich with cancellation details from DB
+    let cancelEnrichment = {
+      cancelDateTime: null,
+      documentStatusReason: null,
+      cancelledByUsername: null,
+    };
+
+    try {
+      const inboundRecord = await prisma.wP_INBOUND_STATUS.findUnique({
+        where: { uuid: documentData.uuid || uuid },
+      });
+
+      if (inboundRecord) {
+        cancelEnrichment.cancelDateTime = inboundRecord.cancelDateTime || null;
+        cancelEnrichment.documentStatusReason = inboundRecord.documentStatusReason || null;
+
+        if (inboundRecord.createdByUserId) {
+          const byId = await prisma.wP_USER_REGISTRATION.findFirst({
+            where: { ID: Number(inboundRecord.createdByUserId) || -1 },
+          });
+          const byUsername = !byId
+            ? await prisma.wP_USER_REGISTRATION.findFirst({
+                where: { Username: String(inboundRecord.createdByUserId) },
+              })
+            : null;
+
+          cancelEnrichment.cancelledByUsername =
+            byId?.Username ||
+            byUsername?.Username ||
+            inboundRecord.createdByUserId ||
+            null;
+        }
+      }
+    } catch (dbError) {
+      console.warn("Failed to fetch cancellation details from DB:", dbError.message);
+    }
+
+    // Final structured response
+    return {
+      uuid: documentData.uuid || uuid,
+      submissionUid: detailsData.submissionUid || "N/A",
+      longId: detailsData.longId || "N/A",
+      irbmlongId: detailsData.longId || "N/A",
+      internalId: detailsData.internalId || "N/A",
+      status: detailsData.status || "Unknown",
+      dateTimeIssued: detailsData.dateTimeIssued ||
+        invoice.IssueDate?.[0] || "N/A",
+      dateTimeReceived: detailsData.dateTimeReceived || "N/A",
+      dateTimeValidated: detailsData.dateTimeValidated || "N/A",
+      totalSales: detailsData.totalSales ||
+        parseFloat(invoice.LegalMonetaryTotal?.[0]?.TaxInclusiveAmount?.[0]?._ || 0),
+      totalPayableAmount: detailsData.totalPayableAmount ||
+        parseFloat(invoice.LegalMonetaryTotal?.[0]?.PayableAmount?.[0]?._ || 0),
+      totalExcludingTax: detailsData.totalExcludingTax ||
+        parseFloat(invoice.LegalMonetaryTotal?.[0]?.TaxExclusiveAmount?.[0]?._ || 0),
+      taxAmount: parseFloat(invoice.TaxTotal?.[0]?.TaxAmount?.[0]?._ || 0),
+      irbmUniqueNo: uuid,
+      ...cancelEnrichment,
+
+      // Party info
+      supplierName: detailsData.issuerName ||
+        supplierParty?.PartyName?.[0]?.Name?.[0] || "N/A",
+      supplierTIN: supplierIdentification.tin,
+      supplierRegistrationNo: supplierIdentification.registrationNo,
+      supplierSstNo: supplierIdentification.taxRegNo,
+      supplierMsicCode: supplierParty?.IndustryClassificationCode?.[0]?._ ||
+        documentData.supplierMsicCode || detailsData.supplierMsicCode || null,
+      supplierAddress: supplierParty?.PostalAddress?.[0]?.AddressLine
+        ?.map(line => line.Line?.[0]?._)
+        .filter(Boolean)
+        .join(", ") || documentData.supplierAddress || detailsData.supplierAddress || null,
+
+      receiverName: detailsData.receiverName ||
+        customerParty?.PartyName?.[0]?.Name?.[0] || "N/A",
+      receiverTIN: customerIdentification.tin,
+      receiverRegistrationNo: customerIdentification.registrationNo,
+      receiverSstNo: customerIdentification.taxRegNo,
+      receiverAddress: customerParty?.PostalAddress?.[0]?.AddressLine
+        ?.map(line => line.Line?.[0]?._)
+        .filter(Boolean)
+        .join(", ") || documentData.receiverAddress || detailsData.receiverAddress || null,
+
+      // Detailed breakdowns
+      supplierInfo: {
+        company: supplierParty?.PartyLegalEntity?.[0]?.RegistrationName?.[0]?._ ||
+          supplierParty?.PartyName?.[0]?.Name?.[0] ||
+          detailsData.issuerName ||
+          documentData.supplierName || "N/A",
+        tin: supplierIdentification.tin || detailsData.issuerTin || documentData.supplierTin || null,
+        registrationNo: supplierIdentification.registrationNo ||
+          documentData.supplierRegistrationNo || null,
+        taxRegNo: supplierIdentification.taxRegNo ||
+          documentData.supplierSstNo || null,
+        idType: supplierIdentification.idType || "N/A",
+        idNumber: supplierIdentification.idNumber ||
+          documentData.supplierRegistrationNo || null,
+        msicCode: supplierParty?.IndustryClassificationCode?.[0]?._ ||
+          documentData.supplierMsicCode || detailsData.supplierMsicCode || null,
+        address: supplierParty?.PostalAddress?.[0]?.AddressLine
+          ?.map(line => line.Line?.[0]?._)
+          .filter(Boolean)
+          .join(", ") || documentData.supplierAddress || detailsData.supplierAddress || null,
+      },
+      customerInfo: {
+        company: customerParty?.PartyLegalEntity?.[0]?.RegistrationName?.[0]?._ ||
+          customerParty?.PartyName?.[0]?.Name?.[0] ||
+          detailsData.receiverName ||
+          documentData.receiverName || "N/A",
+        tin: customerIdentification.tin || detailsData.receiverTin || documentData.receiverTin || null,
+        registrationNo: customerIdentification.registrationNo ||
+          documentData.receiverRegistrationNo || null,
+        taxRegNo: customerIdentification.taxRegNo ||
+          documentData.receiverSstNo || null,
+        idType: customerIdentification.idType || "N/A",
+        idNumber: customerIdentification.idNumber ||
+          documentData.receiverRegistrationNo || null,
+        address: customerParty?.PostalAddress?.[0]?.AddressLine
+          ?.map(line => line.Line?.[0]?._)
+          .filter(Boolean)
+          .join(", ") || documentData.receiverAddress || detailsData.receiverAddress || null,
+      },
+      paymentInfo: {
+        totalIncludingTax: parseFloat(
+          invoice.LegalMonetaryTotal?.[0]?.TaxInclusiveAmount?.[0]?._ ||
+          detailsData.totalSales ||
+          documentData.totalSales || 0
+        ),
+        totalExcludingTax: parseFloat(
+          invoice.LegalMonetaryTotal?.[0]?.TaxExclusiveAmount?.[0]?._ ||
+          detailsData.totalExcludingTax ||
+          documentData.totalExcludingTax || 0
+        ),
+        taxAmount: parseFloat(
+          invoice.TaxTotal?.[0]?.TaxAmount?.[0]?._ ||
+          (detailsData.totalSales - detailsData.totalExcludingTax) ||
+          (documentData.totalSales - documentData.totalExcludingTax) || 0
+        ),
+        totalPayableAmount: parseFloat(
+          invoice.LegalMonetaryTotal?.[0]?.PayableAmount?.[0]?._ ||
+          detailsData.totalPayableAmount ||
+          documentData.totalPayableAmount || 0
+        ),
+        irbmUniqueNo: uuid,
+        irbmlongId: detailsData.longId || "N/A",
+      },
+      lineItems,
+    };
+  } catch (error) {
+    console.error("Error processing document data:", error);
+    // Return basic info on processing failure
+    return {
+      uuid: uuid,
+      status: detailsData?.status || "Unknown",
+      error: "Failed to process document data",
+      message: error.message,
+      lineItems: [],
+      supplierInfo: {},
+      customerInfo: {},
+    };
   }
-});
+}
+// // Enhanced display-details endpoint with intelligent caching
+// router.get("/documents/:uuid/display-details", async (req, res) => {
+//   const lhdnConfig = await getLHDNConfig();
+
+//   try {
+//     const { uuid } = req.params;
+//     const userId = req.session?.user?.id;
+//     const forceRefresh = req.query.force === 'true';
+
+//     // Log the request details
+//     console.log("Fetching details for document:", {
+//       uuid,
+//       user: req.session.user,
+//       timestamp: new Date().toISOString(),
+//       forceRefresh,
+//       cacheEnabled: !forceRefresh
+//     });
+
+//     // Check if user is logged in
+//     if (!req.session.user || !req.session.accessToken) {
+//       return res.redirect("/login");
+//     }
+
+//     // Check cache first (unless force refresh is requested)
+//     if (!forceRefresh) {
+//       const cachedRawData = lhdnCache.get('document-raw', uuid, userId);
+//       const cachedDetailsData = lhdnCache.get('document-details', uuid, userId);
+
+//       if (cachedRawData && cachedDetailsData) {
+//         console.log(`[Cache] Using cached data for document ${uuid}`);
+
+//         // Process cached data and return
+//         const processedData = await processDocumentData(cachedRawData, cachedDetailsData, uuid);
+//         return res.json({
+//           success: true,
+//           documentInfo: processedData,
+//           cached: true,
+//           cacheAge: Date.now() - (cachedRawData.timestamp || 0)
+//         });
+//       }
+//     }
+
+//     // Fetch fresh data from LHDN API
+//     console.log("Fetching fresh data from LHDN API...");
+
+//     // Get document details directly from LHDN API using raw endpoint
+//     console.log("Fetching raw document from LHDN API...");
+//     const response = await axios.get(
+//       `${lhdnConfig.baseUrl}/api/v1.0/documents/${uuid}/raw`,
+//       {
+//         headers: {
+//           Authorization: `Bearer ${req.session.accessToken}`,
+//           "Content-Type": "application/json",
+//         },
+//         timeout: 30000, // 30 second timeout
+//       }
+//     );
+
+//     const documentData = response.data;
+//     console.log("Raw document data received");
+
+//     // Get document details from LHDN API
+//     const detailsResponse = await axios.get(
+//       `${lhdnConfig.baseUrl}/api/v1.0/documents/${uuid}/details`,
+//       {
+//         headers: {
+//           Authorization: `Bearer ${req.session.accessToken}`,
+//           "Content-Type": "application/json",
+//         },
+//         timeout: 30000, // 30 second timeout
+//       }
+//     );
+
+//     const detailsData = detailsResponse.data;
+//     console.log("Document details received");
+
+//     // Cache the fresh data
+//     lhdnCache.set('document-raw', uuid, documentData, userId);
+//     lhdnCache.set('document-details', uuid, detailsData, userId);
+//     console.log(`[Cache] Stored fresh data for document ${uuid}`);
+
+//     // Process the data
+//     const processedData = await processDocumentData(documentData, detailsData, uuid);
+
+//     return res.json({
+//       success: true,
+//       documentInfo: processedData,
+//       cached: false,
+//       timestamp: new Date().toISOString()
+//     });
+
+//   } catch (error) {
+//     console.error("Error fetching document details:", error);
+
+//     // If there's an error, try to return cached data as fallback
+//     if (!req.query.force) {
+//       const cachedRawData = lhdnCache.get('document-raw', uuid, userId);
+//       const cachedDetailsData = lhdnCache.get('document-details', uuid, userId);
+
+//       if (cachedRawData && cachedDetailsData) {
+//         console.log(`[Cache] Using cached data as fallback for document ${uuid}`);
+//         const processedData = await processDocumentData(cachedRawData, cachedDetailsData, uuid);
+//         return res.json({
+//           success: true,
+//           documentInfo: processedData,
+//           cached: true,
+//           fallback: true,
+//           warning: "Using cached data due to API error"
+//         });
+//       }
+//     }
+
+//     return res.status(500).json({
+//       success: false,
+//       message: "Failed to fetch document details",
+//       error: error.message,
+//     });
+//   }
+// });
+
+// // Helper function to process document data (extracted for reuse)
+// async function processDocumentData(documentData, detailsData, uuid) {
+//   try {
+//     // Helper function to safely parse JSON
+//     function safeJsonParse(jsonString) {
+//       if (!jsonString || typeof jsonString !== "string") {
+//         return null;
+//       }
+//       try {
+//         return JSON.parse(jsonString);
+//       } catch (e) {
+//         console.error("JSON parse error:", e);
+//         return null;
+//       }
+//     }
+
+//     // Helper function to get basic document info
+//     function getBasicDocumentInfo() {
+//       return {
+//         success: true,
+//         documentInfo: {
+//           uuid: uuid,
+//           status: detailsData.status || "Unknown",
+//           submissionUid: detailsData.submissionUid || "N/A",
+//           longId: detailsData.longId || "N/A",
+//           internalId: detailsData.internalId || "N/A",
+//           typeName: detailsData.typeName || "Unknown",
+//           typeVersionName: detailsData.typeVersionName || "Unknown",
+//           issuerTin: detailsData.issuerTin || "N/A",
+//           issuerName: detailsData.issuerName || "N/A",
+//           receiverTin: detailsData.receiverTin || "N/A",
+//           receiverName: detailsData.receiverName || "N/A",
+//           dateTimeIssued: detailsData.dateTimeIssued || "N/A",
+//           dateTimeReceived: detailsData.dateTimeReceived || "N/A",
+//           dateTimeValidated: detailsData.dateTimeValidated || "N/A",
+//           totalSales: detailsData.totalSales || 0,
+//           totalPayableAmount: detailsData.totalPayableAmount || 0,
+//           totalExcludingTax: detailsData.totalExcludingTax || 0,
+//           taxAmount: detailsData.totalSales - (detailsData.totalExcludingTax || 0),
+//           irbmUniqueNo: uuid,
+//           irbmlongId: detailsData.longId || "N/A",
+//         },
+//       };
+//     }
+
+//     // Helper function to get ID information
+//     function getPartyIdentification(partyIdentification) {
+//       const idTypes = ["TIN", "BRN", "NRIC", "Passport", "Army", "SST"];
+//       const result = {
+//         tin: null,
+//         registrationNo: null,
+//         taxRegNo: null,
+//         idType: "NA",
+//         idNumber: "NA",
+//       };
+
+//       if (!partyIdentification) return result;
+
+//       // Get TIN
+//       const tinInfo = partyIdentification.find(
+//         (id) => id.ID[0].schemeID === "TIN"
+//       );
+//       if (tinInfo) {
+//         result.tin = tinInfo.ID[0]._;
+//       }
+
+//       // Get Registration Number (try BRN first, then other types)
+//       const brnInfo = partyIdentification.find(
+//         (id) => id.ID[0].schemeID === "BRN"
+//       );
+//       if (brnInfo) {
+//         result.registrationNo = brnInfo.ID[0]._;
+//         result.idType = "BRN";
+//         result.idNumber = brnInfo.ID[0]._;
+//       } else {
+//         // Try other ID types in order
+//         for (const idType of idTypes) {
+//           if (idType === "TIN" || idType === "SST") continue;
+//           const idInfo = partyIdentification.find(
+//             (id) => id.ID[0].schemeID === idType
+//           );
+//           if (idInfo) {
+//             result.registrationNo = idInfo.ID[0]._;
+//             result.idType = idType;
+//             result.idNumber = idInfo.ID[0]._;
+//             break;
+//           }
+//         }
+//       }
+
+//       // Get Tax Registration Number (SST)
+//       const sstInfo = partyIdentification.find(
+//         (id) => id.ID[0].schemeID === "SST"
+//       );
+//       if (sstInfo) {
+//         result.taxRegNo = sstInfo.ID[0]._;
+//       }
+
+//       return result;
+//     }
+
+//     // Process validation results
+//     // This section processes validation results but doesn't use them
+//     // Keeping the code for future reference
+//     if (detailsData.validationResults) {
+//       /* Commented out unused code
+//             const processedResults = {
+//                 status: detailsData.status,
+//                 validationSteps: detailsData.validationResults.validationSteps?.map(step => {
+//                     let errors = [];
+//                     if (step.error) {
+//                         if (Array.isArray(step.error.errors)) {
+//                             errors = step.error.errors.map(err => ({
+//                                 code: err.code || 'VALIDATION_ERROR',
+//                                 message: err.message || err.toString(),
+//                                 field: err.field || null,
+//                                 value: err.value || null,
+//                                 details: err.details || null
+//                             }));
+//                         } else if (typeof step.error === 'object') {
+//                             errors = [{
+//                                 code: step.error.code || 'VALIDATION_ERROR',
+//                                 message: step.error.message || step.error.toString(),
+//                                 field: step.error.field || null,
+//                                 value: step.error.value || null,
+//                                 details: step.error.details || null
+//                             }];
+//                         } else {
+//                             errors = [{
+//                                 code: 'VALIDATION_ERROR',
+//                                 message: step.error.toString(),
+//                                 field: null,
+//                                 value: null,
+//                                 details: null
+//                             }];
+//                         }
+//                     }
+
+//                     return {
+//                         name: step.name || 'Validation Step',
+//                         status: step.status || 'Invalid',
+//                         error: errors.length > 0 ? { errors } : null,
+//                         timestamp: step.timestamp || new Date().toISOString()
+//                     };
+//                 }) || [],
+//                 summary: {
+//                     totalSteps: detailsData.validationResults.validationSteps?.length || 0,
+//                     failedSteps: detailsData.validationResults.validationSteps?.filter(step => step.status === 'Invalid' || step.error)?.length || 0,
+//                     lastUpdated: new Date().toISOString()
+//                 }
+//             };
+//             */
+//     }
+
+//     // Try to parse the document content
+//     let parsedDocument = null;
+//     if (documentData && documentData.document) {
+//       parsedDocument = safeJsonParse(documentData.document);
+//     }
+
+//     if (!parsedDocument) {
+//       console.log("Could not parse document, returning basic info");
+//       return getBasicDocumentInfo();
+//     }
+
+//     // Extract invoice data
+//     const invoice = parsedDocument.Invoice;
+//     if (!invoice) {
+//       console.log("No invoice data found, returning basic info");
+//       return getBasicDocumentInfo();
+//     }
+
+//     // Extract supplier and customer information
+//     const supplierParty = invoice.AccountingSupplierParty?.[0]?.Party?.[0];
+//     const customerParty = invoice.AccountingCustomerParty?.[0]?.Party?.[0];
+
+//     const supplierInfo = getPartyIdentification(
+//       supplierParty?.PartyIdentification
+//     );
+//     const customerInfo = getPartyIdentification(
+//       customerParty?.PartyIdentification
+//     );
+
+//     // Extract line items
+//     const invoiceLines = invoice.InvoiceLine || [];
+//     const lineItems = invoiceLines.map((line, index) => {
+//       const item = line.Item?.[0];
+//       const price = line.Price?.[0];
+//       const quantity = parseFloat(line.InvoicedQuantity?.[0]._ || 0);
+//       const unitPrice = parseFloat(price?.PriceAmount?.[0]._ || 0);
+//       const lineExtensionAmount = parseFloat(
+//         line.LineExtensionAmount?.[0]._ || 0
+//       );
+//       const allowanceCharges = parseFloat(
+//         line.AllowanceCharge?.[0]?.Amount?.[0]._ || 0
+//       );
+//       const unitCode = line.InvoicedQuantity?.[0]?.unitCode || "NA";
+
+//       return {
+//         lineNo: index + 1,
+//         description: item?.Description?.[0] || "N/A",
+//         quantity: quantity,
+//         unitPrice: unitPrice,
+//         unitCode: unitCode,
+//         subtotal: lineExtensionAmount,
+//         allowanceCharges: allowanceCharges,
+//         total: lineExtensionAmount - allowanceCharges,
+//       };
+//     });
+
+//     // Return processed document information
+//     return {
+//       uuid: uuid,
+//       status: detailsData.status || "Unknown",
+//       submissionUid: detailsData.submissionUid || "N/A",
+//       longId: detailsData.longId || "N/A",
+//       internalId: detailsData.internalId || "N/A",
+//       typeName: detailsData.typeName || "Unknown",
+//       typeVersionName: detailsData.typeVersionName || "Unknown",
+//       issuerTin: detailsData.issuerTin || supplierInfo.tin || "N/A",
+//       issuerName: detailsData.issuerName ||
+//         supplierParty?.PartyName?.[0]?.Name?.[0] || "N/A",
+//       receiverTin: detailsData.receiverTin || customerInfo.tin || "N/A",
+//       receiverName: detailsData.receiverName ||
+//         customerParty?.PartyName?.[0]?.Name?.[0] || "N/A",
+//       dateTimeIssued: detailsData.dateTimeIssued ||
+//         invoice.IssueDate?.[0] || "N/A",
+//       dateTimeReceived: detailsData.dateTimeReceived || "N/A",
+//       dateTimeValidated: detailsData.dateTimeValidated || "N/A",
+//       totalSales: detailsData.totalSales ||
+//         parseFloat(invoice.LegalMonetaryTotal?.[0]?.TaxInclusiveAmount?.[0]._ || 0),
+//       totalPayableAmount: detailsData.totalPayableAmount ||
+//         parseFloat(invoice.LegalMonetaryTotal?.[0]?.PayableAmount?.[0]._ || 0),
+//       totalExcludingTax: detailsData.totalExcludingTax ||
+//         parseFloat(invoice.LegalMonetaryTotal?.[0]?.TaxExclusiveAmount?.[0]._ || 0),
+//       taxAmount: parseFloat(invoice.TaxTotal?.[0]?.TaxAmount?.[0]._ || 0),
+//       irbmUniqueNo: uuid,
+//       irbmlongId: detailsData.longId || "N/A",
+//       lineItems: lineItems,
+//       supplierInfo: supplierInfo,
+//       customerInfo: customerInfo,
+//     };
+
+//   } catch (error) {
+//     console.error("Error processing document data:", error);
+//     // Return basic info on error
+//     return {
+//       uuid: uuid,
+//       status: detailsData?.status || "Unknown",
+//       error: "Failed to process document data",
+//       message: error.message
+//     };
+//   }
+// }
+//       const supplierParty = invoice.AccountingSupplierParty[0].Party[0];
+//       const customerParty = invoice.AccountingCustomerParty[0].Party[0];
+
+//       // Get identification info for both parties
+//       const supplierIdentification = getPartyIdentification(
+//         supplierParty.PartyIdentification
+//       );
+//       const customerIdentification = getPartyIdentification(
+//         customerParty.PartyIdentification
+//       );
+
+//       // Enrich with cancellation details from DB for parsed branch
+//       let cancelEnrichment = {
+//         cancelDateTime: null,
+//         documentStatusReason: null,
+//         cancelledByUsername: null,
+//       };
+//       try {
+//         const inboundRecord = await prisma.wP_INBOUND_STATUS.findUnique({
+//           where: { uuid: documentData.uuid },
+//         });
+//         if (inboundRecord) {
+//           cancelEnrichment.cancelDateTime =
+//             inboundRecord.cancelDateTime || null;
+//           cancelEnrichment.documentStatusReason =
+//             inboundRecord.documentStatusReason || null;
+//           if (inboundRecord.createdByUserId) {
+//             const byId = await prisma.wP_USER_REGISTRATION.findFirst({
+//               where: { ID: Number(inboundRecord.createdByUserId) || -1 },
+//             });
+//             const byUsername = !byId
+//               ? await prisma.wP_USER_REGISTRATION.findFirst({
+//                   where: { Username: String(inboundRecord.createdByUserId) },
+//                 })
+//               : null;
+//             cancelEnrichment.cancelledByUsername =
+//               byId?.Username ||
+//               byUsername?.Username ||
+//               inboundRecord.createdByUserId ||
+//               null;
+//           }
+//         }
+//       } catch {}
+
+//       return res.json({
+//         success: true,
+//         documentInfo: {
+//           uuid: documentData.uuid,
+//           submissionUid: documentData.submissionUid,
+//           longId: detailsData.longId,
+//           irbmlongId: documentData.longId,
+//           internalId: documentData.internalId,
+//           status: documentData.status,
+//           validationResults: validationResults,
+//           supplierName: documentData.issuerName,
+//           supplierTIN: supplierIdentification.tin,
+//           supplierRegistrationNo: supplierIdentification.registrationNo,
+//           supplierSstNo: supplierIdentification.taxRegNo,
+//           supplierMsicCode:
+//             supplierParty.IndustryClassificationCode?.[0]._ ||
+//             documentData.supplierMsicCode,
+//           supplierAddress:
+//             supplierParty.PostalAddress[0].AddressLine.map(
+//               (line) => line.Line[0]._
+//             )
+//               .filter(Boolean)
+//               .join(", ") || documentData.supplierAddress,
+//           receiverName: documentData.receiverName,
+//           receiverTIN: customerIdentification.tin,
+//           receiverRegistrationNo: customerIdentification.registrationNo,
+//           receiverSstNo: customerIdentification.taxRegNo,
+//           receiverAddress:
+//             customerParty.PostalAddress[0].AddressLine.map(
+//               (line) => line.Line[0]._
+//             )
+//               .filter(Boolean)
+//               .join(", ") || documentData.receiverAddress,
+//           ...cancelEnrichment,
+//         },
+//         supplierInfo: {
+//           company:
+//             supplierParty.PartyLegalEntity[0].RegistrationName[0]._ ||
+//             documentData.supplierName,
+//           tin: supplierIdentification.tin,
+//           registrationNo: supplierIdentification.registrationNo,
+//           taxRegNo: supplierIdentification.taxRegNo,
+//           idType: supplierIdentification.idType,
+//           idNumber: supplierIdentification.idNumber,
+//           msicCode:
+//             supplierParty.IndustryClassificationCode?.[0]._ ||
+//             documentData.supplierMsicCode,
+//           address:
+//             supplierParty.PostalAddress[0].AddressLine.map(
+//               (line) => line.Line[0]._
+//             )
+//               .filter(Boolean)
+//               .join(", ") || documentData.supplierAddress,
+//         },
+//         customerInfo: {
+//           company:
+//             customerParty.PartyLegalEntity[0].RegistrationName[0]._ ||
+//             documentData.receiverName,
+//           tin: customerIdentification.tin,
+//           registrationNo: customerIdentification.registrationNo,
+//           taxRegNo: customerIdentification.taxRegNo,
+//           idType: customerIdentification.idType,
+//           idNumber: customerIdentification.idNumber,
+//           address:
+//             customerParty.PostalAddress[0].AddressLine.map(
+//               (line) => line.Line[0]._
+//             )
+//               .filter(Boolean)
+//               .join(", ") || documentData.receiverAddress,
+//         },
+//         paymentInfo: {
+//           totalIncludingTax:
+//             invoice.LegalMonetaryTotal?.[0]?.TaxInclusiveAmount?.[0]._ ||
+//             documentData.totalSales,
+//           totalExcludingTax:
+//             invoice.LegalMonetaryTotal?.[0]?.TaxExclusiveAmount?.[0]._ ||
+//             documentData.totalExcludingTax,
+//           taxAmount:
+//             invoice.TaxTotal?.[0]?.TaxAmount?.[0]._ ||
+//             documentData.totalSales - (documentData.totalExcludingTax || 0),
+//           irbmUniqueNo: documentData.uuid,
+//           irbmlongId: documentData.longId,
+//         },
+//       });
+//     } catch (parseError) {
+//       console.error("Error processing parsed document:", parseError);
+//       console.log(
+//         "Falling back to basic document info due to processing error"
+//       );
+//       // Handle processing error by returning basic info
+//       return res.json(getBasicDocumentInfo());
+//     }
+//   } catch (error) {
+//     console.error("Error fetching document details:", error);
+//     return res.status(500).json({
+//       success: false,
+//       message: error.message || "Failed to fetch document details",
+//       error: {
+//         name: error.name,
+//         details: error.response?.data || error.stack,
+//       },
+//     });
+//   }
+// });
 
 // Helper function to get template data
 async function getTemplateData(uuid, accessToken, user) {
@@ -3356,7 +4308,7 @@ async function getTemplateData(uuid, accessToken, user) {
       "04": "High-Value Goods Tax",
       "05": "Sales Tax on Low Value Goods",
       "06": "Not Applicable",
-      E: "Tax exemption",
+      "E": "Tax exemption",
     };
     return taxTypes[code] || code;
   };
@@ -3884,14 +4836,23 @@ router.post("/documents/:uuid/pdf", async (req, res) => {
     const forceRegenerate = req.query.force === "true";
     console.log(`[${requestId}] Force regenerate:`, forceRegenerate);
 
-    // Get template data
-    console.log(`[${requestId}] Fetching template data...`);
-    const templateData = await getTemplateData(
-      uuid,
-      req.session.accessToken,
-      req.session.user
-    );
-    console.log(`[${requestId}] Template data fetched successfully`);
+    // Check cache for template data first
+    let templateData = lhdnCache.get('pdf-template', uuid, req.session.user.id);
+
+    if (!templateData) {
+      console.log(`[${requestId}] Fetching fresh template data...`);
+      templateData = await getTemplateData(
+        uuid,
+        req.session.accessToken,
+        req.session.user
+      );
+
+      // Cache the template data
+      lhdnCache.set('pdf-template', uuid, templateData, req.session.user.id);
+      console.log(`[${requestId}] Template data fetched and cached`);
+    } else {
+      console.log(`[${requestId}] Using cached template data`);
+    }
 
     // Check if regeneration needed
     if (!forceRegenerate) {
@@ -4610,6 +5571,215 @@ router.post("/documents/refresh", async (req, res) => {
         message: "An unexpected error occurred",
         details: error.message,
       },
+    });
+  }
+});
+
+// Sync strategy configuration endpoint
+router.get("/sync/config", async (req, res) => {
+  try {
+    // Get current sync configuration
+    const config = {
+      syncStrategy: "incremental", // Default strategy
+      incrementalSync: true,
+      maxIncrementalPages: 5,
+      syncThresholdMinutes: 15,
+      rateLimitHandling: {
+        enabled: true,
+        adaptiveDelay: true,
+        baseDelay: 500,
+        maxDelay: 60000,
+      },
+      paginationControl: {
+        smartPagination: true,
+        earlyStopThreshold: 10,
+        maxConsecutiveErrors: 3,
+        pageSize: 100,
+      },
+    };
+
+    res.json({
+      success: true,
+      config,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Error getting sync config:", error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: "CONFIG_ERROR",
+        message: error.message,
+      },
+    });
+  }
+});
+
+// Update sync strategy configuration
+router.post("/sync/config", async (req, res) => {
+  try {
+    const {
+      syncStrategy,
+      incrementalSync,
+      maxIncrementalPages,
+      syncThresholdMinutes,
+    } = req.body;
+
+    // Validate sync strategy
+    if (
+      syncStrategy &&
+      !["incremental", "full", "smart"].includes(syncStrategy)
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: "INVALID_STRATEGY",
+          message: "Sync strategy must be: incremental, full, or smart",
+        },
+      });
+    }
+
+    // Validate numeric parameters
+    if (
+      maxIncrementalPages &&
+      (maxIncrementalPages < 1 || maxIncrementalPages > 20)
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: "INVALID_PAGES",
+          message: "Max incremental pages must be between 1 and 20",
+        },
+      });
+    }
+
+    // Log configuration change
+    await LoggingService.log({
+      description: `Sync configuration updated: ${JSON.stringify(req.body)}`,
+      username: req?.session?.user?.username || "System",
+      userId: req?.session?.user?.id,
+      ipAddress: req?.ip,
+      logType: LOG_TYPES.INFO,
+      module: MODULES.API,
+      action: ACTIONS.UPDATE,
+      status: STATUS.SUCCESS,
+      details: req.body,
+    });
+
+    res.json({
+      success: true,
+      message: "Sync configuration updated successfully",
+      config: req.body,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Error updating sync config:", error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: "CONFIG_UPDATE_ERROR",
+        message: error.message,
+      },
+    });
+  }
+});
+
+// Background sync endpoint - Optimized for low-impact incremental sync
+router.post("/sync/background", async (req, res) => {
+  try {
+    console.log("Starting background sync with optimized settings");
+
+    // Set background sync parameters for minimal impact
+    req.query.incrementalSync = "true";
+    req.query.maxIncrementalPages = "3"; // Limit to 3 pages for background sync
+    req.query.forceRefresh = "false";
+
+    // Log background sync start
+    await LoggingService.log({
+      description: "Background sync started",
+      username: req?.session?.user?.username || "System",
+      userId: req?.session?.user?.id,
+      ipAddress: req?.ip,
+      logType: LOG_TYPES.INFO,
+      module: MODULES.API,
+      action: ACTIONS.READ,
+      status: STATUS.PENDING,
+      details: { type: "background_sync" },
+    });
+
+    // Perform incremental fetch with background-optimized settings
+    const apiData = await fetchRecentDocuments(req);
+
+    // Only save if we got new data
+    if (apiData && apiData.result && apiData.result.length > 0) {
+      await saveInboundStatus(apiData);
+
+      console.log(
+        `Background sync completed: ${apiData.result.length} documents processed`
+      );
+
+      // Log successful background sync
+      await LoggingService.log({
+        description: `Background sync completed: ${apiData.result.length} documents`,
+        username: req?.session?.user?.username || "System",
+        userId: req?.session?.user?.id,
+        ipAddress: req?.ip,
+        logType: LOG_TYPES.INFO,
+        module: MODULES.API,
+        action: ACTIONS.READ,
+        status: STATUS.SUCCESS,
+        details: {
+          type: "background_sync",
+          documentCount: apiData.result.length,
+          fromApi: apiData.fromApi,
+          fromDatabase: apiData.fromDatabase,
+        },
+      });
+
+      res.json({
+        success: true,
+        message: "Background sync completed successfully",
+        count: apiData.result.length,
+        fromApi: apiData.fromApi,
+        fromDatabase: apiData.fromDatabase,
+        timestamp: new Date().toISOString(),
+      });
+    } else {
+      console.log("Background sync: No new documents found");
+
+      res.json({
+        success: true,
+        message: "Background sync completed - no new documents",
+        count: 0,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  } catch (error) {
+    console.error("Background sync error:", error);
+
+    // Log background sync error
+    await LoggingService.log({
+      description: `Background sync failed: ${error.message}`,
+      username: req?.session?.user?.username || "System",
+      userId: req?.session?.user?.id,
+      ipAddress: req?.ip,
+      logType: LOG_TYPES.ERROR,
+      module: MODULES.API,
+      action: ACTIONS.READ,
+      status: STATUS.FAILED,
+      details: {
+        type: "background_sync",
+        error: error.message,
+      },
+    });
+
+    res.status(500).json({
+      success: false,
+      error: {
+        code: "BACKGROUND_SYNC_ERROR",
+        message: error.message,
+      },
+      timestamp: new Date().toISOString(),
     });
   }
 });
