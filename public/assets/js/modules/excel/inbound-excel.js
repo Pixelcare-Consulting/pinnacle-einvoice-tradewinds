@@ -4179,6 +4179,15 @@ async function viewInvoiceDetails(uuid) {
         const responseText = await response.text();
         console.error("Expected JSON but got:", contentType);
         console.error("Response text:", responseText.substring(0, 500));
+
+        // Check if it's an authentication redirect
+        if (
+          responseText.includes("<!DOCTYPE") &&
+          responseText.includes("login")
+        ) {
+          throw new Error("Authentication required. Please log in again.");
+        }
+
         throw new Error("Server returned non-JSON response");
       }
 
@@ -4306,6 +4315,12 @@ async function viewInvoiceDetails(uuid) {
         errorMessage = "Too many requests. Please wait a moment and try again.";
       } else if (error.message.includes("500")) {
         errorMessage = "Server error. Please try again later.";
+      } else if (error.message.includes("Authentication required")) {
+        errorMessage = "Session expired. Please refresh the page and log in again.";
+        // Optionally redirect to login after a delay
+        setTimeout(() => {
+          window.location.href = "/login";
+        }, 3000);
       } else {
         errorMessage = error.message;
       }

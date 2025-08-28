@@ -3186,7 +3186,7 @@ router.get("/documents/:uuid/display-details", async (req, res) => {
   try {
     const { uuid } = req.params;
     const userId = req.session?.user?.id;
-    const forceRefresh = req.query.force === 'true';
+    const forceRefresh = req.query.force === "true";
 
     // Log the request details
     console.log("Fetching details for document:", {
@@ -3194,29 +3194,40 @@ router.get("/documents/:uuid/display-details", async (req, res) => {
       user: req.session.user,
       timestamp: new Date().toISOString(),
       forceRefresh,
-      cacheEnabled: !forceRefresh
+      cacheEnabled: !forceRefresh,
     });
 
     // Check if user is logged in
     if (!req.session.user || !req.session.accessToken) {
-      return res.redirect("/login");
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required. Please log in again.",
+        error: "AUTHENTICATION_REQUIRED",
+      });
     }
 
     // Check cache first (unless force refresh is requested)
     if (!forceRefresh) {
-      const cachedRawData = lhdnCache.get('document-raw', uuid, userId);
-      const cachedDetailsData = lhdnCache.get('document-details', uuid, userId);
+      const cachedRawData = lhdnCache.get("document-raw", uuid, userId);
+      const cachedDetailsData = lhdnCache.get("document-details", uuid, userId);
 
       if (cachedRawData && cachedDetailsData) {
         console.log(`[Cache] Using cached data for document ${uuid}`);
 
         // Process cached data and return
-        const processedData = await processDocumentData(cachedRawData, cachedDetailsData, uuid);
+        const processedData = await processDocumentData(
+          cachedRawData,
+          cachedDetailsData,
+          uuid
+        );
         return res.json({
           success: true,
           documentInfo: processedData,
+          supplierInfo: processedData.supplierInfo,
+          customerInfo: processedData.customerInfo,
+          paymentInfo: processedData.paymentInfo,
           cached: true,
-          cacheAge: Date.now() - (cachedRawData.timestamp || 0)
+          cacheAge: Date.now() - (cachedRawData.timestamp || 0),
         });
       }
     }
@@ -3231,7 +3242,7 @@ router.get("/documents/:uuid/display-details", async (req, res) => {
       {
         headers: {
           Authorization: `Bearer ${req.session.accessToken}`,
-          "Accept": "application/json",
+          Accept: "application/json",
           "Content-Type": "application/json",
         },
         timeout: 30000,
@@ -3247,7 +3258,7 @@ router.get("/documents/:uuid/display-details", async (req, res) => {
       {
         headers: {
           Authorization: `Bearer ${req.session.accessToken}`,
-          "Accept": "application/json",
+          Accept: "application/json",
           "Content-Type": "application/json",
         },
         timeout: 30000,
@@ -3258,20 +3269,26 @@ router.get("/documents/:uuid/display-details", async (req, res) => {
     console.log("Document details received");
 
     // Cache the fresh data
-    lhdnCache.set('document-raw', uuid, documentData, userId);
-    lhdnCache.set('document-details', uuid, detailsData, userId);
+    lhdnCache.set("document-raw", uuid, documentData, userId);
+    lhdnCache.set("document-details", uuid, detailsData, userId);
     console.log(`[Cache] Stored fresh data for document ${uuid}`);
 
     // Process the data
-    const processedData = await processDocumentData(documentData, detailsData, uuid);
+    const processedData = await processDocumentData(
+      documentData,
+      detailsData,
+      uuid
+    );
 
     return res.json({
       success: true,
       documentInfo: processedData,
+      supplierInfo: processedData.supplierInfo,
+      customerInfo: processedData.customerInfo,
+      paymentInfo: processedData.paymentInfo,
       cached: false,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
     console.error("Error fetching document details:", error);
 
@@ -3281,26 +3298,36 @@ router.get("/documents/:uuid/display-details", async (req, res) => {
         status: error.response.status,
         statusText: error.response.statusText,
         headers: error.response.headers,
-        data: typeof error.response.data === 'string' ?
-          error.response.data.substring(0, 500) + '...' :
-          error.response.data
+        data:
+          typeof error.response.data === "string"
+            ? error.response.data.substring(0, 500) + "..."
+            : error.response.data,
       });
     }
 
     // Fallback to cache on error
     if (!req.query.force) {
-      const cachedRawData = lhdnCache.get('document-raw', uuid, userId);
-      const cachedDetailsData = lhdnCache.get('document-details', uuid, userId);
+      const cachedRawData = lhdnCache.get("document-raw", uuid, userId);
+      const cachedDetailsData = lhdnCache.get("document-details", uuid, userId);
 
       if (cachedRawData && cachedDetailsData) {
-        console.log(`[Cache] Using cached data as fallback for document ${uuid}`);
-        const processedData = await processDocumentData(cachedRawData, cachedDetailsData, uuid);
+        console.log(
+          `[Cache] Using cached data as fallback for document ${uuid}`
+        );
+        const processedData = await processDocumentData(
+          cachedRawData,
+          cachedDetailsData,
+          uuid
+        );
         return res.json({
           success: true,
           documentInfo: processedData,
+          supplierInfo: processedData.supplierInfo,
+          customerInfo: processedData.customerInfo,
+          paymentInfo: processedData.paymentInfo,
           cached: true,
           fallback: true,
-          warning: "Using cached data due to API error"
+          warning: "Using cached data due to API error",
         });
       }
     }
@@ -3314,17 +3341,23 @@ router.get("/documents/:uuid/display-details", async (req, res) => {
       if (error.response.status === 401) {
         errorMessage = "Authentication failed. Please login again.";
       } else if (error.response.status === 403) {
-        errorMessage = "Access denied. You don't have permission to view this document.";
+        errorMessage =
+          "Access denied. You don't have permission to view this document.";
       } else if (error.response.status === 404) {
         errorMessage = "Document not found in LHDN system.";
       } else if (error.response.status === 429) {
         errorMessage = "Rate limit exceeded. Please try again later.";
-      } else if (error.response.data && typeof error.response.data === 'string' &&
-                 error.response.data.includes('<!DOCTYPE')) {
-        errorMessage = "LHDN API returned HTML instead of JSON. Check API endpoint and headers.";
+      } else if (
+        error.response.data &&
+        typeof error.response.data === "string" &&
+        error.response.data.includes("<!DOCTYPE")
+      ) {
+        errorMessage =
+          "LHDN API returned HTML instead of JSON. Check API endpoint and headers.";
       }
-    } else if (error.code === 'ECONNREFUSED') {
-      errorMessage = "Cannot connect to LHDN API. Please check your connection.";
+    } else if (error.code === "ECONNREFUSED") {
+      errorMessage =
+        "Cannot connect to LHDN API. Please check your connection.";
       statusCode = 503;
     }
 
@@ -3332,10 +3365,12 @@ router.get("/documents/:uuid/display-details", async (req, res) => {
       success: false,
       message: errorMessage,
       error: error.message,
-      details: error.response ? {
-        status: error.response.status,
-        statusText: error.response.statusText
-      } : null
+      details: error.response
+        ? {
+            status: error.response.status,
+            statusText: error.response.statusText,
+          }
+        : null,
     });
   }
 });
@@ -3380,12 +3415,25 @@ async function processDocumentData(documentData, detailsData, uuid) {
         totalSales: detailsData.totalSales || 0,
         totalPayableAmount: detailsData.totalPayableAmount || 0,
         totalExcludingTax: detailsData.totalExcludingTax || 0,
-        taxAmount: (detailsData.totalSales || 0) - (detailsData.totalExcludingTax || 0),
+        taxAmount:
+          (detailsData.totalSales || 0) - (detailsData.totalExcludingTax || 0),
         irbmUniqueNo: uuid,
         irbmlongId: detailsData.longId || "N/A",
         lineItems: [],
-        supplierInfo: { tin: null, registrationNo: null, taxRegNo: null, idType: "NA", idNumber: "NA" },
-        customerInfo: { tin: null, registrationNo: null, taxRegNo: null, idType: "NA", idNumber: "NA" },
+        supplierInfo: {
+          tin: null,
+          registrationNo: null,
+          taxRegNo: null,
+          idType: "NA",
+          idNumber: "NA",
+        },
+        customerInfo: {
+          tin: null,
+          registrationNo: null,
+          taxRegNo: null,
+          idType: "NA",
+          idNumber: "NA",
+        },
       };
     }
 
@@ -3406,13 +3454,17 @@ async function processDocumentData(documentData, detailsData, uuid) {
 
       try {
         // Get TIN
-        const tinInfo = partyIdentification.find(id => id.ID?.[0]?.schemeID === "TIN");
+        const tinInfo = partyIdentification.find(
+          (id) => id.ID?.[0]?.schemeID === "TIN"
+        );
         if (tinInfo && tinInfo.ID?.[0]?._) {
           result.tin = tinInfo.ID[0]._;
         }
 
         // Get Registration Number (try BRN first, then other types)
-        const brnInfo = partyIdentification.find(id => id.ID?.[0]?.schemeID === "BRN");
+        const brnInfo = partyIdentification.find(
+          (id) => id.ID?.[0]?.schemeID === "BRN"
+        );
         if (brnInfo && brnInfo.ID?.[0]?._) {
           result.registrationNo = brnInfo.ID[0]._;
           result.idType = "BRN";
@@ -3421,7 +3473,9 @@ async function processDocumentData(documentData, detailsData, uuid) {
           // Try other ID types in order
           for (const idType of idTypes) {
             if (["TIN", "SST"].includes(idType)) continue;
-            const idInfo = partyIdentification.find(id => id.ID?.[0]?.schemeID === idType);
+            const idInfo = partyIdentification.find(
+              (id) => id.ID?.[0]?.schemeID === idType
+            );
             if (idInfo && idInfo.ID?.[0]?._) {
               result.registrationNo = idInfo.ID[0]._;
               result.idType = idType;
@@ -3432,14 +3486,18 @@ async function processDocumentData(documentData, detailsData, uuid) {
         }
 
         // Get Tax Registration Number (SST)
-        const sstInfo = partyIdentification.find(id => id.ID?.[0]?.schemeID === "SST");
+        const sstInfo = partyIdentification.find(
+          (id) => id.ID?.[0]?.schemeID === "SST"
+        );
         if (sstInfo && sstInfo.ID?.[0]?._) {
           result.taxRegNo = sstInfo.ID[0]._;
         }
 
         // If no registration number found, try TTX
         if (!result.registrationNo) {
-          const ttxInfo = partyIdentification.find(id => id.ID?.[0]?.schemeID === "TTX");
+          const ttxInfo = partyIdentification.find(
+            (id) => id.ID?.[0]?.schemeID === "TTX"
+          );
           if (ttxInfo && ttxInfo.ID?.[0]?._) {
             result.registrationNo = ttxInfo.ID[0]._;
             result.idType = "TTX";
@@ -3473,7 +3531,8 @@ async function processDocumentData(documentData, detailsData, uuid) {
         totalSales: detailsData.totalSales || 0,
         totalPayableAmount: detailsData.totalPayableAmount || 0,
         totalExcludingTax: detailsData.totalExcludingTax || 0,
-        taxAmount: (detailsData.totalSales || 0) - (detailsData.totalExcludingTax || 0),
+        taxAmount:
+          (detailsData.totalSales || 0) - (detailsData.totalExcludingTax || 0),
         irbmUniqueNo: uuid,
         irbmlongId: detailsData.longId || "N/A",
 
@@ -3504,7 +3563,9 @@ async function processDocumentData(documentData, detailsData, uuid) {
         paymentInfo: {
           totalIncludingTax: detailsData.totalSales || 0,
           totalExcludingTax: detailsData.totalExcludingTax || 0,
-          taxAmount: (detailsData.totalSales || 0) - (detailsData.totalExcludingTax || 0),
+          taxAmount:
+            (detailsData.totalSales || 0) -
+            (detailsData.totalExcludingTax || 0),
           totalPayableAmount: detailsData.totalPayableAmount || 0,
           irbmUniqueNo: uuid,
           irbmlongId: detailsData.longId || "N/A",
@@ -3515,16 +3576,30 @@ async function processDocumentData(documentData, detailsData, uuid) {
     }
 
     if (!parsedDocument || !parsedDocument.Invoice) {
-      console.log("Could not parse document or missing Invoice, returning basic info");
+      console.log(
+        "Could not parse document or missing Invoice, returning basic info"
+      );
+      console.log("parsedDocument:", parsedDocument ? "exists" : "null");
+      console.log(
+        "parsedDocument.Invoice:",
+        parsedDocument?.Invoice ? "exists" : "missing"
+      );
+      if (parsedDocument) {
+        console.log("parsedDocument keys:", Object.keys(parsedDocument));
+      }
       return getBasicInfo();
     }
 
-    const invoice = parsedDocument.Invoice;
+    const invoice = parsedDocument.Invoice[0]; // Invoice is an array
     const supplierParty = invoice.AccountingSupplierParty?.[0]?.Party?.[0];
     const customerParty = invoice.AccountingCustomerParty?.[0]?.Party?.[0];
 
-    const supplierIdentification = getPartyIdentification(supplierParty?.PartyIdentification);
-    const customerIdentification = getPartyIdentification(customerParty?.PartyIdentification);
+    const supplierIdentification = getPartyIdentification(
+      supplierParty?.PartyIdentification
+    );
+    const customerIdentification = getPartyIdentification(
+      customerParty?.PartyIdentification
+    );
 
     // Extract line items
     const lineItems = (invoice.InvoiceLine || []).map((line, index) => {
@@ -3532,8 +3607,12 @@ async function processDocumentData(documentData, detailsData, uuid) {
       const price = line.Price?.[0];
       const quantity = parseFloat(line.InvoicedQuantity?.[0]?._ || 0);
       const unitPrice = parseFloat(price?.PriceAmount?.[0]?._ || 0);
-      const lineExtensionAmount = parseFloat(line.LineExtensionAmount?.[0]?._ || 0);
-      const allowanceCharges = parseFloat(line.AllowanceCharge?.[0]?.Amount?.[0]?._ || 0);
+      const lineExtensionAmount = parseFloat(
+        line.LineExtensionAmount?.[0]?._ || 0
+      );
+      const allowanceCharges = parseFloat(
+        line.AllowanceCharge?.[0]?.Amount?.[0]?._ || 0
+      );
       const unitCode = line.InvoicedQuantity?.[0]?.unitCode || "NA";
 
       return {
@@ -3562,7 +3641,8 @@ async function processDocumentData(documentData, detailsData, uuid) {
 
       if (inboundRecord) {
         cancelEnrichment.cancelDateTime = inboundRecord.cancelDateTime || null;
-        cancelEnrichment.documentStatusReason = inboundRecord.documentStatusReason || null;
+        cancelEnrichment.documentStatusReason =
+          inboundRecord.documentStatusReason || null;
 
         if (inboundRecord.createdByUserId) {
           const byId = await prisma.wP_USER_REGISTRATION.findFirst({
@@ -3582,7 +3662,10 @@ async function processDocumentData(documentData, detailsData, uuid) {
         }
       }
     } catch (dbError) {
-      console.warn("Failed to fetch cancellation details from DB:", dbError.message);
+      console.warn(
+        "Failed to fetch cancellation details from DB:",
+        dbError.message
+      );
     }
 
     // Final structured response
@@ -3593,102 +3676,163 @@ async function processDocumentData(documentData, detailsData, uuid) {
       irbmlongId: detailsData.longId || "N/A",
       internalId: detailsData.internalId || "N/A",
       status: detailsData.status || "Unknown",
-      dateTimeIssued: detailsData.dateTimeIssued ||
-        invoice.IssueDate?.[0] || "N/A",
+      dateTimeIssued:
+        detailsData.dateTimeIssued || invoice.IssueDate?.[0] || "N/A",
       dateTimeReceived: detailsData.dateTimeReceived || "N/A",
       dateTimeValidated: detailsData.dateTimeValidated || "N/A",
-      totalSales: detailsData.totalSales ||
-        parseFloat(invoice.LegalMonetaryTotal?.[0]?.TaxInclusiveAmount?.[0]?._ || 0),
-      totalPayableAmount: detailsData.totalPayableAmount ||
+      totalSales:
+        detailsData.totalSales ||
+        parseFloat(
+          invoice.LegalMonetaryTotal?.[0]?.TaxInclusiveAmount?.[0]?._ || 0
+        ),
+      totalPayableAmount:
+        detailsData.totalPayableAmount ||
         parseFloat(invoice.LegalMonetaryTotal?.[0]?.PayableAmount?.[0]?._ || 0),
-      totalExcludingTax: detailsData.totalExcludingTax ||
-        parseFloat(invoice.LegalMonetaryTotal?.[0]?.TaxExclusiveAmount?.[0]?._ || 0),
+      totalExcludingTax:
+        detailsData.totalExcludingTax ||
+        parseFloat(
+          invoice.LegalMonetaryTotal?.[0]?.TaxExclusiveAmount?.[0]?._ || 0
+        ),
       taxAmount: parseFloat(invoice.TaxTotal?.[0]?.TaxAmount?.[0]?._ || 0),
       irbmUniqueNo: uuid,
       ...cancelEnrichment,
 
       // Party info
-      supplierName: detailsData.issuerName ||
-        supplierParty?.PartyName?.[0]?.Name?.[0] || "N/A",
+      supplierName:
+        detailsData.issuerName ||
+        supplierParty?.PartyName?.[0]?.Name?.[0] ||
+        "N/A",
       supplierTIN: supplierIdentification.tin,
       supplierRegistrationNo: supplierIdentification.registrationNo,
       supplierSstNo: supplierIdentification.taxRegNo,
-      supplierMsicCode: supplierParty?.IndustryClassificationCode?.[0]?._ ||
-        documentData.supplierMsicCode || detailsData.supplierMsicCode || null,
-      supplierAddress: supplierParty?.PostalAddress?.[0]?.AddressLine
-        ?.map(line => line.Line?.[0]?._)
-        .filter(Boolean)
-        .join(", ") || documentData.supplierAddress || detailsData.supplierAddress || null,
+      supplierMsicCode:
+        supplierParty?.IndustryClassificationCode?.[0]?._ ||
+        documentData.supplierMsicCode ||
+        detailsData.supplierMsicCode ||
+        null,
+      supplierAddress:
+        supplierParty?.PostalAddress?.[0]?.AddressLine?.map(
+          (line) => line.Line?.[0]?._
+        )
+          .filter(Boolean)
+          .join(", ") ||
+        documentData.supplierAddress ||
+        detailsData.supplierAddress ||
+        null,
 
-      receiverName: detailsData.receiverName ||
-        customerParty?.PartyName?.[0]?.Name?.[0] || "N/A",
+      receiverName:
+        detailsData.receiverName ||
+        customerParty?.PartyName?.[0]?.Name?.[0] ||
+        "N/A",
       receiverTIN: customerIdentification.tin,
       receiverRegistrationNo: customerIdentification.registrationNo,
       receiverSstNo: customerIdentification.taxRegNo,
-      receiverAddress: customerParty?.PostalAddress?.[0]?.AddressLine
-        ?.map(line => line.Line?.[0]?._)
-        .filter(Boolean)
-        .join(", ") || documentData.receiverAddress || detailsData.receiverAddress || null,
+      receiverAddress:
+        customerParty?.PostalAddress?.[0]?.AddressLine?.map(
+          (line) => line.Line?.[0]?._
+        )
+          .filter(Boolean)
+          .join(", ") ||
+        documentData.receiverAddress ||
+        detailsData.receiverAddress ||
+        null,
 
       // Detailed breakdowns
       supplierInfo: {
-        company: supplierParty?.PartyLegalEntity?.[0]?.RegistrationName?.[0]?._ ||
+        company:
+          supplierParty?.PartyLegalEntity?.[0]?.RegistrationName?.[0]?._ ||
           supplierParty?.PartyName?.[0]?.Name?.[0] ||
           detailsData.issuerName ||
-          documentData.supplierName || "N/A",
-        tin: supplierIdentification.tin || detailsData.issuerTin || documentData.supplierTin || null,
-        registrationNo: supplierIdentification.registrationNo ||
-          documentData.supplierRegistrationNo || null,
-        taxRegNo: supplierIdentification.taxRegNo ||
-          documentData.supplierSstNo || null,
+          documentData.supplierName ||
+          "N/A",
+        tin:
+          supplierIdentification.tin ||
+          detailsData.issuerTin ||
+          documentData.supplierTin ||
+          null,
+        registrationNo:
+          supplierIdentification.registrationNo ||
+          documentData.supplierRegistrationNo ||
+          null,
+        taxRegNo:
+          supplierIdentification.taxRegNo || documentData.supplierSstNo || null,
         idType: supplierIdentification.idType || "N/A",
-        idNumber: supplierIdentification.idNumber ||
-          documentData.supplierRegistrationNo || null,
-        msicCode: supplierParty?.IndustryClassificationCode?.[0]?._ ||
-          documentData.supplierMsicCode || detailsData.supplierMsicCode || null,
-        address: supplierParty?.PostalAddress?.[0]?.AddressLine
-          ?.map(line => line.Line?.[0]?._)
-          .filter(Boolean)
-          .join(", ") || documentData.supplierAddress || detailsData.supplierAddress || null,
+        idNumber:
+          supplierIdentification.idNumber ||
+          documentData.supplierRegistrationNo ||
+          null,
+        msicCode:
+          supplierParty?.IndustryClassificationCode?.[0]?._ ||
+          documentData.supplierMsicCode ||
+          detailsData.supplierMsicCode ||
+          null,
+        address:
+          supplierParty?.PostalAddress?.[0]?.AddressLine?.map(
+            (line) => line.Line?.[0]?._
+          )
+            .filter(Boolean)
+            .join(", ") ||
+          documentData.supplierAddress ||
+          detailsData.supplierAddress ||
+          null,
       },
       customerInfo: {
-        company: customerParty?.PartyLegalEntity?.[0]?.RegistrationName?.[0]?._ ||
+        company:
+          customerParty?.PartyLegalEntity?.[0]?.RegistrationName?.[0]?._ ||
           customerParty?.PartyName?.[0]?.Name?.[0] ||
           detailsData.receiverName ||
-          documentData.receiverName || "N/A",
-        tin: customerIdentification.tin || detailsData.receiverTin || documentData.receiverTin || null,
-        registrationNo: customerIdentification.registrationNo ||
-          documentData.receiverRegistrationNo || null,
-        taxRegNo: customerIdentification.taxRegNo ||
-          documentData.receiverSstNo || null,
+          documentData.receiverName ||
+          "N/A",
+        tin:
+          customerIdentification.tin ||
+          detailsData.receiverTin ||
+          documentData.receiverTin ||
+          null,
+        registrationNo:
+          customerIdentification.registrationNo ||
+          documentData.receiverRegistrationNo ||
+          null,
+        taxRegNo:
+          customerIdentification.taxRegNo || documentData.receiverSstNo || null,
         idType: customerIdentification.idType || "N/A",
-        idNumber: customerIdentification.idNumber ||
-          documentData.receiverRegistrationNo || null,
-        address: customerParty?.PostalAddress?.[0]?.AddressLine
-          ?.map(line => line.Line?.[0]?._)
-          .filter(Boolean)
-          .join(", ") || documentData.receiverAddress || detailsData.receiverAddress || null,
+        idNumber:
+          customerIdentification.idNumber ||
+          documentData.receiverRegistrationNo ||
+          null,
+        address:
+          customerParty?.PostalAddress?.[0]?.AddressLine?.map(
+            (line) => line.Line?.[0]?._
+          )
+            .filter(Boolean)
+            .join(", ") ||
+          documentData.receiverAddress ||
+          detailsData.receiverAddress ||
+          null,
       },
       paymentInfo: {
         totalIncludingTax: parseFloat(
           invoice.LegalMonetaryTotal?.[0]?.TaxInclusiveAmount?.[0]?._ ||
-          detailsData.totalSales ||
-          documentData.totalSales || 0
+            detailsData.totalSales ||
+            documentData.totalSales ||
+            0
         ),
         totalExcludingTax: parseFloat(
           invoice.LegalMonetaryTotal?.[0]?.TaxExclusiveAmount?.[0]?._ ||
-          detailsData.totalExcludingTax ||
-          documentData.totalExcludingTax || 0
+            detailsData.totalExcludingTax ||
+            documentData.totalExcludingTax ||
+            0
         ),
         taxAmount: parseFloat(
           invoice.TaxTotal?.[0]?.TaxAmount?.[0]?._ ||
-          (detailsData.totalSales - detailsData.totalExcludingTax) ||
-          (documentData.totalSales - documentData.totalExcludingTax) || 0
+            detailsData.totalSales - detailsData.totalExcludingTax ||
+            documentData.totalSales - documentData.totalExcludingTax ||
+            0
         ),
         totalPayableAmount: parseFloat(
           invoice.LegalMonetaryTotal?.[0]?.PayableAmount?.[0]?._ ||
-          detailsData.totalPayableAmount ||
-          documentData.totalPayableAmount || 0
+            detailsData.totalPayableAmount ||
+            documentData.totalPayableAmount ||
+            0
         ),
         irbmUniqueNo: uuid,
         irbmlongId: detailsData.longId || "N/A",
