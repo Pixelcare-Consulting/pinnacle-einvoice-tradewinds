@@ -1,11 +1,12 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const axios = require('axios');
+const axios = require("axios");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 // Use environment variables for API keys in production
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'AIzaSyDsPA4DKpJ5a_tdVQxgbd3H_N8Cp2njMJY';
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+const GEMINI_API_KEY =
+  process.env.GEMINI_API_KEY || "AIzaSyAtbxeOAzDvW67Adqjbgtw1g9x5O3goadk";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 
 // Initialize the Google Generative AI client
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
@@ -24,9 +25,9 @@ const SESSION_EXPIRY = 48 * 60 * 60 * 1000; // 48 hours
 // Cleanup old sessions periodically
 setInterval(() => {
   const now = Date.now();
-  Object.keys(conversationHistory).forEach(sessionId => {
+  Object.keys(conversationHistory).forEach((sessionId) => {
     const session = conversationHistory[sessionId];
-    if (session.lastAccessed && (now - session.lastAccessed > SESSION_EXPIRY)) {
+    if (session.lastAccessed && now - session.lastAccessed > SESSION_EXPIRY) {
       delete conversationHistory[sessionId];
     }
   });
@@ -123,66 +124,77 @@ When answering users, always refer to the exact UI elements and buttons they wil
 
 // Helper function to validate session ID
 function isValidSessionId(sessionId) {
-  return typeof sessionId === 'string' && 
-         sessionId.startsWith('session_') && 
-         sessionId.length > 10 && 
-         sessionId.length < 100;
+  return (
+    typeof sessionId === "string" &&
+    sessionId.startsWith("session_") &&
+    sessionId.length > 10 &&
+    sessionId.length < 100
+  );
 }
 
 // Helper function to sanitize user input
 function sanitizeInput(text) {
-  if (typeof text !== 'string') return '';
+  if (typeof text !== "string") return "";
   // Basic sanitization - remove any potentially harmful characters
-  return text.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-             .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
-             .trim();
+  return text
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, "")
+    .trim();
 }
 
 // Chat endpoint
-router.post('/chat', async (req, res) => {
+router.post("/chat", async (req, res) => {
   try {
+    console.log("Gemini chat request received:", {
+      hasMessage: !!req.body?.message,
+      hasSessionId: !!req.body?.sessionId,
+      userSession: !!req.session?.user,
+    });
+
     const { message, sessionId } = req.body;
-    
+
     // Validate inputs
-    if (!message || typeof message !== 'string') {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Message is required and must be a string' 
+    if (!message || typeof message !== "string") {
+      console.log("Invalid message provided:", typeof message);
+      return res.status(400).json({
+        success: false,
+        message: "Message is required and must be a string",
       });
     }
 
     // Validate session ID
     if (!sessionId || !isValidSessionId(sessionId)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Valid session ID is required' 
+      console.log("Invalid session ID provided:", sessionId);
+      return res.status(400).json({
+        success: false,
+        message: "Valid session ID is required",
       });
     }
-    
+
     // Sanitize user input
     const sanitizedMessage = sanitizeInput(message);
-    
+
     // Initialize conversation history for this session if it doesn't exist
     if (!conversationHistory[sessionId]) {
       conversationHistory[sessionId] = {
         messages: [],
-        lastAccessed: Date.now()
+        lastAccessed: Date.now(),
       };
     } else {
       // Update last accessed time
       conversationHistory[sessionId].lastAccessed = Date.now();
     }
-    
+
     // Get conversation history for this session
     const history = conversationHistory[sessionId].messages;
-    
+
     // Prepare the message content
     // Add context as first message if this is a new conversation
     const isNewConversation = history.length === 0;
-    
+
     try {
       let textResponse;
-      
+
       if (isNewConversation) {
         // For a new conversation, include the system prompt as context
         const chat = model.startChat({
@@ -190,120 +202,128 @@ router.post('/chat', async (req, res) => {
             temperature: 0.7,
             maxOutputTokens: 1024,
             topP: 0.95,
-            topK: 40
+            topK: 40,
           },
           safetySettings: [
             {
               category: "HARM_CATEGORY_HARASSMENT",
-              threshold: "BLOCK_MEDIUM_AND_ABOVE"
+              threshold: "BLOCK_MEDIUM_AND_ABOVE",
             },
             {
               category: "HARM_CATEGORY_HATE_SPEECH",
-              threshold: "BLOCK_MEDIUM_AND_ABOVE"
+              threshold: "BLOCK_MEDIUM_AND_ABOVE",
             },
             {
               category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-              threshold: "BLOCK_MEDIUM_AND_ABOVE"
+              threshold: "BLOCK_MEDIUM_AND_ABOVE",
             },
             {
               category: "HARM_CATEGORY_DANGEROUS_CONTENT",
-              threshold: "BLOCK_MEDIUM_AND_ABOVE"
-            }
-          ]
+              threshold: "BLOCK_MEDIUM_AND_ABOVE",
+            },
+          ],
         });
-        
+
         // Send the system prompt first
-        const result = await chat.sendMessage(SYSTEM_PROMPT + "\n\nUser's first message: " + sanitizedMessage);
+        const result = await chat.sendMessage(
+          SYSTEM_PROMPT + "\n\nUser's first message: " + sanitizedMessage
+        );
         textResponse = result.response.text();
       } else {
         // For ongoing conversations, create a chat with history
-        const chatHistory = history.map(msg => ({
+        const chatHistory = history.map((msg) => ({
           role: msg.role,
-          parts: msg.parts.map(part => part.text)
+          parts: msg.parts.map((part) => part.text),
         }));
-        
+
         const chat = model.startChat({
           history: chatHistory,
           generationConfig: {
             temperature: 0.7,
             maxOutputTokens: 1024,
             topP: 0.95,
-            topK: 40
+            topK: 40,
           },
           safetySettings: [
             {
               category: "HARM_CATEGORY_HARASSMENT",
-              threshold: "BLOCK_MEDIUM_AND_ABOVE"
+              threshold: "BLOCK_MEDIUM_AND_ABOVE",
             },
             {
               category: "HARM_CATEGORY_HATE_SPEECH",
-              threshold: "BLOCK_MEDIUM_AND_ABOVE"
+              threshold: "BLOCK_MEDIUM_AND_ABOVE",
             },
             {
               category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-              threshold: "BLOCK_MEDIUM_AND_ABOVE"
+              threshold: "BLOCK_MEDIUM_AND_ABOVE",
             },
             {
               category: "HARM_CATEGORY_DANGEROUS_CONTENT",
-              threshold: "BLOCK_MEDIUM_AND_ABOVE"
-            }
-          ]
+              threshold: "BLOCK_MEDIUM_AND_ABOVE",
+            },
+          ],
         });
-        
+
         // Send the new message
         const result = await chat.sendMessage(sanitizedMessage);
         textResponse = result.response.text();
       }
-      
+
       // Store the conversation in history
       if (isNewConversation) {
         // For new conversations, we've combined the system prompt with the user message
         // So we need to store the actual user message separately for the history
         conversationHistory[sessionId].messages.push({
           role: "user",
-          parts: [{ text: sanitizedMessage }]
+          parts: [{ text: sanitizedMessage }],
         });
       } else {
         // For ongoing conversations, add the message we just sent
         conversationHistory[sessionId].messages.push({
           role: "user",
-          parts: [{ text: sanitizedMessage }]
+          parts: [{ text: sanitizedMessage }],
         });
       }
-      
+
       // Add the assistant's response to the conversation history
       conversationHistory[sessionId].messages.push({
         role: "model",
-        parts: [{ text: textResponse }]
+        parts: [{ text: textResponse }],
       });
-      
+
       // Limit history to last 10 messages (5 exchanges) to avoid token limits
       if (conversationHistory[sessionId].messages.length > 10) {
-        conversationHistory[sessionId].messages = conversationHistory[sessionId].messages.slice(-10);
+        conversationHistory[sessionId].messages =
+          conversationHistory[sessionId].messages.slice(-10);
       }
 
       return res.json({
         success: true,
-        response: textResponse
+        response: textResponse,
       });
     } catch (aiError) {
-      console.error('Gemini AI Client Error:', aiError);
-      
+      console.error("Gemini AI Client Error:", aiError);
+
       // Fall back to direct API call if the client library fails
-      console.log('Falling back to direct API call...');
-      
+      console.log("Falling back to direct API call...");
+
       // Construct the contents array for the API request
       let contents = [];
-      
+
       if (isNewConversation) {
         // For a new conversation, include the system prompt as context in the first message
         contents = [
           {
             role: "user",
-            parts: [{ 
-              text: SYSTEM_PROMPT + "\n\nUser's first message: " + sanitizedMessage 
-            }]
-          }
+            parts: [
+              {
+                text:
+                  SYSTEM_PROMPT +
+                  "\n\nUser's first message: " +
+                  sanitizedMessage,
+              },
+            ],
+          },
         ];
       } else {
         // For ongoing conversations, add all previous messages
@@ -312,11 +332,11 @@ router.post('/chat', async (req, res) => {
           ...history,
           {
             role: "user",
-            parts: [{ text: sanitizedMessage }]
-          }
+            parts: [{ text: sanitizedMessage }],
+          },
         ];
       }
-      
+
       // Call the Gemini API with conversation history
       const response = await axios.post(
         `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`,
@@ -326,144 +346,161 @@ router.post('/chat', async (req, res) => {
             temperature: 0.7,
             maxOutputTokens: 1024,
             topP: 0.95,
-            topK: 40
+            topK: 40,
           },
           safetySettings: [
             {
               category: "HARM_CATEGORY_HARASSMENT",
-              threshold: "BLOCK_MEDIUM_AND_ABOVE"
+              threshold: "BLOCK_MEDIUM_AND_ABOVE",
             },
             {
               category: "HARM_CATEGORY_HATE_SPEECH",
-              threshold: "BLOCK_MEDIUM_AND_ABOVE"
+              threshold: "BLOCK_MEDIUM_AND_ABOVE",
             },
             {
               category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-              threshold: "BLOCK_MEDIUM_AND_ABOVE"
+              threshold: "BLOCK_MEDIUM_AND_ABOVE",
             },
             {
               category: "HARM_CATEGORY_DANGEROUS_CONTENT",
-              threshold: "BLOCK_MEDIUM_AND_ABOVE"
-            }
-          ]
+              threshold: "BLOCK_MEDIUM_AND_ABOVE",
+            },
+          ],
         },
         {
-          timeout: 15000 // 15 second timeout
+          timeout: 15000, // 15 second timeout
         }
       );
 
       // Extract the response text from Gemini
-      const textResponse = response.data.candidates?.[0]?.content?.parts?.[0]?.text || 'Sorry, I could not generate a response.';
-      
+      const textResponse =
+        response.data.candidates?.[0]?.content?.parts?.[0]?.text ||
+        "Sorry, I could not generate a response.";
+
       // Store the conversation in history
       if (isNewConversation) {
         // For new conversations, we've combined the system prompt with the user message
         // So we need to store the actual user message separately for the history
         conversationHistory[sessionId].messages.push({
           role: "user",
-          parts: [{ text: sanitizedMessage }]
+          parts: [{ text: sanitizedMessage }],
         });
       } else {
         // For ongoing conversations, add the message we just sent
         conversationHistory[sessionId].messages.push({
           role: "user",
-          parts: [{ text: sanitizedMessage }]
+          parts: [{ text: sanitizedMessage }],
         });
       }
-      
+
       // Add the assistant's response to the conversation history
       conversationHistory[sessionId].messages.push({
         role: "model",
-        parts: [{ text: textResponse }]
+        parts: [{ text: textResponse }],
       });
-      
+
       // Limit history to last 10 messages (5 exchanges) to avoid token limits
       if (conversationHistory[sessionId].messages.length > 10) {
-        conversationHistory[sessionId].messages = conversationHistory[sessionId].messages.slice(-10);
+        conversationHistory[sessionId].messages =
+          conversationHistory[sessionId].messages.slice(-10);
       }
 
       return res.json({
         success: true,
-        response: textResponse
+        response: textResponse,
       });
     }
   } catch (error) {
-    console.error('Gemini API Error:', error.response?.data || error.message);
-    
+    console.error("Gemini API Error:", {
+      message: error.message,
+      stack: error.stack,
+      response: error.response?.data,
+      status: error.response?.status,
+      code: error.code,
+    });
+
     // Provide more specific error messages based on the type of error
-    let errorMessage = 'Failed to get response from AI assistant';
-    
-    if (error.code === 'ECONNABORTED') {
-      errorMessage = 'The request to the AI service timed out. Please try again.';
+    let errorMessage = "Failed to get response from AI assistant";
+
+    if (error.code === "ECONNABORTED") {
+      errorMessage =
+        "The request to the AI service timed out. Please try again.";
     } else if (error.response) {
       // The request was made and the server responded with a status code
       // that falls out of the range of 2xx
       if (error.response.status === 400) {
-        errorMessage = 'Invalid request to AI service. Please try a different question.';
-      } else if (error.response.status === 401 || error.response.status === 403) {
-        errorMessage = 'Authentication error with AI service. Please contact support.';
+        errorMessage =
+          "Invalid request to AI service. Please try a different question.";
+      } else if (
+        error.response.status === 401 ||
+        error.response.status === 403
+      ) {
+        errorMessage =
+          "Authentication error with AI service. Please contact support.";
       } else if (error.response.status >= 500) {
-        errorMessage = 'AI service is currently unavailable. Please try again later.';
+        errorMessage =
+          "AI service is currently unavailable. Please try again later.";
       }
     } else if (error.request) {
       // The request was made but no response was received
-      errorMessage = 'No response from AI service. Please check your connection and try again.';
+      errorMessage =
+        "No response from AI service. Please check your connection and try again.";
     }
-    
+
     return res.status(500).json({
       success: false,
       message: errorMessage,
-      error: error.response?.data || error.message
+      error: error.response?.data || error.message,
     });
   }
 });
 
 // Add a route to clear conversation history
-router.post('/clear-history', (req, res) => {
+router.post("/clear-history", (req, res) => {
   try {
     const { sessionId } = req.body;
-    
+
     if (!sessionId || !isValidSessionId(sessionId)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Valid session ID is required' 
+      return res.status(400).json({
+        success: false,
+        message: "Valid session ID is required",
       });
     }
-    
+
     // Reset the conversation history for this session
     if (conversationHistory[sessionId]) {
       conversationHistory[sessionId] = {
         messages: [],
-        lastAccessed: Date.now()
+        lastAccessed: Date.now(),
       };
     }
-    
+
     return res.json({
       success: true,
-      message: 'Conversation history cleared'
+      message: "Conversation history cleared",
     });
   } catch (error) {
-    console.error('Clear History Error:', error.message);
+    console.error("Clear History Error:", error.message);
     return res.status(500).json({
       success: false,
-      message: 'Failed to clear conversation history',
-      error: error.message
+      message: "Failed to clear conversation history",
+      error: error.message,
     });
   }
 });
 
 // Health check endpoint
-router.get('/health', (req, res) => {
+router.get("/health", (req, res) => {
   return res.json({
     success: true,
-    message: 'Gemini API service is running',
-    timestamp: new Date().toISOString()
+    message: "Gemini API service is running",
+    timestamp: new Date().toISOString(),
   });
 });
 
 // Add a function to provide accurate information about document cancellation
 function getCancellationInstructions() {
-    return `To cancel a submitted document in the Pinnacle eInvoice system:
+  return `To cancel a submitted document in the Pinnacle eInvoice system:
 
 1. Navigate to the Outbound page where you can see your submitted documents
 2. Find the document you want to cancel in the table (it must have "Submitted" status)
@@ -481,4 +518,4 @@ Important notes:
 If you need help with cancellation or have issues with the process, please contact your system administrator.`;
 }
 
-module.exports = router; 
+module.exports = router;

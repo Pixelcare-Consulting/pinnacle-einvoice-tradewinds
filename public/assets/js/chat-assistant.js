@@ -422,32 +422,58 @@ function sendMessage(predefinedMessage = null) {
         })
     })
     .then(response => {
+        console.log('Chat API response status:', response.status);
+
         if (!response.ok) {
-            throw new Error(`Server responded with status: ${response.status}`);
+            // Handle specific error statuses
+            if (response.status === 401) {
+                throw new Error('Session expired. Please refresh the page and try again.');
+            } else if (response.status === 500) {
+                throw new Error('Server error occurred. Please try again in a moment.');
+            } else {
+                throw new Error(`Server responded with status: ${response.status}`);
+            }
         }
         return response.json();
     })
     .then(data => {
+        console.log("Chat API response data:", {
+          success: data.success,
+          hasResponse: !!data.response,
+        });
+
         // Hide typing indicator
         hideTypingIndicator();
-        
+
         if (data.success) {
-            addMessage('assistant', data.response);
+          addMessage("assistant", data.response);
         } else {
-            addMessage('assistant', 'Sorry, I encountered an error. Please try again later.');
-            console.error('API Error:', data.error || data.message);
+          const errorMsg =
+            data.message ||
+            "Sorry, I encountered an error. Please try again later.";
+          addMessage("assistant", errorMsg);
+          console.error("API Error:", data.error || data.message);
         }
-        
+
         // Re-enable input and button
         chatInput.disabled = false;
         chatInput.focus();
         sendButton.disabled = chatInput.value.trim() === '';
     })
     .catch(error => {
+        console.error('Chat fetch error:', error);
         hideTypingIndicator();
-        addMessage('assistant', 'Sorry, I couldn\'t connect to the server. Please try again later.');
-        console.error('Fetch Error:', error);
-        
+
+        // Provide more specific error messages
+        let errorMessage = 'Sorry, I couldn\'t connect to the server. Please try again later.';
+        if (error.message.includes('Session expired')) {
+            errorMessage = error.message;
+        } else if (error.message.includes('Server error')) {
+            errorMessage = error.message;
+        }
+
+        addMessage('assistant', errorMessage);
+
         // Re-enable input and button
         chatInput.disabled = false;
         chatInput.focus();

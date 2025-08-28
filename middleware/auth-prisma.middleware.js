@@ -382,7 +382,7 @@ async function isApiAuthenticated(req, res, next) {
   try {
     // Check if headers have already been sent
     if (res.headersSent) {
-      console.error('Headers already sent, cannot authenticate API request');
+      console.error("Headers already sent, cannot authenticate API request");
       return next();
     }
 
@@ -391,31 +391,40 @@ async function isApiAuthenticated(req, res, next) {
       // Return 401 with redirect URL for API requests
       return res.status(401).json({
         success: false,
-        message: 'Unauthorized',
+        message: "Unauthorized",
         needsLogin: true,
-        redirect: '/auth/login?expired=true&reason=timeout'
+        redirect: "/auth/login?expired=true&reason=timeout",
       });
+    }
+
+    // Skip LHDN token logic for Gemini routes since they don't need LHDN tokens
+    if (req.path.startsWith("/api/gemini")) {
+      console.log("Skipping LHDN token logic for Gemini route:", req.path);
+      return next();
     }
 
     // Get LHDN access token and attach to headers
     try {
       // Always get token from AuthorizeToken.ini file
-      const { getTokenSession } = require('../services/token-prisma.service');
+      const { getTokenSession } = require("../services/token-prisma.service");
       const token = await getTokenSession();
 
       if (token) {
-        req.headers['Authorization'] = `Bearer ${token}`;
-        console.log('Attached LHDN token to request headers from session.');
+        req.headers["Authorization"] = `Bearer ${token}`;
+        console.log("Attached LHDN token to request headers from session.");
       } else {
         // Fallback to reading directly from file if getTokenSession fails
         try {
-          const fs = require('fs');
-          const path = require('path');
-          const ini = require('ini');
+          const fs = require("fs");
+          const path = require("path");
+          const ini = require("ini");
 
-          const tokenFilePath = path.join(__dirname, '../config/AuthorizeToken.ini');
+          const tokenFilePath = path.join(
+            __dirname,
+            "../config/AuthorizeToken.ini"
+          );
           if (fs.existsSync(tokenFilePath)) {
-            const tokenData = fs.readFileSync(tokenFilePath, 'utf8');
+            const tokenData = fs.readFileSync(tokenFilePath, "utf8");
 
             // Try to parse as INI first
             try {
@@ -432,35 +441,39 @@ async function isApiAuthenticated(req, res, next) {
               }
 
               if (fileToken) {
-                req.headers['Authorization'] = `Bearer ${fileToken}`;
-                console.log('Attached LHDN token to request headers from AuthorizeToken.ini file.');
+                req.headers["Authorization"] = `Bearer ${fileToken}`;
+                console.log(
+                  "Attached LHDN token to request headers from AuthorizeToken.ini file."
+                );
               }
             } catch (iniError) {
               // If INI parsing fails, try regex patterns
               const tokenPatterns = [
                 /AccessToken=(.+)/,
                 /access_token=(.+)/,
-                /token=(.+)/
+                /token=(.+)/,
               ];
 
               for (const pattern of tokenPatterns) {
                 const tokenMatch = tokenData.match(pattern);
                 if (tokenMatch && tokenMatch[1]) {
                   const fileToken = tokenMatch[1].trim();
-                  req.headers['Authorization'] = `Bearer ${fileToken}`;
-                  console.log(`Attached LHDN token to request headers from AuthorizeToken.ini file using pattern: ${pattern}`);
+                  req.headers["Authorization"] = `Bearer ${fileToken}`;
+                  console.log(
+                    `Attached LHDN token to request headers from AuthorizeToken.ini file using pattern: ${pattern}`
+                  );
                   break;
                 }
               }
             }
           }
         } catch (fileError) {
-          console.warn('Error reading token from file:', fileError);
-          console.warn('LHDN token not available. Proceeding without token.');
+          console.warn("Error reading token from file:", fileError);
+          console.warn("LHDN token not available. Proceeding without token.");
         }
       }
     } catch (tokenError) {
-      console.error('Error getting LHDN token in middleware:', tokenError);
+      console.error("Error getting LHDN token in middleware:", tokenError);
       // Continue even if token acquisition fails, but log the error
     }
 
@@ -475,7 +488,13 @@ async function isApiAuthenticated(req, res, next) {
         req.session.cookie.maxAge = authConfig.session.timeout;
         // Only log session extensions for important paths
         if (isImportantPath(req.path)) {
-          console.log(`Extended session for user ${req.session.user.username} - was about to expire in ${Math.floor(timeRemaining / 1000)} seconds`);
+          console.log(
+            `Extended session for user ${
+              req.session.user.username
+            } - was about to expire in ${Math.floor(
+              timeRemaining / 1000
+            )} seconds`
+          );
         }
       }
     }
@@ -486,7 +505,7 @@ async function isApiAuthenticated(req, res, next) {
         // Update user activity in database - but don't block if it fails
         await updateUserActivity(req.session.user.id, true, req);
       } catch (activityError) {
-        console.error('Error updating user activity:', activityError);
+        console.error("Error updating user activity:", activityError);
         // Continue despite error
       }
     }
@@ -495,7 +514,7 @@ async function isApiAuthenticated(req, res, next) {
     try {
       updateActiveSession(req.session.user.username, req);
     } catch (sessionError) {
-      console.error('Error updating active session:', sessionError);
+      console.error("Error updating active session:", sessionError);
       // Continue despite error
     }
 
