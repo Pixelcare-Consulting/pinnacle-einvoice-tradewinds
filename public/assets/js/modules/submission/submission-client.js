@@ -138,173 +138,340 @@
     return res.data;
   }
 
-  async function postBulk(fileIds){
-    console.log(LOG_PREFIX, 'bulk-submit-files', fileIds.length);
-    const res = await fetchJson('/api/outbound-files-manual/bulk-submit-files', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify({ fileIds })
-    }, 30000);
-    if (!res.ok) { const err = new Error(res.data?.error || 'Bulk submission failed'); err.status = res.status; throw err; }
+  async function postBulk(fileIds, sessionId) {
+    console.log(LOG_PREFIX, "bulk-submit-files", fileIds.length);
+    const headers = {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    };
+
+    // Add session ID header for real-time tracking
+    if (sessionId) {
+      headers["X-Session-Id"] = sessionId;
+    }
+
+    const res = await fetchJson(
+      "/api/outbound-files-manual/bulk-submit-files",
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ fileIds }),
+      },
+      30000
+    );
+    if (!res.ok) {
+      const err = new Error(res.data?.error || "Bulk submission failed");
+      err.status = res.status;
+      throw err;
+    }
     return res.data;
   }
 
   // Public API
   const SubmissionClient = {
-    async submitSingleFile(fileId, { onStage }={}){
+    async submitSingleFile(fileId, { onStage } = {}) {
       await throttle();
-      if (onStage) onStage({ stage:'validate', message:'Fetching file details...', progress:10 });
+      if (onStage)
+        onStage({
+          stage: "validate",
+          message: "Fetching file details...",
+          progress: 10,
+        });
 
       // Duplicate prevention (client cache + server status)
       const cache = getSubmittedCache();
-      if (cache[fileId]){
-        if (onStage) onStage({ stage:'validate', message:'Already submitted previously in this browser session.', progress:12, error:{ userMessage:'This file was already submitted recently.', guidance:['Open Submission History to review results.'] } });
-        return { success:false, duplicate:true };
+      if (cache[fileId]) {
+        if (onStage)
+          onStage({
+            stage: "validate",
+            message: "Already submitted previously in this browser session.",
+            progress: 12,
+            error: {
+              userMessage: "This file was already submitted recently.",
+              guidance: ["Open Submission History to review results."],
+            },
+          });
+        return { success: false, duplicate: true };
       }
 
-      const details = await withMinDuration(()=>retrying(()=>getFileDetails(fileId), { retries: 1 }), 800);
-      const status = (details.processing_status||'').toLowerCase();
-      if (!['processed','ready to submit'].includes(status)){
-        const err = new Error('File is not ready for submission'); err.status=400; throw err;
+      const details = await withMinDuration(
+        () => retrying(() => getFileDetails(fileId), { retries: 1 }),
+        800
+      );
+      const status = (details.processing_status || "").toLowerCase();
+      if (!["processed", "ready to submit"].includes(status)) {
+        const err = new Error("File is not ready for submission");
+        err.status = 400;
+        throw err;
       }
-      const invoiceCount = parseInt(details.invoice_count || details.metadata?.invoiceCount || 0,10) || 0;
-      if (invoiceCount>100){ const err = new Error(`Contains ${invoiceCount} documents which exceeds LHDN limit of 100`); err.status=400; throw err; }
+      const invoiceCount =
+        parseInt(
+          details.invoice_count || details.metadata?.invoiceCount || 0,
+          10
+        ) || 0;
+      if (invoiceCount > 100) {
+        const err = new Error(
+          `Contains ${invoiceCount} documents which exceeds LHDN limit of 100`
+        );
+        err.status = 400;
+        throw err;
+      }
 
       // Step 2: Processing (preparing JSON documents)
-      if (onStage) onStage({ stage:'process', message:'Preparing JSON documents...', progress:35 });
-      await withMinDuration(async()=>{
-        console.log(LOG_PREFIX, 'STEP process: calling prepare');
+      if (onStage)
+        onStage({
+          stage: "process",
+          message: "Preparing JSON documents...",
+          progress: 35,
+        });
+      await withMinDuration(async () => {
+        console.log(LOG_PREFIX, "STEP process: calling prepare");
         const prep = await postPrepare(fileId);
-        console.log(LOG_PREFIX, 'prepare result', prep?.success, prep?.data?.preparedCount);
+        console.log(
+          LOG_PREFIX,
+          "prepare result",
+          prep?.success,
+          prep?.data?.preparedCount
+        );
       }, 1500);
 
       // Step 3: Duplicate check
-      console.log(LOG_PREFIX, 'STEP 3 START: duplicates check');
-      if (onStage) onStage({ stage:'duplicates', message:'Checking for duplicate submissions on LHDN...', progress:55 });
-      await withMinDuration(async()=>{
-        console.log(LOG_PREFIX, 'STEP duplicates: calling check for fileId', fileId);
+      console.log(LOG_PREFIX, "STEP 3 START: duplicates check");
+      if (onStage)
+        onStage({
+          stage: "duplicates",
+          message: "Checking for duplicate submissions on LHDN...",
+          progress: 55,
+        });
+      await withMinDuration(async () => {
+        console.log(
+          LOG_PREFIX,
+          "STEP duplicates: calling check for fileId",
+          fileId
+        );
         try {
           const dup = await postCheckDuplicates(fileId);
-          console.log(LOG_PREFIX, 'duplicates result SUCCESS', dup?.success);
-          console.log(LOG_PREFIX, 'duplicates found:', dup?.data?.duplicates?.length);
-          console.log(LOG_PREFIX, 'warnings found:', dup?.data?.warnings?.length);
-          console.log(LOG_PREFIX, 'invoices checked:', dup?.data?.invoiceCount);
-          console.log(LOG_PREFIX, 'LHDN compliant:', dup?.data?.lhdnCompliant);
+          console.log(LOG_PREFIX, "duplicates result SUCCESS", dup?.success);
+          console.log(
+            LOG_PREFIX,
+            "duplicates found:",
+            dup?.data?.duplicates?.length
+          );
+          console.log(
+            LOG_PREFIX,
+            "warnings found:",
+            dup?.data?.warnings?.length
+          );
+          console.log(LOG_PREFIX, "invoices checked:", dup?.data?.invoiceCount);
+          console.log(LOG_PREFIX, "LHDN compliant:", dup?.data?.lhdnCompliant);
           if (dup?.data?.duplicates?.length > 0) {
-            console.warn(LOG_PREFIX, 'DUPLICATES DETECTED:', dup.data.duplicates);
+            console.warn(
+              LOG_PREFIX,
+              "DUPLICATES DETECTED:",
+              dup.data.duplicates
+            );
           }
           if (dup?.data?.warnings?.length > 0) {
-            console.warn(LOG_PREFIX, 'WARNINGS:', dup.data.warnings);
+            console.warn(LOG_PREFIX, "WARNINGS:", dup.data.warnings);
           }
         } catch (err) {
-          console.error(LOG_PREFIX, 'duplicates check FAILED', err);
+          console.error(LOG_PREFIX, "duplicates check FAILED", err);
           throw err;
         }
       }, 900);
-      console.log(LOG_PREFIX, 'STEP 3 COMPLETE: duplicates check done');
+      console.log(LOG_PREFIX, "STEP 3 COMPLETE: duplicates check done");
 
       // Pause: confirm before submit (client UX requirement)
-      console.log(LOG_PREFIX, 'STEP 3.5: checking for confirmBeforeSubmit hook');
-      if (window.SubmissionFlowHooks?.confirmBeforeSubmit){
-        console.log(LOG_PREFIX, 'confirmBeforeSubmit hook found, calling it');
-        const proceed = await window.SubmissionFlowHooks.confirmBeforeSubmit({ fileId, invoiceCount });
-        console.log(LOG_PREFIX, 'confirmBeforeSubmit result:', proceed);
-        if (!proceed){
-          console.log(LOG_PREFIX, 'User cancelled before submit');
-          const err = new Error('User cancelled before submit'); err.status = 'CANCELLED'; throw err;
+      console.log(
+        LOG_PREFIX,
+        "STEP 3.5: checking for confirmBeforeSubmit hook"
+      );
+      if (window.SubmissionFlowHooks?.confirmBeforeSubmit) {
+        console.log(LOG_PREFIX, "confirmBeforeSubmit hook found, calling it");
+        const proceed = await window.SubmissionFlowHooks.confirmBeforeSubmit({
+          fileId,
+          invoiceCount,
+        });
+        console.log(LOG_PREFIX, "confirmBeforeSubmit result:", proceed);
+        if (!proceed) {
+          console.log(LOG_PREFIX, "User cancelled before submit");
+          const err = new Error("User cancelled before submit");
+          err.status = "CANCELLED";
+          throw err;
         }
       } else {
-        console.log(LOG_PREFIX, 'No confirmBeforeSubmit hook found, proceeding');
+        console.log(
+          LOG_PREFIX,
+          "No confirmBeforeSubmit hook found, proceeding"
+        );
       }
 
-      console.log(LOG_PREFIX, 'STEP 4 START: submitting to LHDN');
+      console.log(LOG_PREFIX, "STEP 4 START: submitting to LHDN");
       let result;
       try {
-        result = await retrying(async (attempt)=>{
-          console.log(LOG_PREFIX, 'submit attempt', attempt, 'for fileId', fileId);
+        result = await retrying(
+          async (attempt) => {
+            console.log(
+              LOG_PREFIX,
+              "submit attempt",
+              attempt,
+              "for fileId",
+              fileId
+            );
 
-          // Enhanced Step 4 with real-time progress
-          if (onStage) {
-            try {
-              console.log(LOG_PREFIX, 'Getting file details for fileId:', fileId);
-              // Get file metadata for progress tracking
-              const fileData = await fetchJson(`/api/outbound-files-manual/uploaded-files/${fileId}/details`, {
-                method: 'GET', headers: { 'Accept': 'application/json' }
-              }, 10000);
+            // Enhanced Step 4 with real-time progress
+            if (onStage) {
+              try {
+                console.log(
+                  LOG_PREFIX,
+                  "Getting file details for fileId:",
+                  fileId
+                );
+                // Get file metadata for progress tracking
+                const fileData = await fetchJson(
+                  `/api/outbound-files-manual/uploaded-files/${fileId}/details`,
+                  {
+                    method: "GET",
+                    headers: { Accept: "application/json" },
+                  },
+                  10000
+                );
 
-              const invoiceCount = fileData?.data?.metadata?.prepared?.invoiceNumbers?.length || 0;
-              const firstInvoice = fileData?.data?.metadata?.prepared?.invoiceNumbers?.[0] || 'Unknown';
-
-              onStage({
-                stage:'submit',
-                message:`Submitting ${invoiceCount} invoice${invoiceCount === 1 ? '' : 's'} to LHDN...${attempt?` (retry ${attempt})`:''}`,
-                progress: 70,
-                realTimeInfo: {
-                  currentInvoice: firstInvoice,
-                  totalInvoices: invoiceCount,
-                  processed: 0,
-                  remaining: invoiceCount
-                }
-              });
-            } catch (fileDataErr) {
-              console.warn(LOG_PREFIX, 'Failed to get file metadata for progress tracking:', fileDataErr);
-              // Fallback to basic message without real-time info
-              onStage({
-                stage:'submit',
-                message:`Submitting to LHDN...${attempt?` (retry ${attempt})`:''}`,
-                progress: 70
-              });
-            }
-          }
-
-          const r = await postSubmitSingle(fileId);
-          console.log(LOG_PREFIX, 'submit result', r?.success);
-
-          // Track submission status if we have a submissionUid
-          if (r?.success && r?.data?.submissionUid && onStage) {
-            try {
-              console.log(LOG_PREFIX, 'Getting submission status for UID:', r.data.submissionUid);
-              const statusData = await getSubmissionStatus(r.data.submissionUid);
-              if (statusData?.success && statusData?.data?.success) {
-                const docCount = statusData.data?.details?.documentCount || 0;
-                const lhdnStatus = statusData.data?.status || 'processing';
-                console.log(LOG_PREFIX, 'LHDN status update:', lhdnStatus, 'docs:', docCount);
+                const invoiceCount =
+                  fileData?.data?.metadata?.prepared?.invoiceNumbers?.length ||
+                  0;
+                const firstInvoice =
+                  fileData?.data?.metadata?.prepared?.invoiceNumbers?.[0] ||
+                  "Unknown";
 
                 onStage({
-                  stage:'submit',
-                  message:`Processing ${docCount} document${docCount === 1 ? '' : 's'} on LHDN...`,
-                  progress: 85,
+                  stage: "submit",
+                  message: `Submitting ${invoiceCount} invoice${
+                    invoiceCount === 1 ? "" : "s"
+                  } to LHDN...${attempt ? ` (retry ${attempt})` : ""}`,
+                  progress: 70,
                   realTimeInfo: {
-                    submissionUid: r.data.submissionUid,
-                    status: lhdnStatus,
-                    totalInvoices: docCount,
-                    processed: docCount,
-                    remaining: 0
-                  }
+                    currentInvoice: firstInvoice,
+                    totalInvoices: invoiceCount,
+                    processed: 0,
+                    remaining: invoiceCount,
+                  },
                 });
-              } else {
-                console.warn(LOG_PREFIX, 'Submission status check failed:', statusData);
+              } catch (fileDataErr) {
+                console.warn(
+                  LOG_PREFIX,
+                  "Failed to get file metadata for progress tracking:",
+                  fileDataErr
+                );
+                // Fallback to basic message without real-time info
+                onStage({
+                  stage: "submit",
+                  message: `Submitting to LHDN...${
+                    attempt ? ` (retry ${attempt})` : ""
+                  }`,
+                  progress: 70,
+                });
               }
-            } catch (statusErr) {
-              console.warn(LOG_PREFIX, 'Failed to get submission status:', statusErr);
             }
-          }
 
-          return r;
-        }, { retries: 1, baseDelay: 2000 });
+            const r = await postSubmitSingle(fileId);
+            console.log(LOG_PREFIX, "submit result", r?.success);
+
+            // Track submission status if we have a submissionUid
+            if (r?.success && r?.data?.submissionUid && onStage) {
+              try {
+                console.log(
+                  LOG_PREFIX,
+                  "Getting submission status for UID:",
+                  r.data.submissionUid
+                );
+                const statusData = await getSubmissionStatus(
+                  r.data.submissionUid
+                );
+                if (statusData?.success && statusData?.data?.success) {
+                  const docCount = statusData.data?.details?.documentCount || 0;
+                  const lhdnStatus = statusData.data?.status || "processing";
+                  console.log(
+                    LOG_PREFIX,
+                    "LHDN status update:",
+                    lhdnStatus,
+                    "docs:",
+                    docCount
+                  );
+
+                  onStage({
+                    stage: "submit",
+                    message: `Processing ${docCount} document${
+                      docCount === 1 ? "" : "s"
+                    } on LHDN...`,
+                    progress: 85,
+                    realTimeInfo: {
+                      submissionUid: r.data.submissionUid,
+                      status: lhdnStatus,
+                      totalInvoices: docCount,
+                      processed: docCount,
+                      remaining: 0,
+                    },
+                  });
+                } else {
+                  console.warn(
+                    LOG_PREFIX,
+                    "Submission status check failed:",
+                    statusData
+                  );
+                }
+              } catch (statusErr) {
+                console.warn(
+                  LOG_PREFIX,
+                  "Failed to get submission status:",
+                  statusErr
+                );
+              }
+            }
+
+            return r;
+          },
+          { retries: 1, baseDelay: 2000 }
+        );
       } catch (err) {
         // Network fallback: request may have been processed server-side even if the socket dropped
-        const isNetworkish = (err && (err.code===0 || err.status===0 || err.name==='AbortError' || /Failed to fetch|ERR_EMPTY_RESPONSE|NetworkError/i.test(err.message||'')));
+        const isNetworkish =
+          err &&
+          (err.code === 0 ||
+            err.status === 0 ||
+            err.name === "AbortError" ||
+            /Failed to fetch|ERR_EMPTY_RESPONSE|NetworkError/i.test(
+              err.message || ""
+            ));
         if (isNetworkish) {
-          console.warn(LOG_PREFIX, 'network error during submit, attempting fallback verification');
-          if (onStage) onStage({ stage:'submit', message:'Submission dispatched. Verifying status...', progress:80 });
+          console.warn(
+            LOG_PREFIX,
+            "network error during submit, attempting fallback verification"
+          );
+          if (onStage)
+            onStage({
+              stage: "submit",
+              message: "Submission dispatched. Verifying status...",
+              progress: 80,
+            });
           try {
             await sleep(4000);
             const details = await getFileDetails(fileId);
-            const resp = details?.lhdn_response || details?.metadata?.lhdn_response;
-            const status = (details?.processing_status||'').toLowerCase();
-            if ((resp && (resp.status==='success' || resp?.data?.acceptedDocuments?.length>0)) || status==='submitted'){
+            const resp =
+              details?.lhdn_response || details?.metadata?.lhdn_response;
+            const status = (details?.processing_status || "").toLowerCase();
+            if (
+              (resp &&
+                (resp.status === "success" ||
+                  resp?.data?.acceptedDocuments?.length > 0)) ||
+              status === "submitted"
+            ) {
               // Synthesize a success-like result
-              result = { success:true, data: { submissionUid: resp?.data?.submissionUid }, lhdnResponse: resp };
+              result = {
+                success: true,
+                data: { submissionUid: resp?.data?.submissionUid },
+                lhdnResponse: resp,
+              };
             } else {
               throw err; // not verifiable as success
             }
@@ -315,31 +482,252 @@
           throw err;
         }
       }
-      console.log(LOG_PREFIX, 'STEP 4 COMPLETE: LHDN submission done');
+      console.log(LOG_PREFIX, "STEP 4 COMPLETE: LHDN submission done");
 
-      if (onStage) onStage({ stage:'done', message:'Processing response...', progress:90 });
+      if (onStage)
+        onStage({
+          stage: "done",
+          message: "Processing response...",
+          progress: 90,
+        });
 
-      if (result?.success){
+      if (result?.success) {
         // Mark in cache to prevent re-submit in this session
-        const c = getSubmittedCache(); c[fileId] = { at: Date.now() }; setSubmittedCache(c);
-        if (onStage) onStage({ stage:'done', message:'Finalizing...', progress:98 });
-        return { success:true, data: result };
+        const c = getSubmittedCache();
+        c[fileId] = { at: Date.now() };
+        setSubmittedCache(c);
+        if (onStage)
+          onStage({ stage: "done", message: "Finalizing...", progress: 98 });
+        return { success: true, data: result };
       } else {
-        const err = new Error(result?.error || 'Submission failed'); err.payload = result; throw err;
+        const err = new Error(result?.error || "Submission failed");
+        err.payload = result;
+        throw err;
       }
     },
 
-    async bulkSubmitFiles(fileIds, { onStage }={}){
-      if (!Array.isArray(fileIds) || fileIds.length===0) return { success:false };
+    async bulkSubmitFiles(fileIds, { onStage } = {}) {
+      if (!Array.isArray(fileIds) || fileIds.length === 0)
+        return { success: false };
       await throttle();
-      if (onStage) onStage({ stage:'validate', message:'Checking file readiness...', progress:10 });
-      if (onStage) onStage({ stage:'prepare', message:'Preparing bulk submission...', progress:35 });
-      const res = await retrying(()=>postBulk(fileIds), { retries: 1, baseDelay: 1500 });
-      if (onStage) onStage({ stage:'submit', message:'Submitting to LHDN (background)...', progress:65 });
-      if (!res?.success) { const err = new Error(res?.error||'Bulk submission failed'); err.payload=res; throw err; }
-      if (onStage) onStage({ stage:'response', message:'Bulk submission started. Finalizing...', progress:90 });
-      return res;
-    }
+      if (onStage)
+        onStage({
+          stage: "validate",
+          message: "Checking file readiness...",
+          progress: 10,
+        });
+      if (onStage)
+        onStage({
+          stage: "prepare",
+          message: "Preparing bulk submission...",
+          progress: 35,
+        });
+      // Get session ID for real-time tracking
+      const sessionId = this.getSessionId();
+
+      const res = await retrying(() => postBulk(fileIds, sessionId), {
+        retries: 1,
+        baseDelay: 1500,
+      });
+      if (onStage)
+        onStage({
+          stage: "submit",
+          message: "Submitting to LHDN (background)...",
+          progress: 65,
+        });
+      if (!res?.success) {
+        const err = new Error(res?.error || "Bulk submission failed");
+        err.payload = res;
+        throw err;
+      }
+
+      // Start real-time status monitoring and wait for completion
+      if (onStage)
+        onStage({
+          stage: "monitor",
+          message: "Monitoring submission progress...",
+          progress: 70,
+        });
+
+      // Return a promise that resolves when monitoring is complete
+      return new Promise((resolve, reject) => {
+        let monitoringActive = true;
+        let lastProgress = 70;
+        let finalResult = res; // Start with initial success response
+
+        // Start polling for real-time status
+        const statusPoller = setInterval(async () => {
+          if (!monitoringActive) return;
+
+          try {
+            const statusRes = await fetchJson(
+              `/api/outbound-files-manual/bulk-submission-realtime-status/${sessionId}`,
+              {
+                method: "GET",
+                headers: { Accept: "application/json" },
+              },
+              10000
+            );
+
+            if (
+              statusRes.ok &&
+              statusRes.data?.success &&
+              statusRes.data?.data?.hasActiveSubmission
+            ) {
+              const status = statusRes.data.data;
+
+              // Update progress based on current phase
+              let progress = lastProgress;
+              let message = "Processing...";
+
+              switch (status.currentPhase) {
+                case "processing_files":
+                  progress = 75;
+                  message = `Processing ${status.processedFiles}/${status.totalFiles} files...`;
+                  break;
+                case "phase1_preparation":
+                  progress = 80;
+                  message = "Preparing documents for validation...";
+                  break;
+                case "phase2_validation":
+                  progress = 85;
+                  message = "Validating documents with LHDN...";
+                  break;
+                case "completed":
+                  progress = 100;
+                  monitoringActive = false;
+                  clearInterval(statusPoller);
+
+                  if (status.overallStatus === "completed_with_errors") {
+                    // Check for validation failures
+                    const validationFailures = status.files.filter(
+                      (f) => f.status === "validation_failed"
+                    );
+                    if (validationFailures.length > 0) {
+                      // Aggregate all validation errors
+                      const allErrors = [];
+                      validationFailures.forEach((file) => {
+                        if (file.errors && Array.isArray(file.errors)) {
+                          allErrors.push(
+                            ...file.errors.map((err) => ({
+                              ...err,
+                              filename: file.filename,
+                            }))
+                          );
+                        }
+                      });
+
+                      // Count unique failed invoices instead of total errors
+                      const uniqueFailedInvoices = new Set();
+                      allErrors.forEach(error => {
+                        if (error.invoiceNumber) {
+                          uniqueFailedInvoices.add(error.invoiceNumber);
+                        }
+                      });
+
+                      const err = new Error(
+                        "Validation failed for one or more files"
+                      );
+                      err.payload = {
+                        validationFailed: true,
+                        details: allErrors,
+                        totalDocuments: status.files.reduce(
+                          (sum, f) => sum + (f.invoiceCount || 0),
+                          0
+                        ),
+                        failedDocuments: uniqueFailedInvoices.size,
+                        summary: status.summary,
+                      };
+                      reject(err);
+                      return;
+                    }
+                  }
+
+                  message =
+                    status.overallStatus === "completed_successfully"
+                      ? "All files processed successfully!"
+                      : "Processing completed with some issues";
+
+                  // Update final result with completion status
+                  finalResult = {
+                    ...finalResult,
+                    completionStatus: status.overallStatus,
+                    summary: status.summary,
+                  };
+
+                  if (onStage)
+                    onStage({
+                      stage: "response",
+                      message: "Processing completed successfully!",
+                      progress: 100,
+                    });
+
+                  resolve(finalResult);
+                  return;
+                default:
+                  message = `Processing... (${status.currentPhase})`;
+              }
+
+              if (progress > lastProgress) {
+                lastProgress = progress;
+                if (onStage)
+                  onStage({
+                    stage: "monitor",
+                    message,
+                    progress,
+                    realTimeStatus: status,
+                  });
+              }
+            } else if (statusRes.data?.data?.hasActiveSubmission === false) {
+              // No active submission found, stop monitoring and resolve with initial result
+              monitoringActive = false;
+              clearInterval(statusPoller);
+              resolve(finalResult);
+            }
+          } catch (statusErr) {
+            console.warn(LOG_PREFIX, "Status polling error:", statusErr);
+            // Continue monitoring despite errors
+          }
+        }, 2000); // Poll every 2 seconds
+
+        // Stop monitoring after 5 minutes max and resolve with current result
+        setTimeout(() => {
+          if (monitoringActive) {
+            monitoringActive = false;
+            clearInterval(statusPoller);
+            console.warn(
+              LOG_PREFIX,
+              "Status monitoring timed out after 5 minutes"
+            );
+            resolve(finalResult);
+          }
+        }, 5 * 60 * 1000);
+
+        if (onStage)
+          onStage({
+            stage: "response",
+            message: "Bulk submission started. Monitoring in progress...",
+            progress: 90,
+          });
+      });
+    },
+
+    // Helper method to get session ID
+    getSessionId() {
+      // Try to get session ID from various sources
+      if (window.sessionStorage) {
+        let sessionId = sessionStorage.getItem("bulk_submission_session_id");
+        if (!sessionId) {
+          sessionId = `session_${Date.now()}_${Math.random()
+            .toString(36)
+            .substr(2, 9)}`;
+          sessionStorage.setItem("bulk_submission_session_id", sessionId);
+        }
+        return sessionId;
+      }
+      // Fallback to a simple timestamp-based ID
+      return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    },
   };
 
   window.SubmissionClient = SubmissionClient;

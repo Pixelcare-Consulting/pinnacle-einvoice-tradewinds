@@ -115,6 +115,8 @@ class LHDNSubmitter {
     }
   }
 
+
+
   async validateCustomerTaxInfo(tin, idType, idValue) {
     try {
       if (!this.req || !this.req.session || !this.req.session.accessToken) {

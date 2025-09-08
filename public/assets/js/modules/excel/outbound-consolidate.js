@@ -4730,6 +4730,39 @@ async function performStep2(data, version) {
             throw new Error('LHDN submission failed');
         }
 
+        // Additional safety check: Even if HTTP response is OK, check for rejected documents
+        if (result.rejectedDocuments && result.rejectedDocuments.length > 0) {
+            console.error('❌ [Step 2] Found rejected documents in successful response:', result.rejectedDocuments);
+            await updateStepStatus(2, 'error', 'Submission failed - documents rejected');
+
+            const rejectedDoc = result.rejectedDocuments[0];
+            showLHDNErrorModal({
+                code: 'VALIDATION_ERROR',
+                message: `LHDN validation failed: ${rejectedDoc.error?.message || 'Document validation failed'}`,
+                details: rejectedDoc.error?.details || rejectedDoc
+            });
+
+            throw new Error('LHDN submission failed - documents rejected');
+        }
+
+        // Additional safety check: If result indicates failure status
+        if (result.success === false || (result.status && result.status === 'failed')) {
+            console.error('❌ [Step 2] Result indicates failure despite OK response:', result);
+            await updateStepStatus(2, 'error', 'Submission failed');
+
+            if (result.error) {
+                showLHDNErrorModal(result.error);
+            } else {
+                showLHDNErrorModal({
+                    code: 'SUBMISSION_ERROR',
+                    message: 'LHDN submission failed',
+                    details: 'The submission was not successful'
+                });
+            }
+
+            throw new Error('LHDN submission failed');
+        }
+
         console.log('✅ [Step 2] Submission successful:', result);
         await updateStepStatus(2, 'completed', 'Submission completed');
         return result;

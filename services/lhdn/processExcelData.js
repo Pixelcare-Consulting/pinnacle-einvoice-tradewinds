@@ -307,11 +307,12 @@ const processExcelData = (rawData) => {
             currency: getField(headerRow, '6'),
             taxCurrencyCode: getField(headerRow, '7') || getField(headerRow, '6'),
             exchangeRate: getField(headerRow, '8') || 0,
-            invoiceDocumentReference:getField(headerRow, '1') || '',
-            InvoiceDocumentReference_ID: getField(headerRow, '2') || '',
+            invoiceDocumentReference:getField(headerRow, 'Invoice') || '',
+            InvoiceDocumentReference_ID: getField(headerRow, '__EMPTY_1') || '',
+            InvoiceDocumentReference_UUID: getField(headerRow, '__EMPTY') || '',
             documentReference: {
-              uuid: getField(headerRow, '1') || '',
-              internalId: getField(headerRow, '2') || '',
+              uuid: getField(headerRow, '__EMPTY') || '',
+              internalId: getField(headerRow, '__EMPTY_1') || '',
               billingReference: headerRow.AdditionalDocumentReference || DEFAULT_VALUES.NOT_APPLICABLE,
               billingReferenceType: getField(headerRow, '11') || DEFAULT_VALUES.NOT_APPLICABLE
             },

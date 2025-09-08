@@ -24,8 +24,6 @@
 <script src="/assets/js/config/validation-translations.js"></script>
 <script src="/assets/utils/lhdnErrorMapping.js"></script>
 
-
-
 <style>
 /* Enhanced UI Styles */
 .statistics-section .card,
@@ -157,6 +155,7 @@
 #processingTimeChart {
     border-radius: 8px;
     background: rgba(248, 249, 250, 0.5);
+    max-height: 200px !important;
 }
 
 .document-preview-frame {
@@ -629,7 +628,7 @@
       <div class="statistics-section mb-4">
         <div class="row">
           <!-- Document Status Chart -->
-          <div class="col-md-6">
+          <div class="col-md-4">
             <div class="card shadow-sm">
               <div class="card-body">
                 <h6 class="card-title d-flex align-items-center">
@@ -642,7 +641,7 @@
           </div>
 
           <!-- Daily Submissions Chart -->
-          <div class="col-md-6">
+          <div class="col-md-4 col-lg-4">
             <div class="card shadow-sm">
               <div class="card-body">
                 <h6 class="card-title d-flex align-items-center">
@@ -655,37 +654,14 @@
           </div>
 
           <!-- Processing Time Chart -->
-          <!-- <div class="col-md-4">
+        <div class="col-md-4">
             <div class="card shadow-sm">
               <div class="card-body">
                 <h6 class="card-title d-flex align-items-center">
-                  <i class="bi bi-clock-history me-2 text-primary"></i>
-                  LHDN Processing Analytics
                 </h6>
-                <div class="processing-stats mb-3">
-                  <div class="row text-center">
-                    <div class="col-4">
-                      <div class="stat-item">
-                        <div class="stat-value text-primary" id="avgProcessingHours">-</div>
-                        <div class="stat-label small text-muted">Avg Hours</div>
-                      </div>
-                    </div>
-                    <div class="col-4">
-                      <div class="stat-item">
-                        <div class="stat-value text-success" id="fastestProcessing">-</div>
-                        <div class="stat-label small text-muted">Fastest</div>
-                      </div>
-                    </div>
-                    <div class="col-4">
-                      <div class="stat-item">
-                        <div class="stat-value text-warning" id="slowestProcessing">-</div>
-                        <div class="stat-label small text-muted">Slowest</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <canvas id="processingTimeChart" height="150"></canvas>
-                <div class="mt-2">
+                
+                <canvas id="processingTimeChart" height="100"></canvas>
+                <div class="mt-0">
                   <small class="text-muted">
                     <i class="bi bi-info-circle me-1"></i>
                     Time from submission to LHDN validation
@@ -693,7 +669,8 @@
                 </div>
               </div>
             </div>
-          </div> -->
+          </div> 
+
         </div>
       </div>
 
@@ -1109,6 +1086,42 @@
     </div>
 </div>
 
+
+<!-- Custom Modal -->
+<div class="modal fade" id="customModal" tabindex="-1" aria-labelledby="customModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="d-flex align-items-center">
+                    <div class="modal-icon-container me-3" id="modalHeaderIcon">
+                        <i class="bi bi-info-circle"></i>
+                    </div>
+                    <h5 class="modal-title mb-0" id="customModalLabel">Information</h5>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-content-wrapper">
+                    <div class="text-center" id="modalIcon">
+                        <i class="bi bi-info-circle"></i>
+                    </div>
+                    <div id="modalMessage" class="modal-message text-center">
+                        <!-- Message content will be inserted here -->
+                    </div>
+                    <div id="modalHtmlContent" class="modal-html-content" style="display: none;">
+                        <!-- HTML content will be inserted here -->
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="modalCancelBtn" data-bs-dismiss="modal" style="display: none;">Cancel</button>
+                <button type="button" class="btn btn-primary" id="modalConfirmBtn" data-bs-dismiss="modal">OK</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+
 <!-- Connection Status Modal -->
 <div class="modal fade" id="connectionStatusModal" tabindex="-1" aria-labelledby="connectionStatusModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
@@ -1193,6 +1206,9 @@
 
 <!-- Original Inbound Excel Module (for backward compatibility) -->
 <script src="/assets/js/modules/excel/inbound-excel.js"></script>
+
+<!-- Chart Options Component -->
+<script src="/assets/js/components/lhdn-chart-options.js"></script>
 
 
 {% endblock %}

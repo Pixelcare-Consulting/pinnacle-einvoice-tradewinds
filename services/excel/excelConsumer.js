@@ -65,8 +65,15 @@ const consumeExcelFile = async (filePath, options = {}) => {
 
     // Step 3: Read Excel file
     console.log(`[Excel Consumer] Reading Excel file...`);
+    console.log(`🔍 [DEBUG] File path: ${filePath}`);
+    console.log(`🔍 [DEBUG] File exists: ${fs.existsSync(filePath)}`);
+
     const workbook = XLSX.readFile(filePath);
+    console.log(`🔍 [DEBUG] Workbook sheets: ${workbook.SheetNames.join(', ')}`);
+
     const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+    console.log(`🔍 [DEBUG] Using worksheet: ${workbook.SheetNames[0]}`);
+
     const rawData = XLSX.utils.sheet_to_json(worksheet, {
       raw: true,
       defval: null,
@@ -74,6 +81,13 @@ const consumeExcelFile = async (filePath, options = {}) => {
     });
 
     console.log(`[Excel Consumer] Excel file read successfully. Rows: ${rawData.length}`);
+    console.log(`🔍 [DEBUG] Raw data structure:`, {
+      totalRows: rawData.length,
+      firstRowKeys: rawData[0] ? Object.keys(rawData[0]) : [],
+      firstRowSample: rawData[0] || null,
+      secondRowSample: rawData[1] || null,
+      thirdRowSample: rawData[2] || null
+    });
 
     // Step 4: Create untouched log (original Excel data)
     const untouchedLog = {
@@ -87,10 +101,27 @@ const consumeExcelFile = async (filePath, options = {}) => {
 
     // Step 5: Process Excel data using enhanced multi-invoice processor
     console.log(`[Excel Consumer] Processing Excel data with enhanced multi-invoice processor...`);
+    console.log(`🔍 [DEBUG] Processing options:`, options);
+    console.log(`🔍 [DEBUG] Raw data before processing:`, {
+      rowCount: rawData.length,
+      hasData: rawData.length > 0,
+      firstRowType: typeof rawData[0],
+      isEmpty: rawData.length === 0
+    });
 
     // Use enhanced multi-invoice processor if enabled
     if (options.useEnhancedProcessor !== false) {
+      console.log(`🔍 [DEBUG] Using enhanced processor`);
       const enhancedResults = processMultipleInvoices(rawData, options);
+      console.log(`🔍 [DEBUG] Enhanced processor results:`, {
+        hasResults: !!enhancedResults,
+        invoicesCount: enhancedResults?.invoices?.length || 0,
+        processedInvoices: enhancedResults?.processedInvoices || 0,
+        totalInvoices: enhancedResults?.totalInvoices || 0,
+        hasValidation: !!enhancedResults?.validation,
+        hasBatchSummary: !!enhancedResults?.batchSummary
+      });
+
       result.processingResults = enhancedResults.invoices;
       result.enhancedResults = enhancedResults;
 
@@ -101,19 +132,43 @@ const consumeExcelFile = async (filePath, options = {}) => {
         console.log(`[Excel Consumer] WARNING: Duplicate invoices detected: ${enhancedResults.validation.duplicateInvoices.join(', ')}`);
       }
     } else {
+      console.log(`🔍 [DEBUG] Using standard processor`);
       // Fallback to original processor
       const processingResults = processManualUploadExcelData(rawData);
+      console.log(`🔍 [DEBUG] Standard processor results:`, {
+        hasResults: !!processingResults,
+        resultsType: typeof processingResults,
+        isArray: Array.isArray(processingResults),
+        length: processingResults?.length || 0
+      });
+
       result.processingResults = processingResults;
       console.log(`[Excel Consumer] Standard processing completed. Documents: ${processingResults.length}`);
     }
 
     // Step 6: Generate logs
+    console.log(`🔍 [DEBUG] Final processing results before logging:`, {
+      hasProcessingResults: !!result.processingResults,
+      processingResultsType: typeof result.processingResults,
+      processingResultsLength: result.processingResults?.length || 0,
+      processingResultsSample: result.processingResults?.[0] || null
+    });
+
     await generateComprehensiveLogs(result, untouchedLog, rawData, result.processingResults, timestamp);
 
     result.success = true;
     result.processingTime = new Date() - startTime;
 
     console.log(`[Excel Consumer] Processing completed successfully in ${result.processingTime}ms`);
+    console.log(`🔍 [DEBUG] Final result summary:`, {
+      success: result.success,
+      filename: result.filename,
+      processingTime: result.processingTime,
+      hasProcessingResults: !!result.processingResults,
+      processingResultsCount: result.processingResults?.length || 0,
+      hasEnhancedResults: !!result.enhancedResults,
+      hasLogs: !!result.logs
+    });
 
   } catch (error) {
     result.error = {
@@ -359,12 +414,27 @@ const previewExcelFile = async (filePath, options = {}) => {
 
     // Step 3: Read Excel file
     console.log(`[Excel Preview] Reading Excel file...`);
+    console.log(`🔍 [PREVIEW DEBUG] File path: ${filePath}`);
+    console.log(`🔍 [PREVIEW DEBUG] File exists: ${fs.existsSync(filePath)}`);
+
     const workbook = XLSX.readFile(filePath);
+    console.log(`🔍 [PREVIEW DEBUG] Workbook sheets: ${workbook.SheetNames.join(', ')}`);
+
     const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+    console.log(`🔍 [PREVIEW DEBUG] Using worksheet: ${workbook.SheetNames[0]}`);
+
     const rawData = XLSX.utils.sheet_to_json(worksheet, {
       raw: true,
       defval: null,
       blankrows: false
+    });
+
+    console.log(`🔍 [PREVIEW DEBUG] Raw data for preview:`, {
+      totalRows: rawData.length,
+      maxRows: options.maxRows,
+      firstRowKeys: rawData[0] ? Object.keys(rawData[0]) : [],
+      firstRowSample: rawData[0] || null,
+      hasData: rawData.length > 0
     });
 
     console.log(`[Excel Preview] Excel file read successfully. Total rows: ${rawData.length}`);

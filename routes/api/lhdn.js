@@ -2725,16 +2725,54 @@ router.get("/documents/:uuid/validation-results", async (req, res) => {
     // Process validation results
     let processedValidationResults = null;
     if (detailsData.validationResults) {
+      console.log('Raw validation results from LHDN:', JSON.stringify(detailsData.validationResults, null, 2));
+
       processedValidationResults = {
         status: detailsData.status,
         validationSteps:
-          detailsData.validationResults.validationSteps?.map((step) => {
+          detailsData.validationResults.validationSteps?.map((step, index) => {
+            console.log(`Processing validation step ${index}:`, JSON.stringify(step, null, 2));
             let errors = [];
             if (step.error) {
+              console.log(`Step ${index} has error:`, JSON.stringify(step.error, null, 2));
+              // Helper function to extract meaningful error message
+              const extractErrorMessage = (errorObj) => {
+                if (typeof errorObj === 'string') {
+                  return errorObj;
+                }
+                if (typeof errorObj === 'object' && errorObj !== null) {
+                  // Try different common error message properties
+                  if (errorObj.message) return errorObj.message;
+                  if (errorObj.description) return errorObj.description;
+                  if (errorObj.detail) return errorObj.detail;
+                  if (errorObj.error) return extractErrorMessage(errorObj.error);
+                  if (errorObj.text) return errorObj.text;
+
+                  // If it's an object with properties, try to create a meaningful message
+                  const keys = Object.keys(errorObj);
+                  if (keys.length > 0) {
+                    // Try to create a readable message from the object properties
+                    const meaningfulProps = keys.filter(key =>
+                      typeof errorObj[key] === 'string' && errorObj[key].length > 0
+                    );
+                    if (meaningfulProps.length > 0) {
+                      return meaningfulProps.map(key => `${key}: ${errorObj[key]}`).join(', ');
+                    }
+                    // Fallback to JSON representation
+                    try {
+                      return JSON.stringify(errorObj);
+                    } catch (e) {
+                      return 'Complex validation error (unable to parse)';
+                    }
+                  }
+                }
+                return 'Unknown validation error';
+              };
+
               if (Array.isArray(step.error.errors)) {
                 errors = step.error.errors.map((err) => ({
                   code: err.code || "VALIDATION_ERROR",
-                  message: err.message || err.toString(),
+                  message: extractErrorMessage(err),
                   field: err.field || null,
                   value: err.value || null,
                   details: err.details || null,
@@ -2743,7 +2781,7 @@ router.get("/documents/:uuid/validation-results", async (req, res) => {
                 errors = [
                   {
                     code: step.error.code || "VALIDATION_ERROR",
-                    message: step.error.message || step.error.toString(),
+                    message: extractErrorMessage(step.error),
                     field: step.error.field || null,
                     value: step.error.value || null,
                     details: step.error.details || null,
@@ -2753,7 +2791,7 @@ router.get("/documents/:uuid/validation-results", async (req, res) => {
                 errors = [
                   {
                     code: "VALIDATION_ERROR",
-                    message: step.error.toString(),
+                    message: extractErrorMessage(step.error),
                     field: null,
                     value: null,
                     details: null,
@@ -2762,12 +2800,15 @@ router.get("/documents/:uuid/validation-results", async (req, res) => {
               }
             }
 
-            return {
+            const processedStep = {
               name: step.name || "Validation Step",
               status: step.status || "Invalid",
               error: errors.length > 0 ? { errors } : null,
               timestamp: step.timestamp || new Date().toISOString(),
             };
+
+            console.log(`Processed step ${index}:`, JSON.stringify(processedStep, null, 2));
+            return processedStep;
           }) || [],
         summary: {
           totalSteps:
@@ -2813,11 +2854,14 @@ router.get("/documents/:uuid/validation-results", async (req, res) => {
       status: STATUS.SUCCESS,
     });
 
-    return res.json({
+    const finalResult = {
       success: true,
       validationResults: processedValidationResults,
       source: "api",
-    });
+    };
+
+    console.log('Final API response:', JSON.stringify(finalResult, null, 2));
+    return res.json(finalResult);
   } catch (error) {
     console.error("Error fetching validation results:", error);
 
@@ -3613,7 +3657,7 @@ async function processDocumentData(documentData, detailsData, uuid) {
       const allowanceCharges = parseFloat(
         line.AllowanceCharge?.[0]?.Amount?.[0]?._ || 0
       );
-      const unitCode = line.InvoicedQuantity?.[0]?.unitCode || "NA";
+      const unitCode = line.InvoicedQuantity?.[0]?.unitCode || "XNA";
 
       return {
         lineNo: index + 1,
@@ -4536,9 +4580,9 @@ async function getTemplateData(uuid, accessToken, user) {
       const discount = parseFloat(
         line.AllowanceCharge?.[0]?.Amount?.[0]._ || 0
       );
-      const unitCode = line.InvoicedQuantity?.[0]?.unitCode || "NA";
+      const unitCode = line.InvoicedQuantity?.[0]?.unitCode || "XNA";
       const taxlineCurrency =
-        line.TaxTotal?.[0]?.TaxAmount?.[0]?.currencyID || "MYR";
+        line.TaxTotal?.[0]?.TaxAmount?.[0]?.currencyID;
       const allowanceCharges = parseFloat(
         line.AllowanceCharge?.[0]?.Amount?.[0]._ || 0
       );
@@ -5928,4 +5972,6 @@ router.post("/sync/background", async (req, res) => {
   }
 });
 
+// Export the polling function for use in other modules
 module.exports = router;
+module.exports.pollSubmissionStatus = pollSubmissionStatus;

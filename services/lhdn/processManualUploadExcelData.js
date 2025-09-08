@@ -81,6 +81,17 @@ const processManualUploadExcelData = (rawData) => {
       error: (msg, data) => console.error(`[ERROR] ${msg}`, data || '')
     };
 
+    console.log(`🔍 [PROCESS DEBUG] Starting processManualUploadExcelData`);
+    console.log(`🔍 [PROCESS DEBUG] Input rawData:`, {
+      isArray: Array.isArray(rawData),
+      length: rawData?.length || 0,
+      type: typeof rawData,
+      hasData: !!rawData && rawData.length > 0,
+      firstRowSample: rawData?.[0] || null,
+      secondRowSample: rawData?.[1] || null,
+      thirdRowSample: rawData?.[2] || null
+    });
+
     /**
      * Helper function to map Malaysian state codes to state names
      * @param {any} stateCode - State code (number or string)
@@ -137,12 +148,23 @@ const processManualUploadExcelData = (rawData) => {
      * @returns {any} Field value if found, undefined otherwise
      */
     const getField = (row, baseField) => {
+      // Return early if row is invalid
+      if (!row || typeof row !== "object") {
+        return undefined;
+      }
+
       // Try different field name formats in order of preference
-      const fieldFormats = EXCEL_FIELD_PREFIXES.map(prefix => `${prefix}${baseField}`);
+      const fieldFormats = EXCEL_FIELD_PREFIXES.map(
+        (prefix) => `${prefix}${baseField}`
+      );
 
       // First try exact matches
       for (const field of fieldFormats) {
-        if (row[field] !== undefined) {
+        if (
+          row[field] !== undefined &&
+          row[field] !== null &&
+          row[field] !== ""
+        ) {
           return row[field];
         }
       }
@@ -150,24 +172,45 @@ const processManualUploadExcelData = (rawData) => {
       // If no exact match found, try case-insensitive matches
       const lowerBaseField = baseField.toLowerCase();
       for (const key of Object.keys(row)) {
-        if (key.toLowerCase() === lowerBaseField ||
-            EXCEL_FIELD_PREFIXES.some(prefix =>
-              key.toLowerCase() === `${prefix.toLowerCase()}${lowerBaseField}`)) {
-          return row[key];
+        if (
+          key.toLowerCase() === lowerBaseField ||
+          EXCEL_FIELD_PREFIXES.some(
+            (prefix) =>
+              key.toLowerCase() === `${prefix.toLowerCase()}${lowerBaseField}`
+          )
+        ) {
+          const value = row[key];
+          if (value !== undefined && value !== null && value !== "") {
+            return value;
+          }
         }
       }
 
       // If no match found, try numeric index fields
-      const numericField = baseField.match(/^_(\d+)$/);
+      const numericField = baseField.match(/^_?(\d+)$/);
       if (numericField) {
         const index = numericField[1];
-        const alternateFormats = EXCEL_FIELD_PREFIXES.map(prefix => `${prefix}${index}`);
+        const alternateFormats = EXCEL_FIELD_PREFIXES.map(
+          (prefix) => `${prefix}${index}`
+        );
 
         for (const format of alternateFormats) {
-          if (row[format] !== undefined) {
+          if (
+            row[format] !== undefined &&
+            row[format] !== null &&
+            row[format] !== ""
+          ) {
             return row[format];
           }
         }
+      }
+
+      // Log missing field for debugging (only in development)
+      if (process.env.NODE_ENV === "development") {
+        console.log(
+          `Field mapping warning: Could not find field '${baseField}' in row. Available keys:`,
+          Object.keys(row).slice(0, 10)
+        );
       }
 
       return undefined;
@@ -185,31 +228,54 @@ const processManualUploadExcelData = (rawData) => {
         const invoiceValue = row.Invoice.toString().trim();
 
         // Check if it's a valid invoice number (numeric or alphanumeric invoice ID)
-        // Skip header rows like "Invoice", "Internal Document Reference Number", "Invoice_ID"
-        if (invoiceValue &&
-            invoiceValue !== 'Invoice' &&
-            invoiceValue !== 'Internal Document Reference Number' &&
-            invoiceValue !== 'Invoice_ID' &&
-            invoiceValue.length > 0) {
+        // Skip header rows and common column header variations
+        const headerValues = [
+          "Invoice",
+          "Internal Document Reference Number",
+          "Invoice_ID",
+          "Invoice Number",
+          "Invoice No",
+          "Invoice No.",
+          "InvoiceNumber",
+          "InvoiceNo",
+          "Document Number",
+          "Document ID",
+          "Invoice #",
+          "#Invoice",
+          "Inv No",
+          "Inv Number",
+        ];
 
+        if (
+          invoiceValue &&
+          !headerValues.includes(invoiceValue) &&
+          invoiceValue.length > 0
+        ) {
           // Additional validation: check if it looks like an invoice number
           // (contains numbers or is a proper invoice format)
           if (/\d/.test(invoiceValue) || /^[A-Z0-9]+$/i.test(invoiceValue)) {
-            return 'INVOICE';
+            return "INVOICE";
           }
         }
       }
 
       // LEGACY SUPPORT: Check traditional __EMPTY field for backward compatibility
-      const legacyRowType = row[''] || row['__EMPTY'] || row['_'] ||
-                           row['RowType'] || row['Type'] || row['Row_Type'] ||
-                           row['Row Type'] || row['RowIdentifier'] || row['Row Identifier'] ||
-                           null;
+      const legacyRowType =
+        row[""] ||
+        row["__EMPTY"] ||
+        row["_"] ||
+        row["RowType"] ||
+        row["Type"] ||
+        row["Row_Type"] ||
+        row["Row Type"] ||
+        row["RowIdentifier"] ||
+        row["Row Identifier"] ||
+        null;
 
       if (legacyRowType && row) {
         // Check if this looks like a specific row type using the indicators
         for (const config of Object.values(ROW_TYPE_INDICATORS)) {
-          if (config.identifiers.some(id => row[id])) {
+          if (config.identifiers.some((id) => row[id])) {
             return config.type;
           }
         }
@@ -468,11 +534,12 @@ const processManualUploadExcelData = (rawData) => {
             currency: getField(invoiceRow, '5'),
             taxCurrencyCode: getField(invoiceRow, '6') || getField(invoiceRow, '5'),
             exchangeRate: getField(invoiceRow, '7') || 0,
-            invoiceDocumentReference:getField(invoiceRow, '0') || '',
-            InvoiceDocumentReference_ID: getField(invoiceRow, '1') || '',
+            invoiceDocumentReference:getField(invoiceRow, 'Invoice') || '',
+            InvoiceDocumentReference_ID: getField(invoiceRow, '__EMPTY_1') || '',
+            InvoiceDocumentReference_UUID: getField(invoiceRow, '__EMPTY') || '',
             documentReference: {
-              uuid: getField(invoiceRow, '0') || '',
-              internalId: getField(invoiceRow, '1') || '',
+              internalId: getField(invoiceRow, '__EMPTY_1') || '',
+                uuid: getField(invoiceRow, '__EMPTY') || '',
               billingReference: invoiceRow.AdditionalDocumentReference || DEFAULT_VALUES.NOT_APPLICABLE,
               billingReferenceType: getField(invoiceRow, '10') || DEFAULT_VALUES.NOT_APPLICABLE
             },

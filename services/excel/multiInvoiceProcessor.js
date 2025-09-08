@@ -16,7 +16,18 @@ const { validateExcelRows } = require('../lhdn/validateExcelRows');
  */
 const processMultipleInvoices = (rawData, options = {}) => {
   const startTime = new Date();
-  
+
+  console.log(`🔍 [MULTI-INVOICE DEBUG] Starting processing with ${rawData?.length || 0} rows`);
+  console.log(`🔍 [MULTI-INVOICE DEBUG] Options:`, options);
+  console.log(`🔍 [MULTI-INVOICE DEBUG] Raw data structure:`, {
+    isArray: Array.isArray(rawData),
+    length: rawData?.length || 0,
+    hasData: !!rawData && rawData.length > 0,
+    firstRowKeys: rawData?.[0] ? Object.keys(rawData[0]) : [],
+    firstRowSample: rawData?.[0] || null,
+    secondRowSample: rawData?.[1] || null
+  });
+
   const result = {
     success: false,
     totalInvoices: 0,
@@ -116,26 +127,32 @@ const processMultipleInvoices = (rawData, options = {}) => {
  */
 const detectInvoiceRows = (dataRows) => {
   const invoiceRows = [];
-  
+
   dataRows.forEach((row, index) => {
     if (row && row.Invoice) {
       const invoiceValue = String(row.Invoice).trim();
-      
-      // Enhanced invoice detection logic
-      if (invoiceValue && 
-          invoiceValue !== 'Invoice' && 
-          invoiceValue !== 'Internal Document Reference Number' &&
-          /\d/.test(invoiceValue)) { // Must contain at least one digit
-        
-        invoiceRows.push({
-          rowIndex: index,
-          invoiceNo: invoiceValue,
-          rowData: row
-        });
+
+      // Enhanced invoice detection logic - standardized with excelConsumer.js
+      if (
+        invoiceValue &&
+        invoiceValue !== "Invoice" &&
+        invoiceValue !== "Internal Document Reference Number" &&
+        invoiceValue !== "Invoice_ID" &&
+        invoiceValue.length > 0
+      ) {
+        // Additional validation: check if it looks like an invoice number
+        // (contains numbers or is a proper invoice format)
+        if (/\d/.test(invoiceValue) || /^[A-Z0-9]+$/i.test(invoiceValue)) {
+          invoiceRows.push({
+            rowIndex: index,
+            invoiceNo: invoiceValue,
+            rowData: row,
+          });
+        }
       }
     }
   });
-  
+
   return invoiceRows;
 };
 
@@ -177,14 +194,42 @@ const enhanceInvoiceData = (invoice, index) => {
     };
   }
 
-  // Ensure all required invoice fields are present
-  if (!enhanced.header.invoiceDocumentReference) {
-    enhanced.header.invoiceDocumentReference = enhanced.header.InvoiceDocumentReference_ID || '';
+  // REMOVED BUGGY CODE: Do NOT overwrite UUID with ID value
+  // The original code was incorrectly setting UUID = ID when UUID was empty
+  // This caused both UUID and ID to have the same value in LHDN output
+  // For CN/DN/RN documents, UUID and ID should be different values from Excel columns A and B
+
+  // Only set a default if both UUID and ID are completely missing (not for CN/DN/RN)
+  const requiresOriginalReference = ['02', '03', '04', '12', '13', '14'].includes(enhanced.header.invoiceType);
+  if (!requiresOriginalReference && !enhanced.header.InvoiceDocumentReference_UUID) {
+    // For regular invoices, we can set a default, but for CN/DN/RN we should preserve the original values
+    enhanced.header.InvoiceDocumentReference_UUID = '';
+  }
+
+  // Add debugging to verify the fix
+  if (requiresOriginalReference) {
+    console.log(`🔍 [UUID FIX DEBUG] Invoice ${enhanced.header.invoiceNo} (Type: ${enhanced.header.invoiceType})`);
+    console.log(`🔍 [UUID FIX DEBUG] UUID BEFORE enhancement: "${invoice.header.InvoiceDocumentReference_UUID}"`);
+    console.log(`🔍 [UUID FIX DEBUG] ID BEFORE enhancement: "${invoice.header.InvoiceDocumentReference_ID}"`);
+    console.log(`🔍 [UUID FIX DEBUG] UUID AFTER enhancement: "${enhanced.header.InvoiceDocumentReference_UUID}"`);
+    console.log(`🔍 [UUID FIX DEBUG] ID AFTER enhancement: "${enhanced.header.InvoiceDocumentReference_ID}"`);
+
+    if (enhanced.header.InvoiceDocumentReference_UUID === enhanced.header.InvoiceDocumentReference_ID && enhanced.header.invoiceDocumentReference !== '') {
+      console.log(`🚨 [UUID FIX DEBUG] BUG STILL EXISTS: UUID and ID are the same!`);
+    } else if (enhanced.header.invoiceDocumentReference && enhanced.header.InvoiceDocumentReference_ID) {
+      console.log(`✅ [UUID FIX DEBUG] UUID and ID are different (fixed!)`);
+    } else if (!enhanced.header.InvoiceDocumentReference_UUID) {
+      console.log(`⚠️ [UUID FIX DEBUG] UUID is empty or undefined!`);
+    } else if (!enhanced.header.InvoiceDocumentReference_ID) {
+      console.log(`⚠️ [UUID FIX DEBUG] ID is empty or undefined!`);
+    }
   }
 
   // Add missing mandatory fields that are expected in the full JSON format
   enhanced.invoiceDetails = {
     invoiceNumber: enhanced.header.invoiceNo,
+    uuid: enhanced.header.InvoiceDocumentReference_UUID || 'N/A',
+    reference_id: enhanced.header.InvoiceDocumentReference_ID || 'N/A',
     supplier: enhanced.supplier?.name || 'N/A',
     buyer: enhanced.buyer?.name || 'N/A',
     totalAmount: enhanced.analytics.totalAmount,

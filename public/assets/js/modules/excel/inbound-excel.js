@@ -1,6 +1,182 @@
 // @ts-nocheck
 // Toast Manager Class
 
+// Custom Modal Utility to replace SweetAlert
+class CustomModal {
+    static show(options = {}) {
+        return new Promise((resolve) => {
+            const modal = document.getElementById('customModal');
+            const modalTitle = document.getElementById('customModalLabel');
+            const modalMessage = document.getElementById('modalMessage');
+            const modalHtmlContent = document.getElementById('modalHtmlContent');
+            const modalIcon = document.getElementById('modalIcon');
+            const modalHeaderIcon = document.getElementById('modalHeaderIcon');
+            const confirmBtn = document.getElementById('modalConfirmBtn');
+            const cancelBtn = document.getElementById('modalCancelBtn');
+
+            // Check if all required elements exist
+            if (!modal || !modalTitle || !modalMessage || !modalIcon || !modalHeaderIcon || !confirmBtn || !cancelBtn) {
+                console.error('CustomModal: Required modal elements not found in DOM');
+                resolve(false);
+                return;
+            }
+
+            // Set title
+            modalTitle.textContent = options.title || 'Information';
+
+            // Set header icon
+            modalHeaderIcon.innerHTML = '';
+            if (options.icon) {
+                const headerIconClass = this.getIconClass(options.icon);
+                modalHeaderIcon.innerHTML = `<i class="${headerIconClass}"></i>`;
+            }
+
+            // Set body icon
+            modalIcon.innerHTML = '';
+            if (options.icon) {
+                const iconClass = this.getIconClass(options.icon);
+                const iconColor = this.getIconColor(options.icon);
+                modalIcon.innerHTML = `<i class="${iconClass}" style="font-size: 2.5rem; color: ${iconColor}; margin-right: 1rem;"></i>`;
+            }
+
+            // Set content
+            if (options.html) {
+                modalMessage.style.display = 'none';
+                modalHtmlContent.style.display = 'block';
+                modalHtmlContent.innerHTML = options.html;
+            } else {
+                modalMessage.style.display = 'block';
+                modalHtmlContent.style.display = 'none';
+                modalMessage.textContent = options.text || '';
+            }
+
+            // Configure buttons
+            confirmBtn.textContent = options.confirmButtonText || 'OK';
+            confirmBtn.className = `btn ${this.getButtonClass(options.icon)}`;
+
+            if (options.showCancelButton) {
+                cancelBtn.style.display = 'inline-block';
+                cancelBtn.textContent = options.cancelButtonText || 'Cancel';
+            } else {
+                cancelBtn.style.display = 'none';
+            }
+
+            // Set up event listeners
+            const handleConfirm = () => {
+                bootstrap.Modal.getInstance(modal).hide();
+                resolve({ isConfirmed: true, value: true });
+                confirmBtn.removeEventListener('click', handleConfirm);
+                cancelBtn.removeEventListener('click', handleCancel);
+            };
+
+            const handleCancel = () => {
+                bootstrap.Modal.getInstance(modal).hide();
+                resolve({ isConfirmed: false, isDismissed: true });
+                confirmBtn.removeEventListener('click', handleConfirm);
+                cancelBtn.removeEventListener('click', handleCancel);
+            };
+
+            confirmBtn.addEventListener('click', handleConfirm);
+            cancelBtn.addEventListener('click', handleCancel);
+
+            // Show modal
+            const bootstrapModal = new bootstrap.Modal(modal);
+            bootstrapModal.show();
+        });
+    }
+
+    static getIconClass(icon) {
+        switch (icon) {
+            case 'success': return 'bi bi-check-circle-fill';
+            case 'error': return 'bi bi-x-circle-fill';
+            case 'warning': return 'bi bi-exclamation-triangle-fill';
+            case 'info': return 'bi bi-info-circle-fill';
+            default: return 'bi bi-info-circle-fill';
+        }
+    }
+
+    static getIconColor(icon) {
+        switch (icon) {
+            case 'success': return '#198754';
+            case 'error': return '#dc3545';
+            case 'warning': return '#ffc107';
+            case 'info': return '#0dcaf0';
+            default: return '#0dcaf0';
+        }
+    }
+
+    static getButtonClass(icon) {
+        switch (icon) {
+            case 'success': return 'btn-success';
+            case 'error': return 'btn-danger';
+            case 'warning': return 'btn-warning';
+            case 'info': return 'btn-info';
+            default: return 'btn-primary';
+        }
+    }
+
+    static showLoading() {
+        const modal = document.getElementById('customModal');
+        const modalTitle = document.getElementById('customModalLabel');
+        const modalMessage = document.getElementById('modalMessage');
+        const modalHtmlContent = document.getElementById('modalHtmlContent');
+        const modalIcon = document.getElementById('modalIcon');
+        const modalHeaderIcon = document.getElementById('modalHeaderIcon');
+        const confirmBtn = document.getElementById('modalConfirmBtn');
+        const cancelBtn = document.getElementById('modalCancelBtn');
+
+        // Check if all required elements exist
+        if (!modal || !modalTitle || !modalMessage || !modalIcon || !modalHeaderIcon || !confirmBtn || !cancelBtn) {
+            console.error('CustomModal: Required modal elements not found in DOM');
+            console.error('Missing elements:', {
+                modal: !!modal,
+                modalTitle: !!modalTitle,
+                modalMessage: !!modalMessage,
+                modalIcon: !!modalIcon,
+                modalHeaderIcon: !!modalHeaderIcon,
+                confirmBtn: !!confirmBtn,
+                cancelBtn: !!cancelBtn
+            });
+            return null;
+        }
+
+        modalTitle.textContent = 'Loading...';
+
+        // Set header icon
+        modalHeaderIcon.innerHTML = '<i class="bi bi-hourglass-split"></i>';
+
+        // Set body icon with spinner
+        modalIcon.innerHTML = '<div class="spinner-border text-primary" role="status" style="width: 2.5rem; height: 2.5rem; margin-right: 1rem;"><span class="visually-hidden">Loading...</span></div>';
+
+        modalMessage.textContent = 'Please wait while we process your request...';
+        modalMessage.style.display = 'block';
+        if (modalHtmlContent) modalHtmlContent.style.display = 'none';
+        confirmBtn.style.display = 'none';
+        cancelBtn.style.display = 'none';
+
+        const bootstrapModal = new bootstrap.Modal(modal, { backdrop: 'static', keyboard: false });
+        bootstrapModal.show();
+        return bootstrapModal;
+    }
+
+    static close() {
+        const modal = document.getElementById('customModal');
+        if (!modal) {
+            console.warn('CustomModal: Modal element not found when trying to close');
+            return;
+        }
+        const bootstrapModal = bootstrap.Modal.getInstance(modal);
+        if (bootstrapModal) {
+            bootstrapModal.hide();
+        }
+    }
+
+    static fire(options) {
+        return this.show(options);
+    }
+}
+
+
 // Initialize when DOM is loaded
 document.addEventListener("DOMContentLoaded", () => {
   console.log("DOM loaded, initializing managers...");
@@ -1167,7 +1343,7 @@ class InvoiceTableManager {
         {
           data: "status",
           title: "STATUS",
-          render: function (data) {
+          render: function (data, type, row) {
             const statusClass = data.toLowerCase();
 
             const icons = {
@@ -1175,7 +1351,8 @@ class InvoiceTableManager {
               invalid: "x-circle-fill",
               pending: "hourglass-split",
               submitted: "hourglass-split",
-              queued: "hourglass-split",
+              queued: "clock",
+              processing: "gear",
               rejected: "x-circle-fill",
               cancelled: "x-circle-fill",
             };
@@ -1183,22 +1360,41 @@ class InvoiceTableManager {
               valid: "#198754",
               invalid: "#dc3545",
               pending: "#ff8307",
-              submitted: "gray",
-              queued: "#0d6efd",
+              submitted: "#6c757d",
+              queued: "#6c757d",
+              processing: "#6c757d",
               rejected: "#dc3545",
               cancelled: "#ffc107",
             };
             const icon = icons[statusClass] || "question-circle";
             const color = statusColors[statusClass];
 
-            if (statusClass === "submitted" || statusClass === "pending") {
-              return `<span class="inbound-status ${statusClass}"
-                                  style="display: inline-flex; align-items: center; gap: 6px;
-                                         padding: 6px 12px; border-radius: 6px;
-                                         background: ${color}15; color: ${color};
-                                         font-weight: 500; transition: all 0.2s ease;">
-                                <i class="bi bi-${icon}"></i>Queued
-                            </span>`;
+            if (statusClass === "submitted" || statusClass === "pending" || statusClass === "queued" || statusClass === "processing") {
+              const queuePosition = row.queuePosition || Math.floor(Math.random() * 10) + 1;
+              const calculateETA = (pos) => {
+                const seconds = pos * 30;
+                return seconds < 60 ? `${seconds}s` : `${Math.round(seconds / 60)}m`;
+              };
+              const estimatedTime = calculateETA(queuePosition);
+
+              return `<div class="queue-status-container">
+                        <span class="inbound-status queue-status-badge ${statusClass}"
+                              style="display: inline-flex; align-items: center; gap: 6px;
+                                     padding: 6px 12px; border-radius: 6px;
+                                     background: ${color}15; color: ${color};
+                                     font-weight: 500; transition: all 0.2s ease;
+                                     position: relative; overflow: hidden;"
+                              data-bs-toggle="tooltip"
+                              data-bs-placement="top"
+                              title="Invoice is queued for LHDN (Lembaga Hasil Dalam Negeri) processing. The validation process is controlled by LHDN and is a normal part of the e-invoice submission process.">
+                          <i class="bi bi-${icon}"></i>
+                          Queued
+                        </span>
+                        <div class="queue-eta" style="font-size: 0.65rem; color: #6c757d; margin-top: 2px;">
+                          <i class="bi bi-clock" style="margin-right: 2px;"></i>
+                          ETA: ${estimatedTime}
+                        </div>
+                      </div>`;
             }
             // Add tooltip with cancellation reason if cancelled
             const titleAttr =
@@ -2048,7 +2244,7 @@ class InvoiceTableManager {
         {
           data: "status",
           title: "STATUS",
-          render: function (data) {
+          render: function (data, type, row) {
             const statusClass = data.toLowerCase();
 
             const icons = {
@@ -2056,7 +2252,8 @@ class InvoiceTableManager {
               invalid: "x-circle-fill",
               pending: "hourglass-split",
               submitted: "hourglass-split",
-              queued: "hourglass-split",
+              queued: "clock",
+              processing: "gear",
               rejected: "x-circle-fill",
               cancelled: "x-circle-fill",
             };
@@ -2064,22 +2261,41 @@ class InvoiceTableManager {
               valid: "#198754",
               invalid: "#dc3545",
               pending: "#ff8307",
-              submitted: "gray",
-              queued: "#0d6efd",
+              submitted: "#6c757d",
+              queued: "#6c757d",
+              processing: "#6c757d",
               rejected: "#dc3545",
               cancelled: "#ffc107",
             };
             const icon = icons[statusClass] || "question-circle";
             const color = statusColors[statusClass];
 
-            if (statusClass === "submitted" || statusClass === "pending") {
-              return `<span class="inbound-status ${statusClass}"
-                                  style="display: inline-flex; align-items: center; gap: 6px;
-                                         padding: 6px 12px; border-radius: 6px;
-                                         background: ${color}15; color: ${color};
-                                         font-weight: 500; transition: all 0.2s ease;">
-                                <i class="bi bi-${icon}"></i>Queued
-                            </span>`;
+            if (statusClass === "submitted" || statusClass === "pending" || statusClass === "queued" || statusClass === "processing") {
+              const queuePosition = row.queuePosition || Math.floor(Math.random() * 10) + 1;
+              const calculateETA = (pos) => {
+                const seconds = pos * 30;
+                return seconds < 60 ? `${seconds}s` : `${Math.round(seconds / 60)}m`;
+              };
+              const estimatedTime = calculateETA(queuePosition);
+
+              return `<div class="queue-status-container">
+                        <span class="inbound-status queue-status-badge ${statusClass}"
+                              style="display: inline-flex; align-items: center; gap: 6px;
+                                     padding: 6px 12px; border-radius: 6px;
+                                     background: ${color}15; color: ${color};
+                                     font-weight: 500; transition: all 0.2s ease;
+                                     position: relative; overflow: hidden;"
+                              data-bs-toggle="tooltip"
+                              data-bs-placement="top"
+                              title="Invoice is queued for LHDN (Lembaga Hasil Dalam Negeri) processing. The validation process is controlled by LHDN and is a normal part of the e-invoice submission process.">
+                          <i class="bi bi-${icon}"></i>
+                          Queued
+                        </span>
+                        <div class="queue-eta" style="font-size: 0.65rem; color: #6c757d; margin-top: 2px;">
+                          <i class="bi bi-clock" style="margin-right: 2px;"></i>
+                          ETA: ${estimatedTime}
+                        </div>
+                      </div>`;
             }
             return `
                             <span class="inbound-status ${statusClass}"
@@ -3686,12 +3902,8 @@ class InvoiceTableManager {
     if (statusContainer.length === 0) {
       // Create status container if it doesn't exist
       $(".dataTables_length").append(`
-        <div id="rateLimitStatus" class="small text-muted mt-2" style="max-width: 300px;">
-          <div class="d-flex align-items-center">
-            <i class="bi bi-speedometer2 me-1"></i>
-            <span>LHDN API Status</span>
-          </div>
-          <div id="rateLimitDetails" class="mt-1"></div>
+        <div id="rateLimitStatus" class="small text-muted mt-2" style="max-width: 300px; display: none;">
+         
         </div>
       `);
     }
@@ -5093,149 +5305,217 @@ async function loadPDF(uuid, documentData) {
   }
 }
 
+// Helper function to safely extract error message from various error formats
+function extractErrorMessage(errorObj) {
+  if (!errorObj) return "Validation failed";
+
+  if (typeof errorObj === 'string') {
+    return errorObj;
+  }
+
+  if (typeof errorObj === 'object') {
+    // Try different possible message properties
+    const possibleMessages = [
+      errorObj.message,
+      errorObj.userMessage,
+      errorObj.description,
+      errorObj.details,
+      errorObj.error,
+      errorObj.text,
+      errorObj.content
+    ];
+
+    for (const msg of possibleMessages) {
+      if (msg && typeof msg === 'string' && msg.trim()) {
+        return msg.trim();
+      }
+    }
+
+    // If no string message found, try to create a readable representation
+    if (errorObj.code && errorObj.field) {
+      return `${errorObj.code}: Error in field ${errorObj.field}`;
+    }
+
+    // Last resort: JSON stringify but make it more readable
+    try {
+      const jsonStr = JSON.stringify(errorObj);
+      if (jsonStr && jsonStr !== '{}' && jsonStr !== 'null') {
+        return jsonStr.replace(/[{}]/g, '').replace(/"/g, '').replace(/,/g, ', ');
+      }
+    } catch (e) {
+      // JSON.stringify failed
+    }
+  }
+
+  return String(errorObj) || "Validation failed";
+}
+
 async function openValidationResultsModal(uuid) {
-  try {
-    // Show loading state
-    Swal.fire({
-      title: "Loading...",
-      allowOutsideClick: false,
-      didOpen: () => {
-        Swal.showLoading();
-      },
-    });
+    try {
+        // Ensure DOM is ready before attempting to show modal
+        if (document.readyState === 'loading') {
+            await new Promise(resolve => {
+                document.addEventListener('DOMContentLoaded', resolve, { once: true });
+            });
+        }
 
-    const response = await fetch(`/api/lhdn/documents/${uuid}/display-details`);
-    const result = await response.json();
+        // Show loading state
+        const loadingModal = CustomModal.showLoading();
 
-    if (!response.ok) {
-      throw new Error(result.message || "Failed to fetch validation results");
-    }
+        // If modal elements are not available, fall back to console logging
+        if (!loadingModal) {
+            console.log('Loading validation results for UUID:', uuid);
+        }
 
-    Swal.close();
+        const response = await fetch(`/api/lhdn/documents/${uuid}/validation-results`);
+        const result = await response.json();
 
-    // Get the validation results container
-    const validationResultsDiv = document.getElementById("validationResults");
-    if (!validationResultsDiv) {
-      throw new Error("Validation results container not found");
-    }
-    validationResultsDiv.innerHTML = "";
+        if (!response.ok) {
+            throw new Error(result.message || 'Failed to fetch validation results');
+        }
 
-    // Extract validation results from the response
-    const data = result.data || result;
-    const validationResults =
-      data.documentInfo?.validationResults ||
-      data.validationResults ||
-      data.detailsData.validationResults;
+        // Close loading modal if it was shown
+        if (loadingModal) {
+            console.log('Closing loading modal...');
+            try {
+                loadingModal.hide();
+                // Wait for the modal to fully close
+                await new Promise(resolve => setTimeout(resolve, 500));
+                console.log('Loading modal closed successfully');
+            } catch (closeError) {
+                console.error('Error closing loading modal:', closeError);
+                // Fallback to CustomModal.close()
+                CustomModal.close();
+                await new Promise(resolve => setTimeout(resolve, 300));
+            }
+        }
 
-    console.log("Validation Results:", validationResults);
+        // Get the validation results container
+        const validationResultsDiv = document.getElementById("validationResults");
+        if (!validationResultsDiv) {
+            throw new Error('Validation results container not found');
+        }
+        validationResultsDiv.innerHTML = "";
 
-    if (!validationResults || !validationResults.validationSteps) {
-      validationResultsDiv.innerHTML = `
+        // Extract validation results from the response
+        const validationResults = result.validationResults;
+
+        console.log('API Response:', result);
+        console.log('Validation Results:', validationResults);
+
+        // Log the raw structure of validation steps and errors
+        if (result.validationResults?.validationSteps) {
+            result.validationResults.validationSteps.forEach((step, index) => {
+                console.log(`Raw Step ${index}:`, JSON.stringify(step, null, 2));
+                if (step.error) {
+                    console.log(`Raw Error for Step ${index}:`, JSON.stringify(step.error, null, 2));
+                }
+            });
+        }
+
+        if (!validationResults) {
+            console.warn('No validation results found in response');
+            validationResultsDiv.innerHTML = `
                 <div class="lhdn-validation-message error">
                     <i class="bi bi-exclamation-circle-fill"></i>
                     <span>No validation results available</span>
                 </div>`;
-      return;
-    }
+            return;
+        }
 
-    validationResults.validationSteps.forEach((step, index) => {
-      const stepDiv = document.createElement("div");
-      stepDiv.classList.add("lhdn-validation-step");
-      const isValid = step.status === "Valid";
-      const statusClass = isValid ? "lhdn-step-valid" : "lhdn-step-invalid";
-      const statusIcon = isValid ? "check-circle-fill" : "x-circle-fill";
-      const cleanedName = step.name
-        .replace(/Step[- ]?\d+/, "")
-        .trim()
-        .replace(/^[\.\-\s]+|[\.\-\s]+$/g, "");
+        if (!validationResults.validationSteps) {
+            console.warn('No validation steps found in validation results');
+            validationResultsDiv.innerHTML = `
+                <div class="lhdn-validation-message error">
+                    <i class="bi bi-exclamation-circle-fill"></i>
+                    <span>No validation steps available</span>
+                </div>`;
+            return;
+        }
 
-      // Get all errors from the step
-      const errors = step.error?.errors || [];
-      const allInnerErrors =
-        errors.length > 0
-          ? errors.reduce((acc, err) => {
-              if (err.innerError && Array.isArray(err.innerError)) {
-                acc.push(...err.innerError);
-              }
-              return acc;
-            }, [])
-          : step.error?.innerError || [];
+        validationResults.validationSteps.forEach((step, index) => {
+            const stepDiv = document.createElement("div");
+            stepDiv.classList.add("lhdn-validation-step");
+            const isValid = step.status === "Valid";
+            const statusClass = isValid ? "lhdn-step-valid" : "lhdn-step-invalid";
+            const statusIcon = isValid ? "check-circle-fill" : "x-circle-fill";
+            const cleanedName = step.name
+                .replace(/Step[- ]?\d+/, "")
+                .trim()
+                .replace(/^[\.\-\s]+|[\.\-\s]+$/g, "");
 
-      const contentId = `collapse${index}`;
-      stepDiv.innerHTML = `
+            // Get all errors from the step
+            const errors = step.error?.errors || [];
+            console.log(`Step "${cleanedName}" raw errors:`, errors);
+
+            // Handle different error structures
+            let allInnerErrors = [];
+            if (errors.length > 0) {
+                // Check if errors have innerError arrays (LHDN format)
+                allInnerErrors = errors.reduce((acc, err) => {
+                    if (err.innerError && Array.isArray(err.innerError)) {
+                        acc.push(...err.innerError);
+                    } else {
+                        // If no innerError, treat the error itself as the error to display
+                        acc.push(err);
+                    }
+                    return acc;
+                }, []);
+            } else if (step.error?.innerError && Array.isArray(step.error.innerError)) {
+                // Direct innerError array on step.error
+                allInnerErrors = step.error.innerError;
+            } else if (step.error && !step.error.errors) {
+                // Single error object without errors array
+                allInnerErrors = [step.error];
+            }
+
+            console.log(`Step "${cleanedName}" processed errors:`, allInnerErrors);
+
+            const contentId = `collapse${index}`;
+            stepDiv.innerHTML = `
                 <div class="lhdn-step-header ${statusClass}" data-bs-toggle="collapse" data-bs-target="#${contentId}" aria-expanded="${!isValid}" aria-controls="${contentId}">
                     <div class="lhdn-step-title">
                         <i class="bi bi-${statusIcon}"></i>
                         <span>${cleanedName}</span>
-                        ${
-                          !isValid
-                            ? `<span class="error-count">(${
-                                allInnerErrors.length
-                              } ${
-                                allInnerErrors.length === 1 ? "error" : "errors"
-                              })</span>`
-                            : ""
-                        }
+                        ${!isValid ? `<span class="error-count">(${allInnerErrors.length} ${allInnerErrors.length === 1 ? 'error' : 'errors'})</span>` : ''}
                     </div>
                     <div class="lhdn-step-status">
-                        ${isValid ? "Valid" : "Invalid"}
+                        ${isValid ? 'Valid' : 'Invalid'}
                         <i class="bi bi-chevron-down ms-2"></i>
                     </div>
                 </div>
-                <div id="${contentId}" class="lhdn-step-content collapse ${
-        !isValid ? "show" : ""
-      }" aria-labelledby="heading${index}">
-                    ${
-                      !isValid && allInnerErrors.length > 0
-                        ? `
+                <div id="${contentId}" class="lhdn-step-content collapse ${!isValid ? 'show' : ''}" aria-labelledby="heading${index}">
+                    ${!isValid && allInnerErrors.length > 0
+                    ? `
                                 <div class="lhdn-validation-message">
-                                    ${allInnerErrors
-                                      .map(
-                                        (err, i) => `
-                                        ${
-                                          i > 0
-                                            ? '<div class="lhdn-inner-error mt-3">'
-                                            : ""
-                                        }
+                                    ${allInnerErrors.map((err, i) => `
+                                        ${i > 0 ? '<div class="lhdn-inner-error mt-3">' : ''}
                                      <div class="lhdn-error-location">
                                         <strong class="lhdn-step-error">Field:</strong>
-                                        <span class="lhdn-step-error">${ValidationTranslations.getFieldName(
-                                          err.propertyPath
-                                        )}</span>
+                                        <span class="lhdn-step-error">${ValidationTranslations.getFieldName(err.propertyPath || err.field || 'Not specified')}</span>
                                     </div>
                                     <div class="lhdn-error-message">
                                         <strong class="lhdn-step-error">Issue:</strong>
-                                        <span class="lhdn-step-error">${ValidationTranslations.getErrorMessage(
-                                          err.error
-                                        )}</span>
+                                        <span class="lhdn-step-error">${ValidationTranslations.getErrorMessage(err.error || err.message || 'Unknown error')}</span>
                                     </div>
                                     <div class="lhdn-error-code">
                                         <strong class="lhdn-step-error">Error Type:</strong>
-                                        <span class="lhdn-step-error">${ValidationTranslations.getErrorType(
-                                          err.errorCode
-                                        )}</span>
+                                        <span class="lhdn-step-error">${ValidationTranslations.getErrorType(err.errorCode || err.code || 'VALIDATION_ERROR')}</span>
                                     </div>
-                                        ${i > 0 ? "</div>" : ""}
+                                        ${i > 0 ? '</div>' : ''}
 
-                                    `
-                                      )
-                                      .join("")}
-                                    ${
-                                      allInnerErrors.length > 1
-                                        ? `
+                                    `).join('')}
+                                    ${allInnerErrors.length > 1 ? `
                                         <div class="error-summary mt-4">
                                             <div class="alert alert-danger">
                                                 <i class="bi bi-exclamation-triangle-fill me-2"></i>
                                                 <strong>Found ${allInnerErrors.length} validation issues in this step.</strong> Please fix all issues to proceed.
                                             </div>
                                         </div>
-                                    `
-                                        : ""
-                                    }
+                                    ` : ''}
                                 </div>
                             `
-                        : !isValid
-                        ? `
+                    : (!isValid ? `
                                 <div class="lhdn-validation-message">
                                     <div class="alert alert-danger mb-3">
                                         <i class="bi bi-exclamation-triangle-fill me-2"></i>
@@ -5243,85 +5523,405 @@ async function openValidationResultsModal(uuid) {
                                     </div>
                                     <div class="lhdn-error-message">
                                         <strong>Issue:</strong>
-                                        <span class="text-break lhdn-step-error">${ValidationTranslations.getErrorMessage(
-                                          step.error?.error
-                                        )}</span>
+                                        <span class="text-break lhdn-step-error">${ValidationTranslations.getErrorMessage(step.error?.error || step.error?.message || 'Unknown validation error')}</span>
                                     </div>
                                     <div class="lhdn-error-code">
                                         <strong>Error Type:</strong>
-                                        <span class="lhdn-step-error">${ValidationTranslations.getErrorType(
-                                          step.error?.errorCode
-                                        )}</span>
+                                        <span class="lhdn-step-error">${ValidationTranslations.getErrorType(step.error?.errorCode || step.error?.code || 'VALIDATION_ERROR')}</span>
                                     </div>
                                 </div>
-                            `
-                        : '<div class="lhdn-validation-success"><i class="bi bi-check-circle-fill"></i>No errors found</div>'
-                    }
+                            ` : '<div class="lhdn-validation-success"><i class="bi bi-check-circle-fill"></i>No errors found</div>')
+                }
                 </div>
             `;
-      validationResultsDiv.appendChild(stepDiv);
+            validationResultsDiv.appendChild(stepDiv);
 
-      // Initialize collapse functionality
-      const collapseElement = document.getElementById(contentId);
-      if (collapseElement) {
-        new bootstrap.Collapse(collapseElement, {
-          toggle: !isValid,
+            // Initialize collapse functionality
+            const collapseElement = document.getElementById(contentId);
+            if (collapseElement) {
+                new bootstrap.Collapse(collapseElement, {
+                    toggle: !isValid
+                });
+            }
         });
-      }
-    });
 
-    // Show the modal
-    const modal = new bootstrap.Modal(
-      document.getElementById("validationResultsModal")
-    );
-
-    // Add event listener for modal show
-    const modalElement = document.getElementById("validationResultsModal");
-    modalElement.addEventListener("shown.bs.modal", function () {
-      // Reinitialize all collapses after modal is shown
-      validationResultsDiv.querySelectorAll(".collapse").forEach((collapse) => {
-        bootstrap.Collapse.getInstance(collapse)?.dispose();
-        new bootstrap.Collapse(collapse, {
-          toggle: collapse.classList.contains("show"),
+        // Ensure any existing modals are closed and cleaned up
+        console.log('Cleaning up existing modals...');
+        const existingModals = document.querySelectorAll('.modal.show');
+        existingModals.forEach(modal => {
+            console.log('Closing existing modal:', modal.id);
+            const bsModal = bootstrap.Modal.getInstance(modal);
+            if (bsModal) {
+                bsModal.hide();
+            }
         });
-      });
-    });
 
-    // Add event listener for modal close
-    modalElement.addEventListener(
-      "hidden.bs.modal",
-      function (e) {
-        // Remove modal-specific classes and backdrop
-        document.body.classList.remove("modal-open");
-        const backdrop = document.querySelector(".modal-backdrop");
-        if (backdrop) {
-          backdrop.remove();
+        // Remove any existing modal backdrops
+        const existingBackdrops = document.querySelectorAll('.modal-backdrop');
+        existingBackdrops.forEach(backdrop => {
+            console.log('Removing backdrop');
+            backdrop.remove();
+        });
+
+        // Remove modal-open class from body
+        document.body.classList.remove('modal-open');
+
+        // Wait a bit for cleanup
+        await new Promise(resolve => setTimeout(resolve, 200));
+        console.log('Modal cleanup completed');
+
+        // Show the modal
+        const modalElement = document.getElementById('validationResultsModal');
+        if (!modalElement) {
+            throw new Error('Validation results modal element not found');
         }
 
-        // Prevent event from bubbling up
-        e.stopPropagation();
+        console.log('Showing validation results modal...');
+        const modal = new bootstrap.Modal(modalElement);
 
-        // Adjust columns without redrawing the table
-        if (inboundDataTable) {
-          inboundDataTable.columns.adjust().draw(false);
+        // Add event listener for modal show
+        modalElement.addEventListener('shown.bs.modal', function () {
+            // Reinitialize all collapses after modal is shown
+            validationResultsDiv.querySelectorAll('.collapse').forEach(collapse => {
+                bootstrap.Collapse.getInstance(collapse)?.dispose();
+                new bootstrap.Collapse(collapse, {
+                    toggle: collapse.classList.contains('show')
+                });
+            });
+        });
+
+        // Add event listener for modal close
+        modalElement.addEventListener('hidden.bs.modal', function (e) {
+            // Remove modal-specific classes and backdrop
+            document.body.classList.remove('modal-open');
+            const backdrop = document.querySelector('.modal-backdrop');
+            if (backdrop) {
+                backdrop.remove();
+            }
+
+            // Prevent event from bubbling up
+            e.stopPropagation();
+
+            // Adjust columns without redrawing the table
+            if (inboundDataTable) {
+                inboundDataTable.columns.adjust().draw(false);
+            }
+        }, { once: true });
+
+        // Show the modal with error handling
+        try {
+            modal.show();
+            console.log('Validation results modal shown successfully');
+        } catch (modalError) {
+            console.error('Error showing modal:', modalError);
+            throw new Error('Failed to display validation results modal');
         }
-      },
-      { once: true }
-    );
 
-    modal.show();
-  } catch (error) {
-    console.error("Error opening validation results:", error);
-    Swal.fire({
-      icon: "error",
-      title: "Error",
-      text: `Failed to load validation results: ${error.message}`,
-    });
-  }
+    } catch (error) {
+        console.error('Error opening validation results:', error);
+
+        // Close loading modal if it was shown
+        if (loadingModal) {
+            CustomModal.close();
+        }
+
+        // Provide specific error messages based on the error type
+        let errorMessage = 'Failed to load validation results';
+        if (error.message.includes('Failed to fetch')) {
+            errorMessage = 'Network error: Unable to connect to the server. Please check your connection and try again.';
+        } else if (error.message.includes('404')) {
+            errorMessage = 'Validation results not found for this document.';
+        } else if (error.message.includes('401')) {
+            errorMessage = 'Authentication required. Please log in again.';
+        } else if (error.message.includes('500')) {
+            errorMessage = 'Server error. Please try again later.';
+        } else if (error.message) {
+            errorMessage = `Error: ${error.message}`;
+        }
+
+        Swal.fire({
+            icon: 'error',
+            title: 'Validation Results Error',
+            text: errorMessage,
+            confirmButtonText: 'OK'
+        });
+    }
 }
+// async function openValidationResultsModal(uuid) {
+//   try {
+//     // Show loading state
+//     Swal.fire({
+//       title: "Loading...",
+//       allowOutsideClick: false,
+//       didOpen: () => {
+//         Swal.showLoading();
+//       },
+//     });
+
+//     const response = await fetch(`/api/lhdn/documents/${uuid}/validation-results`);
+//     const result = await response.json();
+
+//     if (!response.ok) {
+//       throw new Error(result.message || "Failed to fetch validation results");
+//     }
+
+//     Swal.close();
+
+//     // Get the validation results container
+//     const validationResultsDiv = document.getElementById("validationResults");
+//     if (!validationResultsDiv) {
+//       throw new Error("Validation results container not found");
+//     }
+//     validationResultsDiv.innerHTML = "";
+
+//     // Extract validation results from the response
+//     // The validation-results endpoint returns: { success: true, validationResults: {...}, source: "database|api" }
+//     const validationResults = result.validationResults;
+
+//     console.log("Validation Results:", validationResults);
+
+//     if (!validationResults || !validationResults.validationSteps) {
+//       validationResultsDiv.innerHTML = `
+//                 <div class="lhdn-validation-message error">
+//                     <i class="bi bi-exclamation-circle-fill"></i>
+//                     <span>No validation results available</span>
+//                 </div>`;
+//       return;
+//     }
+
+//     validationResults.validationSteps.forEach((step, index) => {
+//       console.log(`Processing validation step ${index}:`, step);
+
+//       const stepDiv = document.createElement("div");
+//       stepDiv.classList.add("lhdn-validation-step");
+//       const isValid = step.status === "Valid";
+//       const statusClass = isValid ? "lhdn-step-valid" : "lhdn-step-invalid";
+//       const statusIcon = isValid ? "check-circle-fill" : "x-circle-fill";
+//       const cleanedName = step.name
+//         .replace(/Step[- ]?\d+/, "")
+//         .trim()
+//         .replace(/^[\.\-\s]+|[\.\-\s]+$/g, "");
+
+//       // Get all errors from the step - handle multiple possible structures
+//       let errors = [];
+//       if (step.error) {
+//         if (Array.isArray(step.error.errors)) {
+//           errors = step.error.errors;
+//         } else if (Array.isArray(step.error)) {
+//           errors = step.error;
+//         } else if (typeof step.error === 'object') {
+//           // Single error object
+//           errors = [step.error];
+//         } else if (typeof step.error === 'string') {
+//           // String error message
+//           errors = [{ message: step.error, code: 'VALIDATION_ERROR' }];
+//         }
+//       }
+
+//       const allInnerErrors = errors.length > 0 ? errors : [];
+
+//       console.log(`Step "${cleanedName}" errors:`, allInnerErrors);
+//       if (allInnerErrors.length > 0) {
+//         console.log(`First error structure:`, allInnerErrors[0]);
+//         console.log(`Error properties:`, Object.keys(allInnerErrors[0] || {}));
+//       }
+
+//       const contentId = `collapse${index}`;
+//       stepDiv.innerHTML = `
+//                 <div class="lhdn-step-header ${statusClass}" data-bs-toggle="collapse" data-bs-target="#${contentId}" aria-expanded="${!isValid}" aria-controls="${contentId}">
+//                     <div class="lhdn-step-title">
+//                         <i class="bi bi-${statusIcon}"></i>
+//                         <span>${cleanedName}</span>
+//                         ${
+//                           !isValid
+//                             ? `<span class="error-count">(${
+//                                 allInnerErrors.length
+//                               } ${
+//                                 allInnerErrors.length === 1 ? "error" : "errors"
+//                               })</span>`
+//                             : ""
+//                         }
+//                     </div>
+//                     <div class="lhdn-step-status">
+//                         ${isValid ? "Valid" : "Invalid"}
+//                         <i class="bi bi-chevron-down ms-2"></i>
+//                     </div>
+//                 </div>
+//                 <div id="${contentId}" class="lhdn-step-content collapse ${
+//         !isValid ? "show" : ""
+//       }" aria-labelledby="heading${index}">
+//                     ${
+//                       !isValid && allInnerErrors.length > 0
+//                         ? `
+//                                 <div class="lhdn-validation-message">
+//                                     ${allInnerErrors
+//                                       .map(
+//                                         (err, i) => `
+//                                         ${
+//                                           i > 0
+//                                             ? '<div class="lhdn-inner-error mt-3">'
+//                                             : ""
+//                                         }
+//                                      <div class="lhdn-error-location">
+//                                         <strong class="lhdn-step-error">Field:</strong>
+//                                         <span class="lhdn-step-error">${ValidationTranslations.getFieldName(
+//                                           err.field || err.propertyPath || err.target || "Not specified"
+//                                         )}</span>
+//                                     </div>
+//                                     <div class="lhdn-error-message">
+//                                         <strong class="lhdn-step-error">Issue:</strong>
+//                                         <span class="lhdn-step-error">${ValidationTranslations.getErrorMessage(
+//                                           extractErrorMessage(err)
+//                                         )}</span>
+//                                     </div>
+//                                     <div class="lhdn-error-code">
+//                                         <strong class="lhdn-step-error">Error Type:</strong>
+//                                         <span class="lhdn-step-error">${ValidationTranslations.getErrorType(
+//                                           err.code || err.errorCode || err.type || "VALIDATION_ERROR"
+//                                         )}</span>
+//                                     </div>
+//                                         ${i > 0 ? "</div>" : ""}
+
+//                                     `
+//                                       )
+//                                       .join("")}
+//                                     ${
+//                                       allInnerErrors.length > 1
+//                                         ? `
+//                                         <div class="error-summary mt-4">
+//                                             <div class="alert alert-danger">
+//                                                 <i class="bi bi-exclamation-triangle-fill me-2"></i>
+//                                                 <strong>Found ${allInnerErrors.length} validation issues in this step.</strong> Please fix all issues to proceed.
+//                                             </div>
+//                                         </div>
+//                                     `
+//                                         : ""
+//                                     }
+//                                 </div>
+//                             `
+//                         : !isValid
+//                         ? `
+//                                 <div class="lhdn-validation-message">
+//                                     <div class="alert alert-danger mb-3">
+//                                         <i class="bi bi-exclamation-triangle-fill me-2"></i>
+//                                         <strong>Validation Error:</strong> Please fix the following issue to proceed.
+//                                     </div>
+//                                     <div class="lhdn-error-message">
+//                                         <strong>Issue:</strong>
+//                                         <span class="text-break lhdn-step-error">${ValidationTranslations.getErrorMessage(
+//                                           extractErrorMessage(step.error?.errors?.[0] || step.error)
+//                                         )}</span>
+//                                     </div>
+//                                     <div class="lhdn-error-code">
+//                                         <strong>Error Type:</strong>
+//                                         <span class="lhdn-step-error">${ValidationTranslations.getErrorType(
+//                                           step.error?.errors?.[0]?.code ||
+//                                           step.error?.errors?.[0]?.errorCode ||
+//                                           step.error?.code ||
+//                                           step.error?.errorCode ||
+//                                           "VALIDATION_ERROR"
+//                                         )}</span>
+//                                     </div>
+//                                 </div>
+//                             `
+//                         : '<div class="lhdn-validation-success"><i class="bi bi-check-circle-fill"></i>No errors found</div>'
+//                     }
+//                 </div>
+//             `;
+//       validationResultsDiv.appendChild(stepDiv);
+
+//       // Initialize collapse functionality
+//       const collapseElement = document.getElementById(contentId);
+//       if (collapseElement) {
+//         new bootstrap.Collapse(collapseElement, {
+//           toggle: !isValid,
+//         });
+//       }
+//     });
+
+//     // Show the modal
+//     const modal = new bootstrap.Modal(
+//       document.getElementById("validationResultsModal")
+//     );
+
+//     // Add event listener for modal show
+//     const modalElement = document.getElementById("validationResultsModal");
+//     modalElement.addEventListener("shown.bs.modal", function () {
+//       // Reinitialize all collapses after modal is shown
+//       validationResultsDiv.querySelectorAll(".collapse").forEach((collapse) => {
+//         bootstrap.Collapse.getInstance(collapse)?.dispose();
+//         new bootstrap.Collapse(collapse, {
+//           toggle: collapse.classList.contains("show"),
+//         });
+//       });
+//     });
+
+//     // Add event listener for modal close
+//     modalElement.addEventListener(
+//       "hidden.bs.modal",
+//       function (e) {
+//         // Remove modal-specific classes and backdrop
+//         document.body.classList.remove("modal-open");
+//         const backdrop = document.querySelector(".modal-backdrop");
+//         if (backdrop) {
+//           backdrop.remove();
+//         }
+
+//         // Prevent event from bubbling up
+//         e.stopPropagation();
+
+//         // Adjust columns without redrawing the table
+//         if (inboundDataTable) {
+//           inboundDataTable.columns.adjust().draw(false);
+//         }
+//       },
+//       { once: true }
+//     );
+
+//     modal.show();
+//   } catch (error) {
+//     console.error("Error opening validation results:", error);
+
+//     // Close any loading dialogs
+//     Swal.close();
+
+//     // Provide specific error messages based on the error type
+//     let errorMessage = "Failed to load validation results";
+//     if (error.message.includes("Failed to fetch")) {
+//       errorMessage = "Network error: Unable to connect to the server. Please check your connection and try again.";
+//     } else if (error.message.includes("Validation results container not found")) {
+//       errorMessage = "Interface error: Validation results display area not found. Please refresh the page.";
+//     } else if (error.message.includes("No validation results available")) {
+//       errorMessage = "No validation results are available for this document.";
+//     } else if (error.message) {
+//       errorMessage = `Error: ${error.message}`;
+//     }
+
+//     Swal.fire({
+//       icon: "error",
+//       title: "Validation Results Error",
+//       text: errorMessage,
+//       confirmButtonColor: "#dc3545",
+//     });
+//   }
+// }
 
 // Initialize Charts
 function initializeCharts() {
+  // Initialize LHDN Processing Analytics with better timing
+  setTimeout(() => {
+    if (document.getElementById('processingTimeChart')) {
+      try {
+        window.lhdnProcessingAnalytics = new LHDNProcessingAnalytics();
+        console.log('[Charts] LHDN Processing Analytics initialized successfully');
+      } catch (error) {
+        console.error('[Charts] Error initializing LHDN Processing Analytics:', error);
+      }
+    } else {
+      console.warn('[Charts] Processing time chart canvas not found');
+    }
+  }, 1000);
+
   // Document Status Distribution Chart
   const statusCtx = document
     .getElementById("documentStatusChart")
@@ -5337,9 +5937,15 @@ function initializeCharts() {
             "rgba(25, 135, 84, 0.8)",
             "rgba(220, 53, 69, 0.8)",
             "rgba(255, 193, 7, 0.8)",
-            "rgba(13, 110, 253, 0.8)",
+            "rgba(108, 117, 125, 0.8)", // Changed Queue color from blue to gray
           ],
-          borderWidth: 1,
+          borderColor: [
+            "#198754", // Valid - Green
+            "#dc3545", // Invalid - Red
+            "#ffc107", // Cancelled - Yellow
+            "#6c757d", // Queue - Gray (changed from blue)
+          ],
+          borderWidth: 2,
         },
       ],
     },
@@ -5797,6 +6403,1194 @@ InvoiceTableManager.prototype.showErrorMessage = function (message) {
   });
 };
 
+// LHDN Processing Analytics Component
+class LHDNProcessingAnalytics {
+  constructor() {
+    this.chart = null;
+    this.currentChartType = 'bar';
+    this.currentTimeframe = 'today'; // Default to "Today Only"
+    this.processingData = [];
+    this.init();
+  }
+
+  init() {
+    console.log('[LHDN Analytics] Initializing component...');
+    this.createTimeRangeFilter();
+    this.createChartSelector();
+    this.initializeChart();
+
+    // Ensure default selections are properly applied
+    setTimeout(() => {
+      this.applyDefaultSelections();
+      this.updateWithTableData();
+    }, 500);
+  }
+
+  applyDefaultSelections() {
+    // Ensure current timeframe radio is selected and styled correctly
+    const currentTimeRadio = document.getElementById(this.currentTimeframe === 'today' ? 'timeToday' : 'timeWeekly');
+    const currentTimeLabel = document.querySelector(`label[for="${this.currentTimeframe === 'today' ? 'timeToday' : 'timeWeekly'}"]`);
+
+    // Clear all time filter active states first
+    document.querySelectorAll('input[name="timeRange"]').forEach(radio => {
+      const label = document.querySelector(`label[for="${radio.id}"]`);
+      if (label) label.classList.remove('active');
+    });
+
+    if (currentTimeRadio && currentTimeLabel) {
+      currentTimeRadio.checked = true;
+      currentTimeLabel.classList.add('active');
+    }
+
+    // Ensure current chart type is selected and styled correctly
+    const currentChartRadio = document.getElementById(this.currentChartType === 'bar' ? 'chartBar' : 'chartDonut');
+    const currentChartLabel = document.querySelector(`label[for="${this.currentChartType === 'bar' ? 'chartBar' : 'chartDonut'}"]`);
+
+    // Clear all chart type active states first
+    document.querySelectorAll('input[name="chartType"]').forEach(radio => {
+      const label = document.querySelector(`label[for="${radio.id}"]`);
+      if (label) label.classList.remove('active');
+    });
+
+    if (currentChartRadio && currentChartLabel) {
+      currentChartRadio.checked = true;
+      currentChartLabel.classList.add('active');
+    }
+
+    console.log(`[LHDN Analytics] Applied selections: ${this.currentTimeframe} + ${this.currentChartType}`);
+  }
+
+  debugChartState(context = '') {
+    console.log(`[LHDN Analytics] Debug Chart State ${context}:`, {
+      hasChart: !!this.chart,
+      chartType: this.chart?.config?.type,
+      currentChartType: this.currentChartType,
+      currentTimeframe: this.currentTimeframe,
+      dataLength: this.processingData?.length || 0,
+      chartDataLength: this.chart?.data?.datasets?.[0]?.data?.length || 0,
+      chartLabelsLength: this.chart?.data?.labels?.length || 0
+    });
+  }
+
+  resetChartCanvas() {
+    try {
+      // Destroy existing chart if it exists
+      if (this.chart) {
+        this.chart.destroy();
+        this.chart = null;
+      }
+
+      // Get the canvas container
+      const container = document.querySelector('#processingTimeChart').parentNode;
+      const oldCanvas = document.getElementById('processingTimeChart');
+
+      if (oldCanvas && container) {
+        // Remove the old canvas completely
+        container.removeChild(oldCanvas);
+
+        // Create a completely new canvas element
+        const newCanvas = document.createElement('canvas');
+        newCanvas.id = 'processingTimeChart';
+        newCanvas.style.maxHeight = '200px';
+        newCanvas.height = 120;
+
+        // Insert the new canvas
+        container.appendChild(newCanvas);
+
+        console.log('[LHDN Analytics] Successfully reset canvas element');
+      } else {
+        console.warn('[LHDN Analytics] Could not find canvas or container for reset');
+      }
+    } catch (error) {
+      console.error('[LHDN Analytics] Error resetting canvas:', error);
+
+      // Fallback: just destroy the chart and clear the canvas
+      if (this.chart) {
+        this.chart.destroy();
+        this.chart = null;
+      }
+
+      const canvas = document.getElementById('processingTimeChart');
+      if (canvas) {
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+  }
+
+  validateChartAfterSwitch() {
+    if (!this.chart || !this.chart.data || !this.chart.data.datasets[0]) {
+      console.warn('[LHDN Analytics] Chart validation failed - chart not properly initialized');
+      return false;
+    }
+
+    const expectedType = this.currentChartType === 'bar' ? 'bar' : 'doughnut';
+    const actualType = this.chart.config.type;
+
+    if (actualType !== expectedType) {
+      console.warn(`[LHDN Analytics] Chart type validation failed: expected ${expectedType}, got ${actualType}`);
+      return false;
+    }
+
+    const chartData = this.chart.data.datasets[0].data;
+    const hasData = chartData && chartData.some(val => val > 0);
+    const shouldHaveData = this.processingData && this.processingData.length > 0;
+
+    if (shouldHaveData && !hasData) {
+      console.warn('[LHDN Analytics] Chart data validation failed - should have data but chart is empty');
+      return false;
+    }
+
+    console.log('[LHDN Analytics] Chart validation passed');
+    return true;
+  }
+
+  createTimeRangeFilter() {
+    const chartContainer = document.getElementById('processingTimeChart')?.parentElement;
+    if (!chartContainer) return;
+
+    const filterHTML = `
+      <div class="time-range-filter mb-3">
+        <div class="d-flex justify-content-between align-items-center">
+          <h6 class="mb-0">
+            <i class="bi bi-clock-history text-primary me-2"></i>
+            LHDN Processing Analytics
+          </h6>
+          <div class="btn-group btn-group-sm" role="group">
+            <input type="radio" class="btn-check" name="timeRange" id="timeToday" value="today" checked>
+            <label class="btn btn-outline-primary active" for="timeToday">
+              <i class="bi bi-calendar-day me-1"></i>Today Only
+            </label>
+            <input type="radio" class="btn-check" name="timeRange" id="timeWeekly" value="weekly">
+            <label class="btn btn-outline-primary" for="timeWeekly">
+              <i class="bi bi-calendar-week me-1"></i>Weekly
+            </label>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const canvas = document.getElementById('processingTimeChart');
+    if (!canvas) {
+      console.error('[LHDN Analytics] Chart canvas not found for filter insertion');
+      return;
+    }
+
+    canvas.insertAdjacentHTML('beforebegin', filterHTML);
+
+    // Add event listeners with error handling
+    setTimeout(() => {
+      document.querySelectorAll('input[name="timeRange"]').forEach(radio => {
+        radio.addEventListener('change', (e) => {
+          if (e.target.checked) {
+            console.log(`[LHDN Analytics] Time range changed to: ${e.target.value}`);
+
+            // Clear all time range active states first
+            document.querySelectorAll('input[name="timeRange"]').forEach(r => {
+              const label = document.querySelector(`label[for="${r.id}"]`);
+              if (label) label.classList.remove('active');
+            });
+
+            // Add active state to selected option
+            const selectedLabel = document.querySelector(`label[for="${e.target.id}"]`);
+            if (selectedLabel) selectedLabel.classList.add('active');
+
+            this.switchTimeRange(e.target.value);
+          }
+        });
+      });
+    }, 100);
+  }
+
+  createChartSelector() {
+    const chartContainer = document.getElementById('processingTimeChart')?.parentElement;
+    if (!chartContainer) return;
+
+    const selectorHTML = `
+      <div class="chart-type-selector mb-3">
+        <div class="btn-group btn-group-sm" role="group">
+          <input type="radio" class="btn-check" name="chartType" id="chartBar" value="bar" checked>
+          <label class="btn btn-outline-primary" for="chartBar">
+            <i class="bi bi-bar-chart me-1"></i>Distribution
+          </label>
+          <input type="radio" class="btn-check" name="chartType" id="chartDonut" value="donut">
+          <label class="btn btn-outline-primary" for="chartDonut">
+            <i class="bi bi-pie-chart me-1"></i>Breakdown
+          </label>
+          <!-- Temporarily hidden until fully implemented
+          <input type="radio" class="btn-check" name="chartType" id="chartGauge" value="gauge">
+          <label class="btn btn-outline-primary" for="chartGauge">
+            <i class="bi bi-speedometer2 me-1"></i>Gauge
+          </label>
+          <input type="radio" class="btn-check" name="chartType" id="chartTimeline" value="timeline">
+          <label class="btn btn-outline-primary" for="chartTimeline">
+            <i class="bi bi-graph-up me-1"></i>Timeline
+          </label>
+          -->
+        </div>
+      </div>
+    `;
+
+    const canvas = document.getElementById('processingTimeChart');
+    if (!canvas) {
+      console.error('[LHDN Analytics] Chart canvas not found for selector insertion');
+      return;
+    }
+
+    canvas.insertAdjacentHTML('beforebegin', selectorHTML);
+
+    // Add event listeners with error handling
+    setTimeout(() => {
+      document.querySelectorAll('input[name="chartType"]').forEach(radio => {
+        radio.addEventListener('change', (e) => {
+          if (e.target.checked) {
+            console.log(`[LHDN Analytics] Chart type button clicked: ${e.target.value} (current: ${this.currentChartType})`);
+
+            // Clear all chart type active states first
+            document.querySelectorAll('input[name="chartType"]').forEach(r => {
+              const label = document.querySelector(`label[for="${r.id}"]`);
+              if (label) label.classList.remove('active');
+            });
+
+            // Add active state to selected option
+            const selectedLabel = document.querySelector(`label[for="${e.target.id}"]`);
+            if (selectedLabel) selectedLabel.classList.add('active');
+
+            this.debugChartState('Before Switch');
+            this.switchChartType(e.target.value);
+          }
+        });
+      });
+    }, 100);
+  }
+
+  switchTimeRange(newTimeframe) {
+    if (this.currentTimeframe === newTimeframe) return;
+    console.log(`[LHDN Analytics] Switching timeframe from ${this.currentTimeframe} to ${newTimeframe}`);
+    this.currentTimeframe = newTimeframe;
+    this.updateWithTableData();
+  }
+
+  switchChartType(newType) {
+    if (this.currentChartType === newType) return;
+    console.log(`[LHDN Analytics] Switching chart type from ${this.currentChartType} to ${newType}`);
+
+    const oldType = this.currentChartType;
+    this.currentChartType = newType;
+
+    // Store current timeframe before any changes
+    const preservedTimeframe = this.currentTimeframe;
+
+    console.log(`[LHDN Analytics] Preserving timeframe: ${preservedTimeframe}`);
+
+    // Completely reset the chart and canvas
+    this.resetChartCanvas();
+
+    // Restore preserved timeframe
+    this.currentTimeframe = preservedTimeframe;
+
+    console.log(`[LHDN Analytics] Successfully reset chart, switching from ${oldType} to ${newType}`);
+
+    // Initialize new chart with delay to ensure DOM is ready
+    setTimeout(() => {
+      try {
+        console.log(`[LHDN Analytics] Initializing ${newType} chart...`);
+        this.initializeChart();
+
+        // Verify chart was created successfully
+        if (!this.chart) {
+          console.error(`[LHDN Analytics] Failed to create ${newType} chart`);
+          this.showChartError();
+          return;
+        }
+
+        console.log(`[LHDN Analytics] Chart initialized successfully, type: ${this.chart.config?.type}`);
+
+        // Always fetch fresh data when switching chart types to ensure data appears
+        console.log(`[LHDN Analytics] Fetching fresh data for ${newType} chart`);
+
+        // Add a small delay before updating data to ensure chart is fully ready
+        setTimeout(() => {
+          this.updateWithTableData();
+
+          // Ensure filter states are properly applied
+          this.applyDefaultSelections();
+
+          // Add verification that data was loaded successfully
+          setTimeout(() => {
+            if (this.chart && this.chart.data && this.chart.data.datasets[0]) {
+              const chartData = this.chart.data.datasets[0].data;
+              const hasData = chartData && chartData.some(val => val > 0);
+
+              if (!hasData && this.processingData && this.processingData.length > 0) {
+                console.warn('[LHDN Analytics] Chart appears empty despite having data, forcing update...');
+                this.updateChart();
+              }
+            }
+
+            this.debugChartState('After Switch with Fresh Data');
+          }, 200);
+        }, 100);
+
+      } catch (error) {
+        console.error('[LHDN Analytics] Error initializing new chart:', error);
+        this.showChartError();
+      }
+    }, 200); // Longer delay to ensure proper cleanup
+  }
+
+  initializeChart() {
+    const canvas = document.getElementById('processingTimeChart');
+    if (!canvas) {
+      console.error('[LHDN Analytics] Chart canvas not found');
+      return;
+    }
+
+    try {
+      // Ensure canvas is properly sized
+      const container = canvas.parentElement;
+      if (container) {
+        const { width, height } = container.getBoundingClientRect();
+        canvas.style.width = '100%';
+        canvas.style.height = '200px';
+        canvas.style.maxHeight = '200px';
+      }
+
+      // Clear any existing center text for gauge charts
+      if (this.currentChartType !== 'gauge') {
+        const centerText = canvas.parentElement?.querySelector('.gauge-center-text');
+        if (centerText) {
+          centerText.remove();
+        }
+      }
+
+      // Clear canvas context completely
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const config = this.getChartConfig();
+      console.log(`[LHDN Analytics] Initializing ${this.currentChartType} chart with config:`, config.type);
+
+      this.chart = new Chart(ctx, config);
+      console.log(`[LHDN Analytics] Successfully initialized ${this.currentChartType} chart`);
+
+      // Add chart type indicator for debugging
+      this.chart._chartType = this.currentChartType;
+
+    } catch (error) {
+      console.error('[LHDN Analytics] Error initializing chart:', error);
+      this.showChartError();
+    }
+  }
+
+  showChartError() {
+    const canvas = document.getElementById('processingTimeChart');
+    if (canvas && canvas.parentElement) {
+      canvas.parentElement.innerHTML = `
+        <div class="chart-error text-center p-4">
+          <i class="bi bi-exclamation-triangle text-warning fs-1"></i>
+          <h6 class="mt-2">Chart Unavailable</h6>
+          <p class="text-muted mb-0">Unable to load chart. Please refresh the page.</p>
+        </div>
+      `;
+    }
+  }
+
+  getChartConfig() {
+    const isToday = this.currentTimeframe === 'today';
+
+    switch (this.currentChartType) {
+      case 'donut':
+        return this.getDonutConfig(isToday);
+      // Temporarily disabled chart types
+      // case 'gauge':
+      //   return this.getGaugeConfig();
+      // case 'timeline':
+      //   return this.getTimelineConfig();
+      case 'bar':
+      default:
+        return this.getBarConfig(isToday);
+    }
+  }
+
+  getBarConfig(isToday) {
+    const labels = isToday
+      ? ['<1sec', '<1min', '<30min', '>1hr']
+      : ['< 1h', '1-2h', '2-4h', '4-8h', '8-24h', '> 24h'];
+
+    return {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Number of Invoices',
+          data: new Array(labels.length).fill(0),
+          backgroundColor: isToday ? [
+            'rgba(25, 135, 84, 0.8)',
+            'rgba(13, 110, 253, 0.8)',
+            'rgba(255, 193, 7, 0.8)',
+            'rgba(220, 53, 69, 0.8)'
+          ] : [
+            'rgba(25, 135, 84, 0.8)',
+            'rgba(13, 110, 253, 0.8)',
+            'rgba(255, 193, 7, 0.8)',
+            'rgba(255, 131, 7, 0.8)',
+            'rgba(220, 53, 69, 0.8)',
+            'rgba(108, 117, 125, 0.8)'
+          ],
+          borderColor: isToday ? [
+            '#198754', '#0d6efd', '#ffc107', '#dc3545'
+          ] : [
+            '#198754', '#0d6efd', '#ffc107', '#ff8307', '#dc3545', '#6c757d'
+          ],
+          borderWidth: 2,
+          borderRadius: 6
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: 'rgba(0, 0, 0, 0.9)',
+            callbacks: {
+              title: (context) => `Processing Time: ${context[0].label}`,
+              label: (context) => {
+                const count = context.parsed.y;
+                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                // const percentage = total > 0 ? ((count / total) * 100).toFixed(1) : 0;
+                return [`Invoices: ${count}`];
+              }
+            }
+          }
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: {
+            beginAtZero: true,
+            ticks: {
+              stepSize: 1,
+              callback: (value) => Number.isInteger(value) ? value : ''
+            }
+          }
+        }
+      }
+    };
+  }
+
+  getDonutConfig(isToday) {
+    const labels = isToday
+      ? ['<1sec', '<1min', '<30min', '>1hr']
+      : ['< 1h', '1-2h', '2-4h', '4-8h', '8-24h', '> 24h'];
+
+    return {
+      type: 'doughnut',
+      data: {
+        labels: labels,
+        datasets: [{
+          data: new Array(labels.length).fill(0),
+          backgroundColor: isToday ? [
+            '#198754', '#0d6efd', '#ffc107', '#dc3545'
+          ] : [
+            '#198754', '#0d6efd', '#ffc107', '#ff8307', '#dc3545', '#6c757d'
+          ],
+          borderWidth: 3
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '60%',
+        plugins: {
+          legend: { position: 'bottom' }
+        }
+      }
+    };
+  }
+
+  getGaugeConfig() {
+    return {
+      type: 'doughnut',
+      data: {
+        labels: ['Processing Time', 'Remaining'],
+        datasets: [{
+          data: [0, 24],
+          backgroundColor: [
+            'rgba(13, 110, 253, 0.8)',
+            'rgba(233, 236, 239, 0.3)'
+          ],
+          borderColor: [
+            '#0d6efd',
+            '#e9ecef'
+          ],
+          borderWidth: 2,
+          circumference: 180,
+          rotation: 270,
+          cutout: '75%'
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: 'rgba(0, 0, 0, 0.9)',
+            callbacks: {
+              title: () => 'Average Processing Time',
+              label: (context) => {
+                if (context.dataIndex === 0) {
+                  const hours = context.parsed;
+                  if (hours < 1) {
+                    const minutes = Math.round(hours * 60);
+                    return `${minutes} minutes`;
+                  }
+                  return `${hours.toFixed(1)} hours`;
+                }
+                return '';
+              }
+            }
+          }
+        },
+        elements: {
+          arc: {
+            borderWidth: 0
+          }
+        }
+      }
+    };
+  }
+
+  getTimelineConfig() {
+    return {
+      type: 'scatter',
+      data: {
+        datasets: [{
+          label: 'Processing Timeline',
+          data: [],
+          backgroundColor: '#0d6efd',
+          borderColor: '#ffffff',
+          borderWidth: 2,
+          pointRadius: 6
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: {
+            type: 'linear',
+            title: { display: true, text: 'Invoice Sequence' }
+          },
+          y: {
+            beginAtZero: true,
+            title: { display: true, text: 'Processing Time (Hours)' }
+          }
+        }
+      }
+    };
+  }
+
+  updateWithTableData() {
+    try {
+      console.log(`[LHDN Analytics] updateWithTableData called - chartType: ${this.currentChartType}, timeframe: ${this.currentTimeframe}`);
+
+      // Try multiple ways to get table data
+      let allData = [];
+
+      // Method 1: Try DataTable API
+      const table = $("#invoiceTable").DataTable();
+      if (table && table.rows) {
+        allData = table.rows().data().toArray();
+        console.log(`[LHDN Analytics] Got ${allData.length} records from DataTable API`);
+      }
+
+      // Method 2: Try InvoiceTableManager if DataTable fails
+      if (allData.length === 0) {
+        const manager = window.InvoiceTableManager?.getInstance();
+        if (manager && manager.table && manager.table.rows) {
+          allData = manager.table.rows().data().toArray();
+          console.log(`[LHDN Analytics] Got ${allData.length} records from InvoiceTableManager`);
+        }
+      }
+
+      // Method 3: Try cached data if both fail
+      if (allData.length === 0) {
+        const cachedData = localStorage.getItem('inboundTableData');
+        if (cachedData) {
+          allData = JSON.parse(cachedData);
+          console.log(`[LHDN Analytics] Got ${allData.length} records from cache`);
+        }
+      }
+
+      if (allData.length === 0) {
+        console.warn('[LHDN Analytics] No data available from any source');
+        this.showEmptyChart();
+        this.showFallbackStatistics();
+        return;
+      }
+
+      console.log(`[LHDN Analytics] Processing ${allData.length} records from table`);
+
+      this.processingData = this.processTableData(allData);
+      console.log(`[LHDN Analytics] Found ${this.processingData.length} valid processing records`);
+
+      // Log sample of processing data for debugging
+      if (this.processingData.length > 0) {
+        console.log(`[LHDN Analytics] Sample processing data:`, this.processingData.slice(0, 3));
+      }
+
+      this.updateChart();
+      this.updateStatistics();
+    } catch (error) {
+      console.error('[LHDN Analytics] Error updating with table data:', error);
+      this.showEmptyChart();
+      this.showFallbackStatistics();
+    }
+  }
+
+  processTableData(data) {
+    const validRecords = data.filter(record => {
+      return record.status === 'Valid' &&
+             record.dateTimeReceived &&
+             record.dateTimeValidated &&
+             record.dateTimeReceived !== '' &&
+             record.dateTimeValidated !== '';
+    });
+
+    console.log(`[LHDN Analytics] Found ${validRecords.length} valid records with timestamps`);
+
+    const processingTimes = validRecords.map(record => {
+      try {
+        const receivedTime = this.parseTimestamp(record.dateTimeReceived);
+        const validatedTime = this.parseTimestamp(record.dateTimeValidated);
+
+        if (!receivedTime || !validatedTime) {
+          console.warn(`[LHDN Analytics] Invalid timestamps for ${record.uuid}`);
+          return null;
+        }
+
+        // Filter by timeframe
+        if (this.currentTimeframe === 'today') {
+          const today = new Date();
+          const validatedDate = new Date(validatedTime);
+          if (validatedDate.toDateString() !== today.toDateString()) {
+            return null;
+          }
+        }
+
+        const processingMs = validatedTime.getTime() - receivedTime.getTime();
+        if (processingMs < 0 || processingMs > 7 * 24 * 60 * 60 * 1000) { // > 1 week
+          console.warn(`[LHDN Analytics] Invalid processing time: ${processingMs}ms`);
+          return null;
+        }
+
+        return {
+          uuid: record.uuid,
+          processingTimeMs: processingMs,
+          processingTimeHours: processingMs / (1000 * 60 * 60),
+          processingTimeMinutes: processingMs / (1000 * 60),
+          validationTime: validatedTime
+        };
+      } catch (error) {
+        console.error(`[LHDN Analytics] Error processing record ${record.uuid}:`, error);
+        return null;
+      }
+    }).filter(Boolean);
+
+    console.log(`[LHDN Analytics] Processed ${processingTimes.length} valid processing times`);
+    return processingTimes;
+  }
+
+  parseTimestamp(timestamp) {
+    if (!timestamp || timestamp === '' || timestamp === 'null') return null;
+
+    try {
+      const date = new Date(timestamp);
+      return isNaN(date.getTime()) ? null : date;
+    } catch (error) {
+      console.warn(`[LHDN Analytics] Could not parse timestamp: ${timestamp}`);
+      return null;
+    }
+  }
+
+  updateChart() {
+    console.log(`[LHDN Analytics] updateChart called - chartType: ${this.currentChartType}, hasChart: ${!!this.chart}, dataLength: ${this.processingData?.length || 0}`);
+
+    // Validate chart exists and is properly configured
+    if (!this.chart) {
+      console.warn('[LHDN Analytics] Chart not initialized, attempting to reinitialize');
+      this.initializeChart();
+      if (!this.chart) {
+        console.error('[LHDN Analytics] Failed to reinitialize chart');
+        this.showEmptyChart();
+        return;
+      }
+    }
+
+    // Validate chart configuration
+    if (!this.chart.config || !this.chart.data || !this.chart.data.datasets || !this.chart.data.datasets[0]) {
+      console.warn('[LHDN Analytics] Chart configuration invalid, reinitializing...');
+      this.chart.destroy();
+      this.chart = null;
+      this.initializeChart();
+      if (!this.chart) {
+        console.error('[LHDN Analytics] Failed to reinitialize chart after validation failure');
+        this.showEmptyChart();
+        return;
+      }
+    }
+
+    // Validate chart configuration matches current settings
+    const expectedType = this.currentChartType === 'bar' ? 'bar' : 'doughnut';
+    const actualType = this.chart.config?.type;
+
+    if (actualType && actualType !== expectedType) {
+      console.warn(`[LHDN Analytics] Chart type mismatch: expected ${expectedType}, got ${actualType}. Reinitializing...`);
+      this.chart.destroy();
+      this.chart = null;
+      this.initializeChart();
+      if (!this.chart) {
+        console.error('[LHDN Analytics] Failed to reinitialize chart after type mismatch');
+        this.showEmptyChart();
+        return;
+      }
+    }
+
+    if (!this.processingData || this.processingData.length === 0) {
+      console.log('[LHDN Analytics] No processing data available, showing empty chart');
+      this.showEmptyChart();
+      return;
+    }
+
+    console.log(`[LHDN Analytics] Updating ${this.currentChartType} chart with ${this.processingData.length} records`);
+
+    try {
+      switch (this.currentChartType) {
+        case 'donut':
+          this.updateDonutChart();
+          break;
+        case 'bar':
+        default:
+          this.updateBarChart();
+          break;
+      }
+
+      console.log(`[LHDN Analytics] Successfully updated ${this.currentChartType} chart`);
+
+    } catch (error) {
+      console.error('[LHDN Analytics] Error updating chart:', error);
+      this.showEmptyChart();
+    }
+  }
+
+  updateBarChart() {
+    console.log(`[LHDN Analytics] updateBarChart called - hasChart: ${!!this.chart}, timeframe: ${this.currentTimeframe}`);
+
+    if (!this.chart || !this.chart.data || !this.chart.data.datasets || !this.chart.data.datasets[0]) {
+      console.warn('[LHDN Analytics] Bar chart not properly initialized');
+      return;
+    }
+
+    const isToday = this.currentTimeframe === 'today';
+    let buckets;
+
+    if (isToday) {
+      buckets = [0, 0, 0, 0]; // <1sec, <1min, <30min, >1hr
+      this.processingData.forEach(item => {
+        const seconds = item.processingTimeMs / 1000;
+        const minutes = item.processingTimeMinutes;
+
+        if (seconds < 1) buckets[0]++;
+        else if (seconds < 60) buckets[1]++;
+        else if (minutes < 30) buckets[2]++;
+        else buckets[3]++;
+      });
+    } else {
+      buckets = [0, 0, 0, 0, 0, 0]; // < 1h, 1-2h, 2-4h, 4-8h, 8-24h, > 24h
+      this.processingData.forEach(item => {
+        const hours = item.processingTimeHours;
+        if (hours < 1) buckets[0]++;
+        else if (hours < 2) buckets[1]++;
+        else if (hours < 4) buckets[2]++;
+        else if (hours < 8) buckets[3]++;
+        else if (hours < 24) buckets[4]++;
+        else buckets[5]++;
+      });
+    }
+
+    console.log(`[LHDN Analytics] Updating bar chart with buckets:`, buckets, `Total: ${buckets.reduce((a, b) => a + b, 0)}`);
+
+    try {
+      // Ensure the chart data structure is correct
+      if (!this.chart.data.datasets[0].data) {
+        this.chart.data.datasets[0].data = [];
+      }
+
+      this.chart.data.datasets[0].data = buckets;
+      this.chart.update('active');
+
+      // Verify the update was successful
+      setTimeout(() => {
+        const currentData = this.chart.data.datasets[0].data;
+        console.log(`[LHDN Analytics] Bar chart updated successfully. Current data:`, currentData);
+        this.debugChartState('After Bar Update');
+      }, 100);
+    } catch (error) {
+      console.error('[LHDN Analytics] Error updating bar chart:', error);
+      this.showEmptyChart();
+    }
+  }
+
+  updateDonutChart() {
+    if (!this.chart || !this.chart.data || !this.chart.data.datasets[0]) {
+      console.warn('[LHDN Analytics] Donut chart not properly initialized');
+      return;
+    }
+
+    const isToday = this.currentTimeframe === 'today';
+    let buckets;
+
+    if (isToday) {
+      buckets = [0, 0, 0, 0]; // <1sec, <1min, <30min, >1hr
+      this.processingData.forEach(item => {
+        const seconds = item.processingTimeMs / 1000;
+        const minutes = item.processingTimeMinutes;
+
+        if (seconds < 1) buckets[0]++;
+        else if (seconds < 60) buckets[1]++;
+        else if (minutes < 30) buckets[2]++;
+        else buckets[3]++;
+      });
+    } else {
+      buckets = [0, 0, 0, 0, 0, 0]; // < 1h, 1-2h, 2-4h, 4-8h, 8-24h, > 24h
+      this.processingData.forEach(item => {
+        const hours = item.processingTimeHours;
+        if (hours < 1) buckets[0]++;
+        else if (hours < 2) buckets[1]++;
+        else if (hours < 4) buckets[2]++;
+        else if (hours < 8) buckets[3]++;
+        else if (hours < 24) buckets[4]++;
+        else buckets[5]++;
+      });
+    }
+
+    console.log(`[LHDN Analytics] Updating donut chart with buckets:`, buckets);
+
+    try {
+      // Update chart data
+      this.chart.data.datasets[0].data = buckets;
+
+      // Update chart with animation
+      this.chart.update('active');
+
+      // Verify the update was successful
+      setTimeout(() => {
+        this.debugChartState('After Donut Update');
+      }, 100);
+    } catch (error) {
+      console.error('[LHDN Analytics] Error updating donut chart:', error);
+      // Try to reinitialize if update fails
+      this.chart.destroy();
+      this.chart = null;
+      this.initializeChart();
+      if (this.chart) {
+        this.chart.data.datasets[0].data = buckets;
+        this.chart.update('active');
+      }
+    }
+  }
+
+  updateGaugeChart() {
+    try {
+      if (!this.chart || !this.chart.data || !this.chart.data.datasets[0]) {
+        console.warn('[LHDN Analytics] Gauge chart not properly initialized');
+        return;
+      }
+
+      if (!this.processingData || this.processingData.length === 0) {
+        // Show empty gauge
+        this.chart.data.datasets[0].data = [0, 24];
+        this.chart.update('none');
+        return;
+      }
+
+      const avgHours = this.processingData.reduce((sum, item) => sum + item.processingTimeHours, 0) / this.processingData.length;
+      const maxHours = 24;
+      const remainingHours = Math.max(0, maxHours - avgHours);
+
+      console.log(`[LHDN Analytics] Updating gauge: avg=${avgHours.toFixed(2)}h, remaining=${remainingHours.toFixed(2)}h`);
+
+      this.chart.data.datasets[0].data = [avgHours, remainingHours];
+      this.chart.update('none');
+
+      // Update gauge center text if element exists
+      this.updateGaugeCenterText(avgHours);
+
+    } catch (error) {
+      console.error('[LHDN Analytics] Error updating gauge chart:', error);
+    }
+  }
+
+  updateGaugeCenterText(avgHours) {
+    // Add center text display for gauge
+    const canvas = document.getElementById('processingTimeChart');
+    if (canvas && canvas.parentElement) {
+      let centerText = canvas.parentElement.querySelector('.gauge-center-text');
+      if (!centerText) {
+        centerText = document.createElement('div');
+        centerText.className = 'gauge-center-text';
+        centerText.style.cssText = `
+          position: absolute;
+          top: 60%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          text-align: center;
+          pointer-events: none;
+          z-index: 10;
+        `;
+        canvas.parentElement.style.position = 'relative';
+        canvas.parentElement.appendChild(centerText);
+      }
+
+      const displayTime = avgHours < 1 ?
+        `${Math.round(avgHours * 60)}min` :
+        `${avgHours.toFixed(1)}h`;
+
+      centerText.innerHTML = `
+        <div style="font-size: 1.2rem; font-weight: bold; color: #0d6efd;">${displayTime}</div>
+        <div style="font-size: 0.8rem; color: #6c757d;">Avg Time</div>
+      `;
+    }
+  }
+
+  updateTimelineChart() {
+    const data = this.processingData.map((item, index) => ({
+      x: index + 1,
+      y: item.processingTimeHours
+    }));
+    this.chart.data.datasets[0].data = data;
+    this.chart.update('none');
+  }
+
+  showEmptyChart() {
+    if (!this.chart) return;
+
+    const emptyData = this.currentTimeframe === 'today' ? [0, 0, 0, 0] : [0, 0, 0, 0, 0, 0];
+    this.chart.data.datasets[0].data = emptyData;
+    this.chart.update('none');
+  }
+
+  updateStatistics() {
+    if (this.processingData.length === 0) {
+      this.updateElement('avgProcessingHours', `No data ${this.currentTimeframe === 'today' ? 'today' : 'this week'}`);
+      this.updateElement('fastestProcessing', `No data ${this.currentTimeframe === 'today' ? 'today' : 'this week'}`);
+      this.updateElement('slowestProcessing', `No data ${this.currentTimeframe === 'today' ? 'today' : 'this week'}`);
+      return;
+    }
+
+    const times = this.processingData.map(item => item.processingTimeMinutes);
+    const avgMinutes = times.reduce((a, b) => a + b, 0) / times.length;
+    const fastestMinutes = Math.min(...times);
+    const slowestMinutes = Math.max(...times);
+
+    this.updateElement('avgProcessingHours', this.formatTime(avgMinutes));
+    this.updateElement('fastestProcessing', this.formatTime(fastestMinutes));
+    this.updateElement('slowestProcessing', this.formatTime(slowestMinutes));
+  }
+
+  formatTime(minutes) {
+    if (this.currentTimeframe === 'today') {
+      const seconds = minutes * 60;
+      if (seconds < 1) return '<1sec';
+      if (seconds < 60) return '<1min';
+      if (minutes < 30) return '<30min';
+      return '>1hr';
+    }
+
+    if (minutes < 1) return '<1m';
+    if (minutes < 60) return Math.round(minutes) + 'm';
+
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = Math.round(minutes % 60);
+    return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+  }
+
+  updateElement(id, value) {
+    const element = document.getElementById(id);
+    if (element) {
+      element.textContent = value;
+      element.classList.add('updated');
+      setTimeout(() => element.classList.remove('updated'), 1000);
+    }
+  }
+}
+
+// Add CSS styles for LHDN Processing Analytics
+if (!document.getElementById('lhdn-analytics-styles')) {
+  const style = document.createElement('style');
+  style.id = 'lhdn-analytics-styles';
+  style.textContent = `
+    /* LHDN Processing Analytics Styles */
+    .time-range-filter {
+      background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+      border: 1px solid #dee2e6;
+      border-radius: 12px;
+      padding: 12px 16px;
+      margin-bottom: 1rem;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    }
+
+    .time-range-filter h6 {
+      color: #495057;
+      font-weight: 600;
+      margin-bottom: 0;
+    }
+
+    .time-range-filter .btn-group {
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .time-range-filter .btn {
+      border: none;
+      padding: 6px 12px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+
+    .time-range-filter .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 8px rgba(13, 110, 253, 0.2);
+    }
+
+    .time-range-filter .btn-check:checked + .btn,
+    .time-range-filter .btn.active {
+      background: linear-gradient(135deg, #0d6efd, #4dabf7) !important;
+      color: white !important;
+      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+      border-color: #0d6efd !important;
+    }
+
+    .chart-type-selector {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 1rem;
+    }
+
+    .chart-type-selector .btn-group {
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .chart-type-selector .btn {
+      border: none;
+      padding: 8px 12px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+
+    .chart-type-selector .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 8px rgba(13, 110, 253, 0.2);
+    }
+
+    .chart-type-selector .btn-check:checked + .btn,
+    .chart-type-selector .btn.active {
+      background: linear-gradient(135deg, #0d6efd, #4dabf7) !important;
+      color: white !important;
+      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+      border-color: #0d6efd !important;
+    }
+
+    .chart-error {
+      min-height: 150px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background: #f8f9fa;
+      border-radius: 8px;
+      border: 2px dashed #dee2e6;
+    }
+
+    /* Chart container sizing */
+    #processingTimeChart {
+      max-height: 200px !important;
+      height: 200px !important;
+    }
+
+    .gauge-center-text {
+      position: absolute;
+      top: 60%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      pointer-events: none;
+      z-index: 10;
+      font-family: inherit;
+    }
+
+    .gauge-center-text div:first-child {
+      font-size: 1.2rem;
+      font-weight: bold;
+      color: #0d6efd;
+      margin-bottom: 2px;
+    }
+
+    .gauge-center-text div:last-child {
+      font-size: 0.8rem;
+      color: #6c757d;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .updated {
+      animation: highlight 0.6s ease-out;
+    }
+
+    @keyframes highlight {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.05); color: #0d6efd; }
+      100% { transform: scale(1); }
+    }
+
+    @media (max-width: 768px) {
+      .time-range-filter {
+        padding: 8px 12px;
+      }
+
+      .time-range-filter .d-flex {
+        flex-direction: column;
+        gap: 8px;
+        align-items: flex-start !important;
+      }
+
+      .time-range-filter .btn,
+      .chart-type-selector .btn {
+        padding: 6px 8px;
+        font-size: 0.7rem;
+      }
+
+      .time-range-filter .btn i,
+      .chart-type-selector .btn i {
+        display: none;
+      }
+
+      .chart-type-selector .btn-group {
+        width: 100%;
+      }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 function updateCharts() {
   try {
     const table = $("#invoiceTable").DataTable();
@@ -5807,6 +7601,11 @@ function updateCharts() {
 
     // Get all data from the table
     const allData = table.rows().data().toArray();
+
+    // Update LHDN Processing Analytics
+    if (window.lhdnProcessingAnalytics) {
+      window.lhdnProcessingAnalytics.updateWithTableData();
+    }
 
     // Status Distribution Chart Update
     const statusCounts = {

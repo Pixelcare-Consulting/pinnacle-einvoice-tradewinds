@@ -409,10 +409,20 @@ class FileUploadManager {
     }
 
     async handleProcessFile() {
+        console.log('🔍 [FRONTEND DEBUG] handleProcessFile called');
+
         if (!this.selectedFile) {
+            console.log('🔍 [FRONTEND DEBUG] No file selected for processing');
             this.showError('Please select a file to upload');
             return;
         }
+
+        console.log('🔍 [FRONTEND DEBUG] Starting file processing for:', {
+            name: this.selectedFile.name,
+            size: this.selectedFile.size,
+            type: this.selectedFile.type,
+            lastModified: this.selectedFile.lastModified
+        });
 
         try {
             // Hide the upload modal first and clean up backdrop
@@ -426,14 +436,38 @@ class FileUploadManager {
                 this.cleanupModalArtifacts();
             }, 100);
 
-            // Show professional loading modal
-            this.showEnhancedLoadingModal();
+            // Show professional loading modal for pre-validation
+            this.showEnhancedLoadingModal('Pre-validating Excel file...');
 
             // Disable the process button to prevent double submission
             if (this.processFileBtn) {
                 this.processFileBtn.disabled = true;
-                this.processFileBtn.innerHTML = '<i class="spinner-border spinner-border-sm me-2"></i>Processing...';
+                this.processFileBtn.innerHTML = '<i class="spinner-border spinner-border-sm me-2"></i>Validating...';
             }
+
+            // STEP 1: Pre-upload validation
+            console.log('Starting pre-upload validation...');
+            const preValidationResult = await this.performPreUploadValidation(this.selectedFile);
+
+            if (!preValidationResult.isValid) {
+                // Hide loading modal and show validation error modal
+                this.hideEnhancedLoadingModal();
+                this.showPreValidationErrorModal(preValidationResult);
+                return; // Stop processing - validation failed
+            }
+
+            // Show success message for passed validation
+            this.hideEnhancedLoadingModal();
+            const shouldContinue = await this.showPreValidationSuccessModal(preValidationResult);
+
+            if (!shouldContinue) {
+                // User cancelled upload after validation
+                console.log('User cancelled upload after successful validation');
+                return;
+            }
+
+            // Show loading modal again for actual upload
+            this.showEnhancedLoadingModal('Uploading file to server...');
 
             // Create FormData
             const formData = new FormData();
@@ -750,6 +784,8 @@ class FileUploadManager {
         this.factInterval = setInterval(updateFunFact, 5000);
     }
 
+
+
     // Legacy method - now using startLoadingAnimation instead
     startProgressSimulation() {
         // This method is kept for compatibility but now delegates to the new animation
@@ -935,10 +971,15 @@ class FileUploadManager {
 
     async handlePreviewFile() {
         console.log('handlePreviewFile called');
-        console.log('Selected file:', this.selectedFile);
+        console.log('🔍 [FRONTEND DEBUG] Selected file:', {
+            name: this.selectedFile?.name,
+            size: this.selectedFile?.size,
+            type: this.selectedFile?.type,
+            lastModified: this.selectedFile?.lastModified
+        });
 
         if (!this.selectedFile) {
-            console.log('No file selected');
+            console.log('🔍 [FRONTEND DEBUG] No file selected');
             this.showError('Please select a file to preview');
             return;
         }
@@ -954,15 +995,32 @@ class FileUploadManager {
             const formData = new FormData();
             formData.append('file', this.selectedFile);
 
+            console.log('🔍 [FRONTEND DEBUG] Sending preview request to API');
+
             // Call preview API
             const response = await fetch('/api/outbound-files-manual/preview-excel', {
                 method: 'POST',
                 body: formData
             });
 
+            console.log('🔍 [FRONTEND DEBUG] Preview API response:', {
+                status: response.status,
+                statusText: response.statusText,
+                ok: response.ok
+            });
+
             const result = await response.json();
 
+            console.log('🔍 [FRONTEND DEBUG] Preview API result:', {
+                success: result.success,
+                hasData: !!result.data,
+                dataType: typeof result.data,
+                dataKeys: result.data ? Object.keys(result.data) : [],
+                error: result.error
+            });
+
             if (result.success) {
+                console.log('🔍 [FRONTEND DEBUG] Preview data received:', result.data);
                 this.displayPreview(result.data);
             } else {
                 throw new Error(result.error || 'Preview failed');
@@ -981,13 +1039,25 @@ class FileUploadManager {
     }
 
     displayPreview(data) {
+        console.log('🔍 [FRONTEND DEBUG] displayPreview called with data:', {
+            hasData: !!data,
+            dataType: typeof data,
+            dataKeys: data ? Object.keys(data) : [],
+            hasDocuments: !!(data && data.documents),
+            documentsCount: data?.documents?.length || 0,
+            hasPreview: !!(data && data.preview),
+            previewType: data?.preview ? typeof data.preview : null
+        });
+
         // Store the full data for later use
         this.fullPreviewData = data;
+
+        console.log('🔍 [FRONTEND DEBUG] Stored fullPreviewData:', this.fullPreviewData);
 
         // Create and show custom preview dialog
         this.showCustomPreviewDialog(data);
 
-        console.log('Preview displayed successfully in custom dialog');
+        console.log('🔍 [FRONTEND DEBUG] Preview displayed successfully in custom dialog');
     }
 
     showCustomPreviewDialog(data) {
@@ -2148,6 +2218,816 @@ class FileUploadManager {
         } else {
             console.log(`${title}: ${details}`);
         }
+    }
+
+    // Pre-upload validation function
+    async performPreUploadValidation(file) {
+        try {
+            console.log('Starting pre-upload validation for file:', file.name);
+
+            // Create FormData for validation endpoint
+            const formData = new FormData();
+            formData.append('excelFile', file);
+            formData.append('validateOnly', 'true'); // Flag to indicate validation-only mode
+
+            // Call validation endpoint
+            const response = await fetch('/api/outbound-files-manual/validate-excel', {
+                method: 'POST',
+                body: formData,
+                credentials: 'same-origin'
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                throw new Error(result.error || 'Validation request failed');
+            }
+
+            return result;
+
+        } catch (error) {
+            console.error('Pre-upload validation error:', error);
+            return {
+                isValid: false,
+                error: error.message || 'Validation failed',
+                details: [],
+                totalDocuments: 0,
+                failedDocuments: 0
+            };
+        }
+    }
+
+    // Show pre-validation error modal using custom data quality modal
+    showPreValidationErrorModal(validationResult) {
+        console.log('🎯 showPreValidationErrorModal called with:', validationResult);
+
+        // Transform the validation result to match the expected format for our custom modal
+        const transformedError = this.transformValidationResultToErrorFormat(validationResult);
+
+        // Use our own custom validation error modal instead of relying on outbound-excel.js
+        console.log('✅ Using custom validation error modal');
+        this.createPreValidationErrorModal(transformedError);
+    }
+
+    // Create pre-validation error modal (similar to the bulk submission validation modal)
+    createPreValidationErrorModal(errorData) {
+        // Store error data globally for access by global functions
+        window.currentValidationErrorData = errorData;
+
+        const { validationErrors = [] } = errorData;
+
+        // Count unique invoices that have errors, not total error count
+        const uniqueInvoices = new Set();
+        validationErrors.forEach(error => {
+            if (error.invoiceNumber) {
+                uniqueInvoices.add(error.invoiceNumber);
+            }
+        });
+
+        const failedDocuments = uniqueInvoices.size;
+        const totalErrorCount = validationErrors.length;
+        const totalDocuments = failedDocuments; // For pre-validation, we only know about failed ones
+
+        // Add styles for the error modal (reuse the same styles)
+        const errorModalStyles = `
+            <style id="preValidationErrorModalStyles">
+                /* Error Modal Theme */
+                :root{ --error-brand:#dc2626; --error-brand-800:#b91c1c; --error-ink:#1f2937 }
+
+                /* Modal Backdrop */
+                .pre-validation-error-backdrop{ position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.6); backdrop-filter:blur(4px); z-index:9999; display:flex; align-items:center; justify-content:center; padding:20px; box-sizing:border-box; overflow-y:auto }
+                .pre-error-card{ max-width:800px; width:100%; max-height:85vh; background:#fff; border-radius:16px; box-shadow:0 4px 12px rgba(0,0,0,.15); display:flex; flex-direction:column; margin:auto; overflow:hidden }
+
+                /* Header */
+                .pre-error-header{ display:flex; align-items:center; gap:12px; padding:16px 20px; background:linear-gradient(180deg,var(--error-brand),var(--error-brand-800)); color:#fff; box-shadow:inset 0 -1px rgba(255,255,255,.05) }
+                .pre-error-icon{ width:36px; height:36px; border-radius:10px; display:grid; place-items:center; background:rgba(255,255,255,.15); border:1px solid rgba(255,255,255,.2) }
+                .pre-error-title{ font-size:18px; font-weight:700; letter-spacing:.3px; color:#fff; margin:0 }
+                .pre-error-sub{ font-size:13px; color:#fecaca; margin:2px 0 0 0; opacity:0.9 }
+
+                /* Body */
+                .pre-error-body{ padding:24px; flex:1; overflow-y:auto; }
+                .pre-error-footer{ display:flex; justify-content:center; gap:12px; padding:16px 24px 24px; flex-shrink:0; background:#fff; border-top:1px solid #f3f4f6; }
+
+                /* Hero Section */
+                .pre-error-hero{ display:flex; flex-direction:column; align-items:center; justify-content:center; margin:0 0 20px; text-align:center }
+                .pre-error-ring{ display:grid; place-items:center; width:80px; height:80px; border-radius:50%; background:radial-gradient(60% 60% at 50% 40%, rgba(220,38,38,.15), rgba(220,38,38,0) 70%); position:relative; margin:0 auto }
+                .pre-error-ring::before{ content:''; position:absolute; inset:0; border-radius:50%; border:3px solid var(--error-brand); box-shadow:0 4px 20px rgba(220,38,38,.2) }
+                .pre-error-x{ fill:none; stroke:var(--error-brand); stroke-width:4; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:60; stroke-dashoffset:60; animation: pre-stroke .6s ease forwards .2s }
+
+                /* Badge and Messages */
+                .pre-error-badge{ display:inline-flex; align-items:center; gap:8px; font-weight:600; color:#991b1b; background:#fee2e2; border:1px solid #fca5a5; padding:8px 16px; border-radius:999px; margin:0 auto 16px; font-size:14px; max-width:fit-content }
+                .pre-error-badge i{ margin-right:4px; font-size:14px }
+                .pre-error-msg{ margin:0 0 20px; color:#1f2937; line-height:1.5; font-weight:500; font-size:16px }
+
+                /* Error Details */
+                .pre-error-details{ margin:20px 0; text-align:left }
+                .pre-error-section{ margin:16px 0 }
+                .pre-error-section-title{ font-weight:700; margin-bottom:12px; color:#1f2937; font-size:15px; display:flex; align-items:center; gap:8px }
+                .pre-error-section-title i{ margin-right:4px; font-size:14px; color:#4b5563 }
+                .pre-error-list{ max-height:300px; overflow-y:auto; border:1px solid #e5e7eb; border-radius:8px; background:#fafafa }
+
+                /* Individual Error Items */
+                .pre-error-item{ border-bottom:1px solid #e5e7eb; padding:16px; background:#fff }
+                .pre-error-item:last-child{ border-bottom:none }
+                .pre-error-invoice{ font-weight:600; color:#1f2937; margin-bottom:8px; display:flex; align-items:center; gap:8px }
+                .pre-error-invoice-icon{ color:#3b82f6; font-size:14px; margin-right:4px }
+                .pre-error-field{ margin:8px 0; padding:8px 12px; background:#f9fafb; border-radius:6px; border-left:3px solid var(--error-brand) }
+                .pre-error-field-name{ font-weight:600; color:#1f2937; font-size:13px }
+                .pre-error-field-issue{ color:#4b5563; margin:4px 0; font-size:14px }
+                .pre-error-field-value{ font-family:monospace; background:#f3f4f6; padding:2px 6px; border-radius:4px; font-size:12px; color:#1f2937 }
+
+                /* Enhanced Error Item Styles */
+                .pre-error-item.critical{ border-left:4px solid #dc2626; background:linear-gradient(135deg, #fef2f2 0%, #fef7f7 100%) }
+                .pre-error-item.warning{ border-left:4px solid #d97706; background:linear-gradient(135deg, #fef3c7 0%, #fef9e7 100%) }
+                .pre-error-item.info{ border-left:4px solid #0369a1; background:linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%) }
+                .pre-error-item:hover{ background:#f1f3f4; transform:translateY(-1px); box-shadow:0 2px 8px rgba(0,0,0,0.1); transition:all 0.2s ease }
+
+                .pre-error-header{ display:flex; align-items:flex-start; gap:12px; margin-bottom:12px }
+                .pre-error-severity{ display:flex; align-items:center; gap:4px; padding:4px 8px; border-radius:12px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; flex-shrink:0 }
+                .pre-error-item.critical .pre-error-severity{ background:#dc2626; color:white }
+                .pre-error-item.warning .pre-error-severity{ background:#d97706; color:white }
+                .pre-error-item.info .pre-error-severity{ background:#0369a1; color:white }
+                .pre-error-title{ font-weight:600; color:#f7f9fb; font-size:15px; line-height:1.4; flex:1 }
+
+                .pre-error-details{ margin-top:12px; padding-top:12px; border-top:1px dashed #dee2e6 }
+                .pre-error-problem, .pre-error-solution, .pre-error-current-value{ margin-bottom:8px; font-size:14px; line-height:1.5 }
+                .pre-error-problem strong, .pre-error-solution strong, .pre-error-current-value strong{ color:#1d2b39; font-weight:600 }
+                .pre-error-problem{ color:#4b5563 }
+                .pre-error-solution{ color:#047857 }
+                .pre-error-current-value code{ background:#d2b39; padding:2px 6px; border-radius:4px; font-family:'Monaco','Menlo','Ubuntu Mono',monospace; font-size:13px; color:#374151; border:1px solid #d1d5db }
+
+                /* Buttons */
+                .pre-error-btn{ cursor:pointer; user-select:none; border:none; border-radius:8px; padding:12px 24px; font-weight:600; transition: all .2s ease; font-size:14px; display:inline-flex; align-items:center; gap:8px; min-width:120px; justify-content:center }
+                .pre-error-btn i{ margin-right:6px; font-size:14px }
+                .pre-error-btn-primary{ background:#dc2626; color:#fff; box-shadow:0 2px 4px rgba(220,38,38,.2) }
+                .pre-error-btn-primary:hover{ background:#b91c1c; box-shadow:0 4px 12px rgba(220,38,38,.3); transform: translateY(-1px) }
+                .pre-error-btn-secondary{ background:#6b7280; color:#fff; box-shadow:0 2px 4px rgba(107,114,128,.2) }
+                .pre-error-btn-secondary:hover{ background:#4b5563; box-shadow:0 4px 12px rgba(107,114,128,.3); transform: translateY(-1px) }
+                .pre-error-btn:active{ transform: translateY(0) }
+                .pre-error-btn:focus{ outline:2px solid rgba(220,38,38,.4); outline-offset:2px }
+
+                /* Responsive */
+                @media (max-width: 768px){
+                    .pre-validation-error-backdrop{ padding:12px; align-items:center; padding-top:20px }
+                    .pre-error-card{ max-width:100%; max-height:calc(100vh - 40px); min-height:auto }
+                    .pre-error-header{ padding:14px 16px }
+                    .pre-error-title{ font-size:16px }
+                    .pre-error-body{ padding:16px; }
+                    .pre-error-footer{ padding:12px 16px 16px; gap:8px }
+                    .pre-error-ring{ width:60px; height:60px }
+                    .pre-error-list{ max-height:200px }
+                    .pre-error-btn{ padding:10px 16px; font-size:13px; min-width:100px }
+                }
+
+                @media (max-width: 640px){
+                    .pre-validation-error-backdrop{ padding:8px; padding-top:16px; align-items:center }
+                    .pre-error-card{ max-height:calc(100vh - 32px) }
+                    .pre-error-header{ padding:12px 14px }
+                    .pre-error-title{ font-size:15px }
+                    .pre-error-sub{ font-size:12px }
+                    .pre-error-body{ padding:14px }
+                    .pre-error-footer{ flex-direction:column; padding:10px 14px 14px; gap:10px }
+                    .pre-error-btn{ width:100%; padding:12px; font-size:14px; min-height:44px }
+                    .pre-error-ring{ width:50px; height:50px }
+                    .pre-error-list{ max-height:150px }
+                    .pre-error-item{ padding:12px }
+                    .pre-error-msg{ font-size:15px }
+                }
+
+                @media (max-width: 480px){
+                    .pre-validation-error-backdrop{ padding:4px; padding-top:12px; align-items:center }
+                    .pre-error-card{ max-height:calc(100vh - 24px); border-radius:12px }
+                    .pre-error-header{ padding:10px 12px }
+                    .pre-error-title{ font-size:14px }
+                    .pre-error-body{ padding:12px }
+                    .pre-error-footer{ padding:8px 12px 12px }
+                    .pre-error-btn{ min-height:48px; font-size:15px }
+                    .pre-error-list{ max-height:120px }
+                    .pre-error-item{ padding:10px }
+                }
+
+                @media (max-height: 600px){
+                    .pre-validation-error-backdrop{ align-items:flex-start; padding-top:10px }
+                    .pre-error-card{ max-height:calc(100vh - 20px) }
+                    .pre-error-list{ max-height:120px }
+                    .pre-error-ring{ width:50px; height:50px }
+                }
+
+                /* Animations */
+                @keyframes pre-stroke{ to { stroke-dashoffset:0 } }
+                @media (prefers-reduced-motion: reduce){ *{ animation: none !important } .pre-error-x{ stroke-dashoffset:0 !important } }
+            </style>`;
+
+        // Build error details HTML with enhanced user-friendly format
+        let errorDetailsHtml = '';
+        validationErrors.forEach((error, index) => {
+            // Use the enhanced error format if available, otherwise fall back to legacy format
+            const title = error.title || `${error.message}`;
+            const problem = error.problem || error.message || 'Unknown issue';
+            const solution = error.solution || error.suggestion || 'Please review and correct this field';
+            const severity = error.severity || 'Warning';
+            const severityClass = severity.toLowerCase();
+            const severityIcon = severity === 'Critical' ? 'fas fa-exclamation-circle' :
+                                severity === 'Warning' ? 'fas fa-exclamation-triangle' :
+                                'fas fa-info-circle';
+
+            errorDetailsHtml += `
+                <div class="pre-error-item ${severityClass}">
+                    <div class="pre-error-header">
+                        <div class="pre-error-severity">
+                            <i class="${severityIcon}"></i>
+                            <span class="pre-error-severity-text">${severity}</span>
+                        </div>
+                        <div class="pre-error-title">${title}</div>
+                    </div>
+                    <div class="pre-error-details">
+                        <div class="pre-error-problem">
+                            <strong>Issue:</strong> ${problem}
+                        </div>
+                        <div class="pre-error-solution">
+                            <strong>How to fix:</strong> ${solution}
+                        </div>
+                        ${error.value ? `
+                            <div class="pre-error-current-value">
+                                <strong>Current value:</strong> <code>${error.value}</code>
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        });
+
+        const modalHtml = `
+            <div id="preValidationErrorBackdrop" class="pre-validation-error-backdrop">
+                <div class="pre-error-card">
+                    <div class="pre-error-header">
+                        <div class="pre-error-icon">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                                <line x1="12" y1="9" x2="12" y2="13"></line>
+                                <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="pre-error-title">Pre-Upload Validation Failed</div>
+                            <div class="pre-error-sub">Excel File Validation</div>
+                        </div>
+                    </div>
+
+                    <div class="pre-error-body">
+                        <div class="pre-error-hero">
+                            <div class="pre-error-ring">
+                                <svg class="pre-error-x" width="32" height="32" viewBox="0 0 24 24">
+                                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                                </svg>
+                            </div>
+                            <div class="pre-error-badge">
+                                <i class="fas fa-exclamation-circle"></i>
+                                ${failedDocuments} out of ${failedDocuments} invoices failed validation
+                            </div>
+                            <div class="pre-error-msg">All invoices in this file must pass validation before any can be submitted.</div>
+                        </div>
+
+                        <div class="pre-error-details">
+                            <div class="pre-error-section">
+                                <div class="pre-error-section-title">
+                                    <i class="fas fa-list"></i>
+                                    Validation Errors by Invoice:
+                                </div>
+                                <div class="pre-error-list">
+                                    ${errorDetailsHtml}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="pre-error-footer">
+                        <button class="pre-error-btn pre-error-btn-secondary" id="closePreErrorModalBtn" onclick="closePreValidationErrorModal()">
+                            <i class="fas fa-times"></i>
+                            Close
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // Remove existing styles and modal
+        const existingStyles = document.getElementById('preValidationErrorModalStyles');
+        if (existingStyles) existingStyles.remove();
+        const existingModal = document.getElementById('preValidationErrorBackdrop');
+        if (existingModal) existingModal.remove();
+
+        // Add styles and modal to page
+        document.head.insertAdjacentHTML('beforeend', errorModalStyles);
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        // Add click outside to close
+        const backdrop = document.getElementById('preValidationErrorBackdrop');
+        backdrop.addEventListener('click', (e) => {
+            if (e.target === backdrop) {
+                window.closePreValidationErrorModal();
+            }
+        });
+
+        // Add escape key to close
+        const handleEscape = (e) => {
+            if (e.key === 'Escape') {
+                window.closePreValidationErrorModal();
+                document.removeEventListener('keydown', handleEscape);
+            }
+        };
+        document.addEventListener('keydown', handleEscape);
+    }
+
+    // Transform validation result to match the format expected by showExcelValidationError
+    transformValidationResultToErrorFormat(validationResult) {
+        const { details = [], totalDocuments = 0, failedDocuments = 0, error, summary = {} } = validationResult;
+
+        console.log('🔄 Transforming validation result:', validationResult);
+
+        // Create validation errors array in the expected format
+        const validationErrors = [];
+
+        if (details && typeof details === 'object' && !Array.isArray(details)) {
+            // Handle the new backend format with categorized errors
+            console.log('🔍 Processing details object with keys:', Object.keys(details));
+            console.log('🔍 Full details object:', details);
+            Object.keys(details).forEach(invoiceNumber => {
+                const invoiceErrors = details[invoiceNumber];
+                console.log(`🔍 Processing invoice ${invoiceNumber}:`, invoiceErrors);
+
+                // Process critical errors
+                if (invoiceErrors.critical && Array.isArray(invoiceErrors.critical)) {
+                    console.log(`🔴 Found ${invoiceErrors.critical.length} critical errors for ${invoiceNumber}`);
+                    invoiceErrors.critical.forEach(err => {
+                        validationErrors.push(this.formatUserFriendlyError(err, invoiceNumber, 'Critical'));
+                    });
+                }
+
+                // Process warning errors
+                if (invoiceErrors.warning && Array.isArray(invoiceErrors.warning)) {
+                    console.log(`⚠️ Found ${invoiceErrors.warning.length} warning errors for ${invoiceNumber}`);
+                    invoiceErrors.warning.forEach(err => {
+                        validationErrors.push(this.formatUserFriendlyError(err, invoiceNumber, 'Warning'));
+                    });
+                }
+
+                // Process info errors
+                if (invoiceErrors.info && Array.isArray(invoiceErrors.info)) {
+                    console.log(`ℹ️ Found ${invoiceErrors.info.length} info errors for ${invoiceNumber}`);
+                    invoiceErrors.info.forEach(err => {
+                        validationErrors.push(this.formatUserFriendlyError(err, invoiceNumber, 'Info'));
+                    });
+                }
+            });
+        } else if (Array.isArray(details)) {
+            // Handle the old format for backward compatibility
+            details.forEach((detail, index) => {
+                if (detail.errors && Array.isArray(detail.errors)) {
+                    detail.errors.forEach(err => {
+                        validationErrors.push({
+                            message: err.userFriendlyMessage || err.message || 'Unknown error',
+                            field: err.field || 'Unknown Field',
+                            row: detail.index ? detail.index + 1 : index + 1,
+                            value: err.value || '',
+                            severity: 'Critical',
+                            suggestion: 'Please review and correct this field'
+                        });
+                    });
+                }
+            });
+        }
+
+        // If no structured errors but there's a general error message
+        if (validationErrors.length === 0 && error) {
+            validationErrors.push({
+                message: error,
+                field: 'General',
+                row: 1,
+                value: '',
+                severity: 'Critical',
+                suggestion: 'Please check your Excel file format and data'
+            });
+        }
+
+        const transformedError = {
+            fileName: 'uploaded_file.xlsx', // We don't have the filename in this context
+            message: error || `Validation failed for ${failedDocuments} out of ${totalDocuments} invoices`,
+            validationErrors: validationErrors
+        };
+
+        console.log('✅ Transformed error for custom modal:', transformedError);
+        console.log(`📊 Final validation errors count: ${validationErrors.length}`);
+        return transformedError;
+    }
+
+    // Helper function to extract row number from invoice number
+    extractRowNumber(invoiceNumber) {
+        console.log('🔍 Extracting row number from invoice:', invoiceNumber);
+
+        // Try different patterns to extract row number
+        const patterns = [
+            /row\s*(\d+)/i,           // "row 1", "Row 2", etc.
+            /\(row\s*(\d+)\)/i,       // "(row 1)", "(Row 2)", etc.
+            /#(\d+)$/,                // "#1", "#2" at the end
+            /_(\d+)$/,                // "_1", "_2" at the end
+            /\[(\d+)\]$/              // "[1]", "[2]" at the end
+        ];
+
+        for (const pattern of patterns) {
+            const match = invoiceNumber.match(pattern);
+            if (match) {
+                const rowNumber = parseInt(match[1]);
+                console.log(`✅ Found row number ${rowNumber} using pattern ${pattern}`);
+                return rowNumber;
+            }
+        }
+
+        // If no pattern matches, try to extract any number at the end
+        const numberMatch = invoiceNumber.match(/(\d+)$/);
+        if (numberMatch) {
+            const rowNumber = parseInt(numberMatch[1]);
+            console.log(`✅ Using trailing number ${rowNumber} as row number`);
+            return rowNumber;
+        }
+
+        console.log('⚠️ No row number found, defaulting to 1');
+        return 1;
+    }
+
+    // Format error into user-friendly message for non-technical users
+    formatUserFriendlyError(error, invoiceNumber, severity) {
+        const field = error.field || 'Unknown Field';
+        const value = error.value || '';
+        const issue = error.issue || error.message || 'Unknown issue';
+        const suggestion = error.suggestion || 'Please review and correct this field';
+        const rowNumber = this.extractRowNumber(invoiceNumber);
+
+        // Clean up the invoice number for display (remove technical prefixes/suffixes)
+        let cleanInvoiceNumber = invoiceNumber;
+
+        // Remove common technical patterns to show the actual invoice number
+        cleanInvoiceNumber = cleanInvoiceNumber
+            .replace(/^#/, '')                    // Remove leading #
+            .replace(/\(row\s*\d+\)$/i, '')      // Remove (row X) suffix
+            .replace(/_\d+$/, '')                // Remove _X suffix
+            .replace(/\[\d+\]$/, '')             // Remove [X] suffix
+            .replace(/\s*row\s*\d+$/i, '')       // Remove "row X" suffix
+            .trim();
+
+        // Create a user-friendly title that includes all key information
+        let title = `Invoice ${cleanInvoiceNumber}, Column '${field}'`;
+
+        // Create detailed problem description
+        let problemDescription = '';
+        if (value) {
+            problemDescription = `The value '${value}' has an issue: ${issue}`;
+        } else {
+            problemDescription = issue;
+        }
+
+        // Create actionable solution
+        let solution = this.generateActionableSolution(error, field, value);
+
+        return {
+            title: title,
+            problem: problemDescription,
+            solution: solution,
+            severity: severity,
+            invoiceNumber: invoiceNumber,
+            field: field,
+            value: value,
+            rowNumber: rowNumber,
+            // Legacy fields for backward compatibility
+            message: `${title}: ${problemDescription}`,
+            suggestion: suggestion
+        };
+    }
+
+    // Generate specific, actionable solutions based on error type
+    generateActionableSolution(error, field, value) {
+        const issue = (error.issue || error.message || '').toLowerCase();
+        const suggestion = error.suggestion || '';
+
+        // Special character issues
+        // if (issue.includes('special character') || issue.includes('problematic character')) {
+        //     const problematicChars = this.extractProblematicCharacters(issue, value);
+        //     if (problematicChars.length > 0) {
+        //         return `Remove or replace the following characters: ${problematicChars.join(', ')}. For example, replace '&' with 'and'.`;
+        //     }
+        //     return 'Remove or replace special characters that may cause processing issues.';
+        // }
+
+        // Whitespace issues
+        if (issue.includes('whitespace') || issue.includes('leading') || issue.includes('trailing')) {
+            return `Remove extra spaces at the beginning or end of the field. The corrected value should be: "${value.trim()}"`;
+        }
+
+        // Date format issues
+        if (issue.includes('date') && issue.includes('format')) {
+            return 'Use the date format YYYY-MM-DD (e.g., 2024-03-15 for March 15, 2024).';
+        }
+
+        // Email format issues
+        if (issue.includes('email') || field.toLowerCase().includes('email')) {
+            return 'Ensure the email address is in the correct format (e.g., user@company.com).';
+        }
+
+        // Required field issues
+        if (issue.includes('required') || issue.includes('missing') || issue.includes('empty')) {
+            return `This field is required and cannot be left empty. Please provide a valid ${field}.`;
+        }
+
+        // Numeric issues
+        if (issue.includes('numeric') || issue.includes('number') || issue.includes('amount')) {
+            return 'Enter a valid number without special characters or currency symbols.';
+        }
+
+        // Length issues
+        if (issue.includes('length') || issue.includes('too long') || issue.includes('too short')) {
+            return suggestion || 'Adjust the field length to meet the required format.';
+        }
+
+        // Default fallback
+        return suggestion || 'Please review and correct this field according to the requirements.';
+    }
+
+    // Extract problematic characters from error message
+    extractProblematicCharacters(issue, value) {
+        const chars = [];
+        const commonProblematic = ['&', '<', '>', '"', "'", '\\', '/', '|', '*', '?', ':', ';'];
+
+        if (value) {
+            commonProblematic.forEach(char => {
+                if (value.includes(char)) {
+                    chars.push(`'${char}'`);
+                }
+            });
+        }
+
+        // Try to extract from error message
+        const charMatch = issue.match(/characters?[:\s]*([&<>"'\\\/|*?:;]+)/i);
+        if (charMatch && charMatch[1]) {
+            const extractedChars = charMatch[1].split('').map(c => `'${c}'`);
+            chars.push(...extractedChars);
+        }
+
+        return [...new Set(chars)]; // Remove duplicates
+    }
+
+    // Download pre-validation error report
+    downloadPreValidationErrorReport(validationResult) {
+        const { details, totalDocuments, failedDocuments } = validationResult;
+
+        let csvContent = "Invoice Number,Row Index,Error Code,Field,Error Message,Current Value\n";
+
+        details.forEach(detail => {
+            detail.errors.forEach(error => {
+                const row = [
+                    detail.invoiceNumber,
+                    detail.index + 1,
+                    error.code,
+                    error.field,
+                    `"${(error.userFriendlyMessage || error.message).replace(/"/g, '""')}"`,
+                    error.value ? `"${String(error.value).replace(/"/g, '""')}"` : ''
+                ].join(',');
+                csvContent += row + "\n";
+            });
+        });
+
+        // Create and download the file
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', `pre_validation_errors_${new Date().toISOString().slice(0, 10)}.csv`);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        if (window.toastNotification?.success) {
+            window.toastNotification.success('Downloaded', 'Pre-validation error report downloaded successfully.', 3000);
+        }
+    }
+
+    // Update loading message
+    updateLoadingMessage(message) {
+        const messageEl = document.querySelector('#loadingBackdrop .excel-status-text');
+        if (messageEl) {
+            messageEl.textContent = message;
+        }
+    }
+
+    // Show pre-validation success modal using modern modal component
+    async showPreValidationSuccessModal(validationResult) {
+        const { totalDocuments, message } = validationResult;
+
+        // Create modern validation success modal using the same structure as showSubmissionSuccessModal
+        const overlay = document.createElement('div');
+        overlay.className = 'submission-flow-backdrop';
+        overlay.setAttribute('role','dialog');
+        overlay.setAttribute('aria-modal','true');
+        overlay.setAttribute('aria-labelledby','sfValidationTitle');
+        overlay.setAttribute('aria-describedby','sfValidationSub');
+
+        const card = document.createElement('div');
+        card.className = 'sf-submission-card';
+        card.setAttribute('style','animation: sfv2-pop .34s cubic-bezier(.2,.9,.2,1) both; border-radius:16px; overflow:hidden; box-shadow:0 28px 64px rgba(2,6,23,.22), 0 2px 8px rgba(2,6,23,.08)');
+
+        const inlineStyles = `
+            <style id="sfV2ValidationStyles">
+                /* Theme */
+                [data-sfv2="validation"]{ --brand:#22c55e; --brand-800:#16a34a; --ink:#0f172a; --muted:#64748b; --ring:#86efac; }
+
+                /* Modal Backdrop - Fixed positioning and z-index */
+                .submission-flow-backdrop{ position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.6); backdrop-filter:blur(4px); z-index:10050; display:flex; align-items:center; justify-content:center; padding:20px; box-sizing:border-box }
+                .sf-submission-card{ max-width:520px; width:100%; max-height:90vh; background:#fff; border-radius:16px; box-shadow:0 28px 64px rgba(2,6,23,.22), 0 2px 8px rgba(2,6,23,.08); display:flex; flex-direction:column; overflow:hidden }
+
+                /* Layout - Fixed height and overflow handling */
+                .sfv2-header{ display:flex; align-items:center; gap:12px; padding:16px 20px; background:linear-gradient(180deg,var(--brand),var(--brand-800)); color:#fff; box-shadow:inset 0 -1px rgba(255,255,255,.05); flex-shrink:0; position:relative }
+                .sfv2-close{ position:absolute; top:16px; right:20px; background:none; border:none; color:#fff; font-size:20px; cursor:pointer; padding:4px; border-radius:4px; opacity:0.8; transition:opacity 0.2s }
+                .sfv2-close:hover{ opacity:1; background:rgba(255,255,255,0.1) }
+                .sfv2-icon{ width:36px; height:36px; border-radius:10px; display:grid; place-items:center; background:rgba(255,255,255,.15); border:1px solid rgba(255,255,255,.2) }
+                .sfv2-title{ font-size:18px; font-weight:700; letter-spacing:.3px; color:#fff; margin:0; padding-right:40px }
+                .sfv2-sub{ font-size:13px; color:#d1fae5; margin:2px 0 0 0; opacity:0.9 }
+                .sfv2-body{ padding:24px; text-align:center; flex:1; overflow-y:auto; max-height:calc(90vh - 140px) }
+                .sfv2-footer{ display:flex; justify-content:center; gap:12px; padding:0 24px 24px; flex-shrink:0 }
+
+                /* Hero Section */
+                .sfv2-hero{ display:flex; flex-direction:column; align-items:center; justify-content:center; margin:0 0 20px }
+                .sfv2-ring{ display:grid; place-items:center; width:80px; height:80px; border-radius:50%; background:radial-gradient(60% 60% at 50% 40%, rgba(34,197,94,.15), rgba(34,197,94,0) 70%); position:relative; margin:0 auto }
+                .sfv2-ring::before{ content:''; position:absolute; inset:0; border-radius:50%; border:3px solid var(--brand); box-shadow:0 4px 20px rgba(34,197,94,.2) }
+                .sfv2-check{ fill:none; stroke:var(--brand); stroke-width:4; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:60; stroke-dashoffset:60; animation: sfv2-stroke .6s ease forwards .2s }
+
+                /* Badge and Messages */
+                .sfv2-badge{ display:inline-flex; align-items:center; gap:8px; font-weight:600; color:#166534; background:#dcfce7; border:1px solid #86efac; padding:8px 16px; border-radius:999px; margin:0 auto 16px; font-size:14px; max-width:fit-content }
+                .sfv2-msg{ margin:0 0 20px; color:var(--ink); line-height:1.5; font-weight:500; font-size:16px }
+
+                /* Cards */
+                .sfv2-card{ border:1px solid #e5e7eb; border-radius:12px; padding:18px; background:#fafafa; margin:16px 0; text-align:left }
+                .sfv2-card-title{ font-weight:700; margin-bottom:12px; color:#111827; display:flex; align-items:center; gap:8px; font-size:15px }
+                .sfv2-list{ padding-left:0; margin:0; list-style:none }
+                .sfv2-list li{ padding:6px 0; display:flex; align-items:center; gap:10px; color:#374151; font-size:14px }
+                .sfv2-list li::before{ content:'✅'; font-size:16px; flex-shrink:0 }
+                .sfv2-desc{ color:#6b7280; margin:0; line-height:1.5; font-size:14px }
+
+                /* Buttons */
+                .sfv2-btn{ cursor:pointer; user-select:none; border:none; border-radius:8px; padding:12px 24px; font-weight:600; transition: all .2s ease; font-size:14px; display:inline-flex; align-items:center; gap:8px; min-width:120px; justify-content:center }
+                .sfv2-btn-primary{ background:#22c55e; color:#fff; box-shadow:0 2px 4px rgba(34,197,94,.2) }
+                .sfv2-btn-primary:hover{ background:#16a34a; box-shadow:0 4px 12px rgba(34,197,94,.3); transform: translateY(-1px) }
+                .sfv2-btn-secondary{ background:#6b7280; color:#fff; box-shadow:0 2px 4px rgba(107,114,128,.2) }
+                .sfv2-btn-secondary:hover{ background:#4b5563; box-shadow:0 4px 12px rgba(107,114,128,.3); transform: translateY(-1px) }
+                .sfv2-btn:active{ transform: translateY(0) }
+                .sfv2-btn:focus{ outline:2px solid rgba(34,197,94,.4); outline-offset:2px }
+
+                /* Animations */
+                @keyframes sfv2-pop{ from { transform: translateY(12px) scale(.95); opacity:0 } to { transform: translateY(0) scale(1); opacity:1 } }
+                @keyframes sfv2-stroke{ to { stroke-dashoffset:0 } }
+
+                /* Responsive - Improved mobile experience */
+                @media (max-width: 768px){
+                    .submission-flow-backdrop{ padding:16px; align-items:center }
+                    .sf-submission-card{ max-width:100%; max-height:calc(100vh - 32px) }
+                    .sfv2-body{ padding:20px; max-height:calc(100vh - 180px) }
+                    .sfv2-ring{ width:70px; height:70px }
+                    .sfv2-footer{ padding:0 20px 20px }
+                    .sfv2-title{ font-size:16px; padding-right:35px }
+                    .sfv2-close{ top:14px; right:16px; font-size:18px }
+                }
+                @media (max-width: 640px){
+                    .submission-flow-backdrop{ padding:12px; align-items:center }
+                    .sf-submission-card{ max-width:100%; max-height:calc(100vh - 24px) }
+                    .sfv2-body{ padding:16px; max-height:calc(100vh - 160px) }
+                    .sfv2-ring{ width:60px; height:60px }
+                    .sfv2-footer{ flex-direction:column; padding:0 16px 16px }
+                    .sfv2-btn{ width:100% }
+                    .sfv2-title{ font-size:15px }
+                }
+                @media (max-width: 480px){
+                    .submission-flow-backdrop{ padding:8px; align-items:center }
+                    .sf-submission-card{ max-width:100%; max-height:calc(100vh - 16px) }
+                    .sfv2-header{ padding:12px 16px }
+                    .sfv2-body{ padding:12px; max-height:calc(100vh - 140px) }
+                    .sfv2-footer{ padding:0 12px 12px }
+                    .sfv2-title{ font-size:14px; padding-right:30px }
+                    .sfv2-close{ top:12px; right:12px; font-size:16px }
+                }
+                @media (max-height: 600px){
+                    .submission-flow-backdrop{ align-items:center; padding-top:10px }
+                    .sf-submission-card{ max-height:calc(100vh - 20px) }
+                    .sfv2-body{ max-height:calc(100vh - 120px) }
+                }
+                @media (max-height: 500px){
+                    .sf-submission-card{ max-height:calc(100vh - 10px) }
+                    .sfv2-body{ max-height:calc(100vh - 100px) }
+                    .sfv2-header{ padding:12px 20px }
+                    .sfv2-footer{ padding:0 20px 12px }
+                }
+
+                /* Reduced motion */
+                @media (prefers-reduced-motion: reduce){ *{ animation: none !important } .sfv2-check{ stroke-dashoffset:0 !important } }
+            </style>`;
+
+        card.innerHTML = `
+            ${inlineStyles}
+            <div class="sfv2" data-sfv2="validation">
+                <div class="sfv2-header">
+                    <div class="sfv2-icon"><i class="bi bi-shield-check" style="font-size:18px;color:#e5edff"></i></div>
+                    <div>
+                        <div class="sfv2-title" id="sfValidationTitle">Validation Successful</div>
+                        <div class="sfv2-sub" id="sfValidationSub">Pre-Upload Validation Passed</div>
+                    </div>
+                    <button class="sfv2-close" id="closeValidationModal" aria-label="Close modal" title="Close">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </div>
+                <div class="sfv2-body">
+                    <div class="sfv2-hero">
+                        <div class="sfv2-ring" role="img" aria-label="Validation Success">
+                            <svg viewBox="0 0 48 48" aria-hidden="true" focusable="false" style="width:42px;height:42px;display:block">
+                                <path class="sfv2-check" d="M14 24l7 7 13-16" />
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="sfv2-badge" role="status"><i class="bi bi-check2-circle" style="color:#22c55e"></i> All ${totalDocuments} invoices passed validation. File is ready for upload.</div>
+
+                    <div class="sfv2-card">
+                        <div class="sfv2-card-title"><i class="bi bi-clipboard-check"></i> Validation Summary</div>
+                        <ul class="sfv2-list">
+                            <li>File format validation: <strong>Passed</strong></li>
+                            <li>Mandatory fields check: <strong>Passed</strong></li>
+                            <li>Data format validation: <strong>Passed</strong></li>
+                            <li>Document count limit: <strong>Passed</strong> (${totalDocuments}/100)</li>
+                            <li>TIN format validation: <strong>Passed</strong></li>
+                        </ul>
+                    </div>
+
+                    <div class="sfv2-card">
+                        <div class="sfv2-card-title"><i class="bi bi-info-circle"></i> Next Steps</div>
+                        <div class="sfv2-desc">Click "Continue Upload" to proceed with uploading your validated file to the system.</div>
+                    </div>
+                </div>
+                <div class="sfv2-footer">
+                    <button id="cancelValidation" class="sfv2-btn sfv2-btn-secondary"><i class="bi bi-x-lg"></i> Cancel</button>
+                    <button id="continueUpload" class="sfv2-btn sfv2-btn-primary"><i class="bi bi-upload"></i> Continue Upload</button>
+                </div>
+            </div>`;
+
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+
+        // Focus management for accessibility
+        const firstFocusableElement = card.querySelector('#continueUpload');
+        if (firstFocusableElement) {
+            firstFocusableElement.focus();
+        }
+
+        return new Promise((resolve) => {
+            const closeModal = (result = false) => {
+                // Remove styles
+                const styles = document.getElementById('sfV2ValidationStyles');
+                if (styles) {
+                    styles.remove();
+                }
+                overlay.remove();
+                resolve(result);
+            };
+
+            // Continue Upload button
+            card.querySelector('#continueUpload').addEventListener('click', () => {
+                closeModal(true); // Continue with upload
+            });
+
+            // Cancel button
+            card.querySelector('#cancelValidation').addEventListener('click', () => {
+                closeModal(false); // Cancel upload
+            });
+
+            // Header close button
+            card.querySelector('#closeValidationModal').addEventListener('click', () => {
+                closeModal(false); // Cancel upload
+            });
+
+            // ESC key support
+            const handleKeyDown = (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    document.removeEventListener('keydown', handleKeyDown);
+                    closeModal(false);
+                }
+            };
+            document.addEventListener('keydown', handleKeyDown);
+
+            // Allow clicking outside to cancel
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    document.removeEventListener('keydown', handleKeyDown);
+                    closeModal(false);
+                }
+            });
+        });
     }
 }
 
@@ -4931,8 +5811,14 @@ class UploadedFilesManager {
             if (typeof refreshOutboundTable === 'function') refreshOutboundTable();
         } catch (error) {
             console.error('Bulk submit error:', error);
-            const tech = error?.payload || { userMessage: error?.message || 'Unexpected error' };
-            updateSubmissionFlow({ stage: 'submit', message: 'A network or server error occurred during bulk submit.', progress: 100, error: tech, onRetry: () => { try { closeSubmissionFlowModal(); this.handleBulkSubmit(); } catch(_) {} } });
+
+            // Enhanced error handling for validation failures
+            if (error?.payload?.validationFailed) {
+                this.showValidationErrorModal(error.payload);
+            } else {
+                const tech = error?.payload || { userMessage: error?.message || 'Unexpected error' };
+                updateSubmissionFlow({ stage: 'submit', message: 'A network or server error occurred during bulk submit.', progress: 100, error: tech, onRetry: () => { try { closeSubmissionFlowModal(); this.handleBulkSubmit(); } catch(_) {} } });
+            }
         }
     }
 
@@ -5091,6 +5977,291 @@ class UploadedFilesManager {
 
     refreshTableAndCounts() {
         if (typeof refreshOutboundTable === 'function') refreshOutboundTable();
+    }
+
+    // Enhanced validation error modal for bulk submissions
+    showValidationErrorModal(errorData) {
+        closeSubmissionFlowModal(); // Close any existing submission modal
+
+        // Store error data globally for access by global functions
+        window.currentValidationErrorData = errorData;
+
+        const { details, totalDocuments, failedDocuments } = errorData;
+
+        // Create the modern error modal
+        this.createValidationErrorModal(errorData);
+    }
+
+    createValidationErrorModal(errorData) {
+        const { details, totalDocuments, failedDocuments } = errorData;
+
+        // Add styles for the error modal
+        const errorModalStyles = `
+            <style id="sfV2ErrorModalStyles">
+                /* Error Modal Theme */
+                [data-sfv2="error"]{ --error-brand:#dc2626; --error-brand-800:#b91c1c; --error-ink:#0f172a; --error-muted:#64748b; --error-ring:#fca5a5; }
+
+                /* Modal Backdrop */
+                .submission-flow-error-backdrop{ position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.6); backdrop-filter:blur(4px); z-index:9999; display:flex; align-items:center; justify-content:center; padding:20px; box-sizing:border-box; overflow-y:auto }
+                .sf-error-card{ max-width:800px; width:100%; max-height:90vh; background:#fff; border-radius:16px; box-shadow:0 4px 12px rgba(0,0,0,.15); display:flex; flex-direction:column; margin:auto }
+
+                /* Header */
+                .sfv2-error-header{ display:flex; align-items:center; gap:12px; padding:16px 20px; background:linear-gradient(180deg,var(--error-brand),var(--error-brand-800)); color:#fff; box-shadow:inset 0 -1px rgba(255,255,255,.05) }
+                .sfv2-error-icon{ width:36px; height:36px; border-radius:10px; display:grid; place-items:center; background:rgba(255,255,255,.15); border:1px solid rgba(255,255,255,.2) }
+                .sfv2-error-title{ font-size:18px; font-weight:700; letter-spacing:.3px; color:#fff; margin:0 }
+                .sfv2-error-sub{ font-size:13px; color:#fecaca; margin:2px 0 0 0; opacity:0.9 }
+
+                /* Body */
+                .sfv2-error-body{ padding:24px; flex:1; overflow-y:auto; }
+                .sfv2-error-footer{ display:flex; justify-content:center; gap:12px; padding:16px 24px 24px; flex-shrink:0; background:#fff; border-top:1px solid #f3f4f6; }
+
+                /* Hero Section */
+                .sfv2-error-hero{ display:flex; flex-direction:column; align-items:center; justify-content:center; margin:0 0 20px; text-align:center }
+                .sfv2-error-ring{ display:grid; place-items:center; width:80px; height:80px; border-radius:50%; background:radial-gradient(60% 60% at 50% 40%, rgba(220,38,38,.15), rgba(220,38,38,0) 70%); position:relative; margin:0 auto }
+                .sfv2-error-ring::before{ content:''; position:absolute; inset:0; border-radius:50%; border:3px solid var(--error-brand); box-shadow:0 4px 20px rgba(220,38,38,.2) }
+                .sfv2-error-x{ fill:none; stroke:var(--error-brand); stroke-width:4; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:60; stroke-dashoffset:60; animation: sfv2-stroke .6s ease forwards .2s }
+
+                /* Badge and Messages */
+                .sfv2-error-badge{ display:inline-flex; align-items:center; gap:8px; font-weight:600; color:#991b1b; background:#fee2e2; border:1px solid #fca5a5; padding:8px 16px; border-radius:999px; margin:0 auto 16px; font-size:14px; max-width:fit-content }
+                .sfv2-error-badge i{ margin-right:4px; font-size:14px }
+                .sfv2-error-msg{ margin:0 0 20px; color:var(--error-ink); line-height:1.5; font-weight:500; font-size:16px }
+
+                /* Error Details */
+                .sfv2-error-details{ margin:20px 0; text-align:left }
+                .sfv2-error-section{ margin:16px 0 }
+                .sfv2-error-section-title{ font-weight:700; margin-bottom:12px; color:#111827; font-size:15px; display:flex; align-items:center; gap:8px }
+                .sfv2-error-section-title i{ margin-right:4px; font-size:14px; color:#6b7280 }
+                .sfv2-error-list{ max-height:300px; overflow-y:auto; border:1px solid #e5e7eb; border-radius:8px; background:#fafafa }
+
+                /* Individual Error Items */
+                .sfv2-error-item{ border-bottom:1px solid #e5e7eb; padding:16px; background:#fff }
+                .sfv2-error-item:last-child{ border-bottom:none }
+                .sfv2-error-invoice{ font-weight:600; color:#1f2937; margin-bottom:8px; display:flex; align-items:center; gap:8px }
+                .sfv2-error-invoice-icon{ color:#3b82f6; font-size:14px; margin-right:4px }
+                .sfv2-error-field{ margin:8px 0; padding:8px 12px; background:#f9fafb; border-radius:6px; border-left:3px solid var(--error-brand) }
+                .sfv2-error-field-name{ font-weight:600; color:#374151; font-size:13px }
+                .sfv2-error-field-issue{ color:#6b7280; margin:4px 0; font-size:14px }
+                .sfv2-error-field-value{ font-family:monospace; background:#f3f4f6; padding:2px 6px; border-radius:4px; font-size:12px; color:#1f2937 }
+
+                /* Buttons */
+                .sfv2-error-btn{ cursor:pointer; user-select:none; border:none; border-radius:8px; padding:12px 24px; font-weight:600; transition: all .2s ease; font-size:14px; display:inline-flex; align-items:center; gap:8px; min-width:120px; justify-content:center }
+                .sfv2-error-btn i{ margin-right:6px; font-size:14px }
+                .sfv2-error-btn-primary{ background:#dc2626; color:#fff; box-shadow:0 2px 4px rgba(220,38,38,.2) }
+                .sfv2-error-btn-primary:hover{ background:#b91c1c; box-shadow:0 4px 12px rgba(220,38,38,.3); transform: translateY(-1px) }
+                .sfv2-error-btn-secondary{ background:#6b7280; color:#fff; box-shadow:0 2px 4px rgba(107,114,128,.2) }
+                .sfv2-error-btn-secondary:hover{ background:#4b5563; box-shadow:0 4px 12px rgba(107,114,128,.3); transform: translateY(-1px) }
+                .sfv2-error-btn:active{ transform: translateY(0) }
+                .sfv2-error-btn:focus{ outline:2px solid rgba(220,38,38,.4); outline-offset:2px }
+
+                /* Responsive */
+                @media (max-width: 768px){
+                    .submission-flow-error-backdrop{ padding:12px; align-items:flex-start; padding-top:20px }
+                    .sf-error-card{ max-width:100%; max-height:calc(100vh - 40px); min-height:auto }
+                    .sfv2-error-header{ padding:14px 16px }
+                    .sfv2-error-title{ font-size:16px }
+                    .sfv2-error-body{ padding:16px; }
+                    .sfv2-error-footer{ padding:12px 16px 16px; gap:8px }
+                    .sfv2-error-ring{ width:60px; height:60px }
+                    .sfv2-error-list{ max-height:200px }
+                    .sfv2-error-btn{ padding:10px 16px; font-size:13px; min-width:100px }
+                }
+
+                @media (max-width: 640px){
+                    .submission-flow-error-backdrop{ padding:8px; padding-top:16px }
+                    .sf-error-card{ max-height:calc(100vh - 32px) }
+                    .sfv2-error-header{ padding:12px 14px }
+                    .sfv2-error-title{ font-size:15px }
+                    .sfv2-error-sub{ font-size:12px }
+                    .sfv2-error-body{ padding:14px }
+                    .sfv2-error-footer{ flex-direction:column; padding:10px 14px 14px; gap:10px }
+                    .sfv2-error-btn{ width:100%; padding:12px; font-size:14px; min-height:44px }
+                    .sfv2-error-ring{ width:50px; height:50px }
+                    .sfv2-error-list{ max-height:150px }
+                    .sfv2-error-item{ padding:12px }
+                    .sfv2-error-msg{ font-size:15px }
+                }
+
+                @media (max-width: 480px){
+                    .submission-flow-error-backdrop{ padding:4px; padding-top:12px }
+                    .sf-error-card{ max-height:calc(100vh - 24px); border-radius:12px }
+                    .sfv2-error-header{ padding:10px 12px }
+                    .sfv2-error-title{ font-size:14px }
+                    .sfv2-error-body{ padding:12px }
+                    .sfv2-error-footer{ padding:8px 12px 12px }
+                    .sfv2-error-btn{ min-height:48px; font-size:15px }
+                    .sfv2-error-list{ max-height:120px }
+                    .sfv2-error-item{ padding:10px }
+                }
+
+                @media (max-height: 600px){
+                    .submission-flow-error-backdrop{ align-items:flex-start; padding-top:10px }
+                    .sf-error-card{ max-height:calc(100vh - 20px) }
+                    .sfv2-error-list{ max-height:120px }
+                    .sfv2-error-ring{ width:50px; height:50px }
+                }
+
+                /* Animations */
+                @keyframes sfv2-stroke{ to { stroke-dashoffset:0 } }
+                @media (prefers-reduced-motion: reduce){ *{ animation: none !important } .sfv2-error-x{ stroke-dashoffset:0 !important } }
+            </style>`;
+
+        // Build error details HTML
+        let errorDetailsHtml = '';
+        details.forEach((detail, index) => {
+            let errorFieldsHtml = '';
+            detail.errors.forEach(error => {
+                errorFieldsHtml += `
+                    <div class="sfv2-error-field">
+                        <div class="sfv2-error-field-name">Field: ${error.field}</div>
+                        <div class="sfv2-error-field-issue">Issue: ${error.userFriendlyMessage || error.message}</div>
+                        ${error.value ? `<div class="sfv2-error-field-value">Current Value: ${error.value}</div>` : ''}
+                    </div>
+                `;
+            });
+
+            errorDetailsHtml += `
+                <div class="sfv2-error-item">
+                    <div class="sfv2-error-invoice">
+                        <i class="fas fa-file-invoice sfv2-error-invoice-icon"></i>
+                        Invoice #${detail.invoiceNumber}
+                    </div>
+                    ${errorFieldsHtml}
+                </div>
+            `;
+        });
+
+        const modalHtml = `
+            ${errorModalStyles}
+            <div class="submission-flow-error-backdrop" data-sfv2="error" id="validationErrorBackdrop">
+                <div class="sf-error-card">
+                    <div class="sfv2-error-header">
+                        <div class="sfv2-error-icon">
+                            <i class="fas fa-exclamation-triangle"></i>
+                        </div>
+                        <div>
+                            <div class="sfv2-error-title">Bulk Submission Validation Failed</div>
+                            <div class="sfv2-error-sub">All-or-Nothing Policy</div>
+                        </div>
+                    </div>
+
+                    <div class="sfv2-error-body">
+                        <div class="sfv2-error-hero">
+                            <div class="sfv2-error-ring">
+                                <svg width="32" height="32" viewBox="0 0 24 24" class="sfv2-error-x">
+                                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                                </svg>
+                            </div>
+                            <div class="sfv2-error-badge">
+                                <i class="fas fa-exclamation-circle"></i>
+                                ${failedDocuments} out of ${totalDocuments} invoices failed validation
+                            </div>
+                            <div class="sfv2-error-msg">All invoices in this file must pass validation before any can be submitted.</div>
+                        </div>
+
+                        <div class="sfv2-error-details">
+                            <div class="sfv2-error-section">
+                                <div class="sfv2-error-section-title">
+                                    <i class="fas fa-list-alt"></i>
+                                    Validation Errors by Invoice:
+                                </div>
+                                <div class="sfv2-error-list">
+                                    ${errorDetailsHtml}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="sfv2-error-footer">
+                        <button class="sfv2-error-btn sfv2-error-btn-primary" id="downloadErrorReportBtn" onclick="downloadValidationErrorReport()">
+                            <i class="fas fa-download"></i>
+                            Download Error Report
+                        </button>
+                        <button class="sfv2-error-btn sfv2-error-btn-secondary" id="closeErrorModalBtn" onclick="closeValidationErrorModal()">
+                            <i class="fas fa-times"></i>
+                            Close
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // Remove any existing modal
+        const existingModal = document.getElementById('validationErrorBackdrop');
+        if (existingModal) {
+            existingModal.remove();
+        }
+
+        // Add modal to page
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        // Event listeners are now handled via onclick attributes in the HTML
+
+        // Add click outside to close
+        const backdrop = document.getElementById('validationErrorBackdrop');
+        backdrop.addEventListener('click', (e) => {
+            if (e.target === backdrop) {
+                window.closeValidationErrorModal();
+            }
+        });
+
+        // Add escape key to close
+        const handleEscape = (e) => {
+            if (e.key === 'Escape') {
+                window.closeValidationErrorModal();
+                document.removeEventListener('keydown', handleEscape);
+            }
+        };
+        document.addEventListener('keydown', handleEscape);
+    }
+
+    closeValidationErrorModal() {
+        const modal = document.getElementById('validationErrorBackdrop');
+        if (modal) {
+            modal.remove();
+        }
+
+        // Remove styles
+        const styles = document.getElementById('sfV2ErrorModalStyles');
+        if (styles) {
+            styles.remove();
+        }
+    }
+
+    // Download validation error report as CSV
+    downloadValidationErrorReport(errorData) {
+        const { details, totalDocuments, failedDocuments } = errorData;
+
+        let csvContent = "Invoice Number,Row Index,Error Code,Field,Error Message,Current Value\n";
+
+        details.forEach(detail => {
+            detail.errors.forEach(error => {
+                const row = [
+                    detail.invoiceNumber,
+                    detail.index + 1,
+                    error.code,
+                    error.field,
+                    `"${(error.userFriendlyMessage || error.message).replace(/"/g, '""')}"`,
+                    error.value ? `"${String(error.value).replace(/"/g, '""')}"` : ''
+                ].join(',');
+                csvContent += row + "\n";
+            });
+        });
+
+        // Create and download the file
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', `validation_errors_${new Date().toISOString().slice(0, 10)}.csv`);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        if (window.toastNotification?.success) {
+            window.toastNotification.success('Downloaded', 'Validation error report downloaded successfully.', 3000);
+        }
     }
 }
 
@@ -5291,9 +6462,20 @@ function showSubmissionFlowModal(initialMsg = 'Preparing submission...') {
   document.body.appendChild(overlay);
 }
 
-function updateSubmissionFlow({ stage='validate', message='', progress=0, eta=null, error=null, realTimeInfo=null } = {}) {
+function updateSubmissionFlow({ stage='validate', message='', progress=0, eta=null, error=null, realTimeInfo=null, realTimeStatus=null, invoiceCount=null, totalInvoices=null } = {}) {
   const sub = document.getElementById('sfSub');
-  if (sub) sub.innerHTML = `<span class="sf-typing">${escapeHtml(String(message||''))}</span>`;
+  if (sub) {
+    let displayMessage = escapeHtml(String(message||''));
+
+    // Add invoice counter if provided
+    if (invoiceCount !== null && totalInvoices !== null) {
+      displayMessage = `Processing invoice ${invoiceCount} of ${totalInvoices}...`;
+    } else if (invoiceCount !== null) {
+      displayMessage = `Processing invoice ${invoiceCount}...`;
+    }
+
+    sub.innerHTML = `<span class="sf-typing">${displayMessage}</span>`;
+  }
 
   // Update horizontal stepper (active/completed)
   const steps = Array.from(document.querySelectorAll('#sfSteps .sf-step'));
@@ -5321,6 +6503,55 @@ function updateSubmissionFlow({ stage='validate', message='', progress=0, eta=nu
   // Update per-step message
   const msgEl = document.getElementById(`sfMsg_${stage}`);
   if (msgEl && message) msgEl.textContent = message;
+
+  // Add real-time validation status display
+  if (stage === 'monitor' && realTimeStatus) {
+    const stepEl = document.querySelector(`.sf-submission-step[data-key="monitor"]`) ||
+                   document.querySelector(`.sf-submission-step[data-key="submit"]`);
+    if (stepEl) {
+      const existingInfo = stepEl.querySelector('.sf-realtime-validation');
+      if (existingInfo) existingInfo.remove();
+
+      const infoEl = document.createElement('div');
+      infoEl.className = 'sf-realtime-validation';
+      infoEl.style.cssText = 'margin-top: 12px; font-size: 12px; background: #f8f9fa; border-radius: 6px; padding: 12px; border-left: 4px solid #007bff;';
+
+      let infoHTML = '<div style="font-weight: 600; color: #495057; margin-bottom: 8px;">📊 Real-Time Status</div>';
+
+      if (realTimeStatus.files && realTimeStatus.files.length > 0) {
+        infoHTML += '<div style="margin-bottom: 8px;">';
+        infoHTML += `<strong>Files:</strong> ${realTimeStatus.processedFiles || 0}/${realTimeStatus.totalFiles || 0} processed<br>`;
+        infoHTML += `<strong>Phase:</strong> ${realTimeStatus.currentPhase || 'Unknown'}<br>`;
+        infoHTML += `<strong>Status:</strong> ${realTimeStatus.overallStatus || 'Processing'}`;
+        infoHTML += '</div>';
+
+        // Show file-by-file progress
+        infoHTML += '<div style="max-height: 120px; overflow-y: auto; border-top: 1px solid #dee2e6; padding-top: 8px;">';
+        realTimeStatus.files.forEach((file, index) => {
+          const statusIcon = file.status === 'validation_failed' ? '❌' :
+                           file.status === 'completed' ? '✅' :
+                           file.status === 'processing' ? '⏳' : '⏸️';
+          const statusColor = file.status === 'validation_failed' ? '#dc3545' :
+                            file.status === 'completed' ? '#28a745' : '#6c757d';
+
+          infoHTML += `<div style="margin-bottom: 4px; font-size: 11px;">`;
+          infoHTML += `<span style="color: ${statusColor};">${statusIcon}</span> `;
+          infoHTML += `<strong>${file.filename}</strong> `;
+          infoHTML += `<span style="color: #6c757d;">(${file.invoiceCount || 0} invoices)</span>`;
+
+          if (file.status === 'validation_failed' && file.errors && file.errors.length > 0) {
+            infoHTML += `<br><span style="color: #dc3545; margin-left: 16px; font-size: 10px;">`;
+            infoHTML += `${file.errors.length} validation error${file.errors.length > 1 ? 's' : ''}</span>`;
+          }
+          infoHTML += '</div>';
+        });
+        infoHTML += '</div>';
+      }
+
+      infoEl.innerHTML = infoHTML;
+      stepEl.appendChild(infoEl);
+    }
+  }
 
   // Add real-time progress info for Step 4 (submit)
   if (stage === 'submit' && realTimeInfo) {
@@ -5854,6 +7085,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initialize uploaded files manager
     try {
         window.uploadedFilesManager = new UploadedFilesManager();
+        window.outboundManualManager = window.uploadedFilesManager; // Add global reference for modal functions
         console.log('UploadedFilesManager initialized successfully');
     } catch (error) {
         console.error('Error initializing UploadedFilesManager:', error);
@@ -5868,6 +7100,49 @@ window.handleCheckboxChange = function(event) {
         const fileId = row.id.replace('file_', '');
         window.uploadedFilesManager.handleRowSelection(checkbox, fileId);
     }
+};
+
+// Global validation error modal functions
+window.downloadValidationErrorReport = function() {
+    const errorData = window.currentValidationErrorData;
+    if (!errorData) {
+        console.error('No validation error data available');
+        return;
+    }
+
+    if (window.uploadedFilesManager && typeof window.uploadedFilesManager.downloadValidationErrorReport === 'function') {
+        window.uploadedFilesManager.downloadValidationErrorReport(errorData);
+    } else {
+        console.error('downloadValidationErrorReport function not available');
+    }
+};
+
+window.closeValidationErrorModal = function() {
+    if (window.uploadedFilesManager && typeof window.uploadedFilesManager.closeValidationErrorModal === 'function') {
+        window.uploadedFilesManager.closeValidationErrorModal();
+    } else {
+        console.error('closeValidationErrorModal function not available');
+    }
+
+    // Clear stored error data
+    window.currentValidationErrorData = null;
+};
+
+// Global pre-validation error modal functions
+window.closePreValidationErrorModal = function() {
+    const modal = document.getElementById('preValidationErrorBackdrop');
+    if (modal) {
+        modal.remove();
+    }
+
+    // Remove styles
+    const styles = document.getElementById('preValidationErrorModalStyles');
+    if (styles) {
+        styles.remove();
+    }
+
+    // Clear stored error data
+    window.currentValidationErrorData = null;
 };
 
 // Add CSS styles for enhanced loading modal

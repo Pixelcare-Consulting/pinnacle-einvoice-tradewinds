@@ -2364,20 +2364,20 @@ router.post('/:fileName/submit-to-lhdn', auth.isApiAuthenticated, async (req, re
                 }
             }
 
+            // Check for failed status first, regardless of whether result.data exists
+            if (result.status === 'failed' && result.error) {
+                // There are validation errors, show them to the user
+                const errorDetails = result.error;
+                console.error('LHDN Error:', errorDetails);
+
+                return res.status(400).json({
+                    success: false,
+                    error: errorDetails, // Pass the enhanced error structure directly
+                    docNum: invoice_number
+                });
+            }
+
             if (!result.data) {
-                // Before throwing an error, check if there are rejected documents in the result
-                if (result.status === 'failed' && result.error) {
-                    // There are validation errors, show them to the user
-                    const errorDetails = result.error;
-                    console.error('LHDN Error:', errorDetails);
-
-                    return res.status(400).json({
-                        success: false,
-                        error: errorDetails, // Pass the enhanced error structure directly
-                        docNum: invoice_number
-                    });
-                }
-
                 if (result.status === 'success' && result.data === undefined) {
                     // This is a special case where the result status is success but no data is present
                     return res.status(400).json({
@@ -3669,18 +3669,18 @@ router.post('/:fileName/submit-to-lhdn-consolidated', auth.isApiAuthenticated, a
                 }
             }
 
-            if (!result.data) {
-                // Before throwing an error, check if there are rejected documents in the result
-                if (result.status === 'failed' && result.error) {
-                    // There are validation errors, show them to the user
-                    const errorDetails = result.error;
-                    return res.status(400).json({
-                        success: false,
-                        error: errorDetails, // Pass the enhanced error structure directly
-                        docNum: invoice_number
-                    });
-                }
+            // Check for failed status first, regardless of whether result.data exists
+            if (result.status === 'failed' && result.error) {
+                // There are validation errors, show them to the user
+                const errorDetails = result.error;
+                return res.status(400).json({
+                    success: false,
+                    error: errorDetails, // Pass the enhanced error structure directly
+                    docNum: invoice_number
+                });
+            }
 
+            if (!result.data) {
                 if (result.status === 'success' && result.data === undefined) {
                     // This is a special case where the result status is success but no data is present
                     return res.status(400).json({

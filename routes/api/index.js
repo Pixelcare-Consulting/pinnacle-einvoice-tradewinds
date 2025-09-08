@@ -14,6 +14,7 @@ const userRoutes = require('./user-prisma');
 const companySettingsRoutes = require('./company-settings.routes');
 const logsRoutes = require('./logs-prisma');
 const lhdnRoutes = require('./lhdn');
+const lhdnAnalyticsRoutes = require('./lhdn-analytics.routes');
 const configRoutes = require('./config');
 const geminiRoutes = require('./gemini.routes');
 const rssRoutes = require('./rss');
@@ -37,6 +38,7 @@ router.use('/outbound-files-manual', outboundManualRoutes); // outbound-manual.r
 router.use('/company', companySettingsRoutes);
 router.use('/logs', logsRoutes);
 router.use('/lhdn', lhdnRoutes);
+router.use('/lhdn-analytics', lhdnAnalyticsRoutes);
 router.use('/config', configRoutes);
 router.use('/user', userRoutes); // user-prisma.js - main user routes with Prisma
 // router.use('/user', userApiRoutes); // user.js - commented out to avoid conflicts

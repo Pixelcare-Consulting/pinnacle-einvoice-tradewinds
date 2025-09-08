@@ -25,7 +25,9 @@ certificates/
 AuthorizeToken.ini
 /AuthorizeToken.ini
 *.
-
+.bmad-core
+.augment
+.__tests__
 # ================================
 # DATABASE & MIGRATION FILES
 # ================================

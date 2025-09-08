@@ -423,8 +423,8 @@ const mapLineItem = (item, documentCurrencyCode, taxCurrencyCode, exchangeRate) 
   return {
     "ID": wrapValue(String(item.lineId)),
     "InvoicedQuantity": [{
-      "_": Number(item.quantity),
-      "unitCode": item.unitCode
+      "_": Number(item.quantity) || 1,
+      "unitCode": item.unitCode || "XNA"
     }],
     "LineExtensionAmount": wrapValue(item.lineExtensionAmount, documentCurrencyCode),
     "AllowanceCharge": item.allowanceCharges.map(charge => ({
@@ -530,7 +530,7 @@ const mapToLHDNFormat = (excelData, version) => {
         "BillingReference": doc.header.documentReference?.billingReference ? [{
           "InvoiceDocumentReference": [{
             "ID": wrapValue(doc.header.InvoiceDocumentReference_ID || ""),
-            "UUID": wrapValue(doc.header.invoiceDocumentReference || "")
+            "UUID": wrapValue(doc.header.InvoiceDocumentReference_UUID || "")
           }],
         }] : [{
           "AdditionalDocumentReference": [
@@ -682,7 +682,7 @@ const mapToLHDNFormat = (excelData, version) => {
             "_": doc.header.documentCurrencyCode
           }],
           "TargetCurrencyCode": [{
-            "_": doc.header.taxCurrencyCode
+            "_": "MYR"
           }],
           "CalculationRate": [{
             "_": Number(doc.header.exchangeRate) || 0

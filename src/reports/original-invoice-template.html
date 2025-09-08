@@ -502,7 +502,7 @@
                 <td style="text-align: center; ">{{:taxRate}}%</td>
                 <td style="text-align: right; padding-right: 10px;">{{:totalAmount}}</td>
                 <td style="text-align: right; padding-right: 10px;">{{:totalTaxAmount}}</td>
-                <td style="text-align: right; padding-right: 10px;">{{if taxType === "Tax exemption" && standardTaxRate > 0}}{{:totalAmount}}*{{else}}{{:totalAmount}}{{/if}}</td>
+                <td style="text-align: right; padding-right: 10px;">{{if taxType === "Tax exemption"}}{{:totalAmount}}{{else}}0.00{{/if}}</td>
                 <td style="text-align: center; ">{{if LHDNtaxExemptionReason && LHDNtaxExemptionReason !== null && LHDNtaxExemptionReason !== 'NA' && LHDNtaxExemptionReason !== 'Not Applicable'}}{{:LHDNtaxExemptionReason}}{{else}}-{{/if}}</td>
             </tr>
             {{/for}}

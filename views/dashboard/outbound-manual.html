@@ -15,6 +15,8 @@
 
 <link href="/assets/css/pages/inbound/validation-modal.css" rel="stylesheet">
 <link href="/assets/css/pages/inbound/inbound-modal.css" rel="stylesheet">
+<!-- Enhanced Data Quality Validation Modal CSS -->
+<link href="/assets/css/pages/outbound/validation-modal.css" rel="stylesheet">
 
 <!-- Template Main CSS Files -->
 <link href="/assets/css/pages/outbound/outbound-table.css" rel="stylesheet">
@@ -3070,6 +3072,7 @@
 <script src="/assets/js/utils/toast.js"></script>
 <!-- New submission orchestrator -->
 <script src="/assets/js/modules/submission/submission-client.js"></script>
+<!-- Excel validation functions -->
 <script src="/assets/js/modules/excel/outbound-manual.js"></script>
 <!-- <script src="/assets/js/modules/tutorial/guided-tour.js"></script> -->
 <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
@@ -3132,6 +3135,57 @@
     </div>
 </div>
 
+<!-- Enhanced Data Quality Validation Modal -->
+<div class="modal fade excel-validation-error-modal" id="dataQualityValidationModal" tabindex="-1" aria-labelledby="dataQualityValidationModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg data-quality-modal">
+        <div class="modal-content">
+            <!-- Enhanced Header -->
+            <div class="data-quality-header">
+                <div class="error-icon">
+                    <i class="fas fa-exclamation-triangle"></i>
+                </div>
+                <h2 class="data-quality-title" id="dataQualityTitle">Data Quality Validation Failed</h2>
+                <p class="data-quality-subtitle" id="dataQualitySubtitle">
+                    Found data quality issues in your file
+                </p>
+                <div class="data-quality-stats" id="dataQualityStats">
+                    <!-- Statistics will be populated by JavaScript -->
+                </div>
+            </div>
+
+            <!-- Enhanced Body -->
+            <div class="data-quality-body" id="dataQualityBody">
+                <!-- Error categories will be populated by JavaScript -->
+            </div>
+
+            <!-- Enhanced Footer -->
+            <div class="data-quality-footer">
+                <div class="recommendations-section">
+                    <h4 class="recommendations-title">
+                        <i class="fas fa-lightbulb"></i>
+                        Recommendations
+                    </h4>
+                    <ul class="recommendations-list">
+                        <li class="recommendation-item">Fix all Critical errors before uploading</li>
+                        <li class="recommendation-item">Review Warning issues for data quality improvements</li>
+                        <li class="recommendation-item">Use the suggestions provided to correct formatting issues</li>
+                        <li class="recommendation-item">Ensure all required fields contain valid data</li>
+                    </ul>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="data-quality-btn secondary" data-bs-dismiss="modal">
+                        <i class="fas fa-times"></i>
+                        Close
+                    </button>
+                    <button type="button" class="data-quality-btn primary" id="downloadErrorReportBtn">
+                        <i class="fas fa-download"></i>
+                        Download Report
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- Alert Template -->
 <template id="alertTemplate">
