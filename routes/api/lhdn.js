@@ -785,7 +785,7 @@ const fetchRecentDocuments = async (req) => {
 
       // If we have submission UIDs, poll their status
       const uniquesubmissionuids = [
-        ...new set(documents.map((doc) => doc.submissionuid).filter(boolean)),
+        ...new Set(documents.map((doc) => doc.submissionuid).filter(Boolean)),
       ];
        if (uniquesubmissionuids.length > 0) {
          console.log(
@@ -796,7 +796,7 @@ const fetchRecentDocuments = async (req) => {
          for (const submissionuid of uniquesubmissionuids) {
            try {
              console.log(`polling submission status for: ${submissionuid}`);
-             await pollsubmissionstatus(submissionuid, 5); // limit to 5 attempts for background polling
+             await pollSubmissionStatus(submissionuid, 5); // limit to 5 attempts for background polling
            } catch (pollerror) {
              console.error(
               `error polling submission ${submissionuid}:`,
@@ -2459,6 +2459,91 @@ router.get("/documents/recent-total", async (_req, res) => {
       totalCount: 0,
       success: false,
       message: "Failed to fetch recent documents",
+    });
+  }
+});
+
+// Outbound status endpoint - Get all documents from WP_OUTBOUND_STATUS table
+router.get("/documents/outbound-status", async (req, res) => {
+  try {
+    console.log("Fetching outbound status data from WP_OUTBOUND_STATUS");
+
+    // Get all records from WP_OUTBOUND_STATUS table
+    const outboundRecords = await prisma.wP_OUTBOUND_STATUS.findMany({
+      select: {
+        uuid: true,
+        submissionUid: true,
+        longId: true,
+        invoice_number: true,
+        fileName: true,
+        status: true,
+        type: true,
+        company: true,
+        date: true,
+        created_at: true,
+        updated_at: true,
+        filePath: true,
+        errorMessage: true,
+        validationResults: true,
+      },
+      orderBy: {
+        created_at: "desc",
+      },
+    });
+
+    console.log(`Found ${outboundRecords.length} outbound status records`);
+
+    // Map the data to match the expected inbound format
+    const mappedRecords = outboundRecords.map((record) => ({
+      uuid: record.uuid,
+      submissionUid: record.submissionUid,
+      longId: record.longId,
+      internalId: record.invoice_number,
+      typeName: 'Invoice',
+      typeVersionName: '1.0',
+      issuerTin: null, // Not available in outbound table
+      issuerName: record.company || 'Unknown',
+      receiverId: null, // Not available in outbound table
+      receiverName: null, // Not available in outbound table
+      dateTimeReceived: record.created_at,
+      dateTimeValidated: record.updated_at,
+      status: record.status,
+      documentStatusReason: record.errorMessage,
+      cancelDateTime: null,
+      rejectRequestDateTime: null,
+      createdByUserId: null,
+      dateTimeIssued: record.date ? new Date(record.date) : record.created_at,
+      totalSales: null, // Not available in outbound table
+      totalExcludingTax: null,
+      totalDiscount: null,
+      totalNetAmount: null,
+      totalPayableAmount: null,
+      last_sync_date: record.updated_at,
+      sync_status: 'synced',
+      documentDetails: null,
+      created_at: record.created_at,
+      updated_at: record.updated_at,
+      document: null,
+      validationResults: record.validationResults,
+      // Additional outbound-specific fields
+      fileName: record.fileName,
+      filePath: record.filePath,
+      documentType: record.type,
+    }));
+
+    res.json({
+      success: true,
+      result: mappedRecords,
+      totalCount: mappedRecords.length,
+      source: 'WP_OUTBOUND_STATUS',
+      message: "Outbound status data retrieved successfully",
+    });
+  } catch (error) {
+    console.error("Error fetching outbound status data:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch outbound status data",
+      details: error.message,
     });
   }
 });

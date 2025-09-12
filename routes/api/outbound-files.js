@@ -26,17 +26,103 @@ const os = require('os');
 
 const CACHE_KEY_PREFIX = 'outbound_files';
 
+// Global status tracking for real-time polling updates
+const pollingStatusTracker = new Map();
+
 /**
- * Poll LHDN for submission status updates
+ * Create inbound status record from real LHDN data
+ * @param {Object} lhdnResult - Real data from LHDN API
+ * @param {string} submissionUid - Submission UID
+ * @param {string} invoiceNumber - Invoice number
+ */
+async function createInboundRecordFromLHDNData(lhdnResult, submissionUid, invoiceNumber) {
+    try {
+        if (!lhdnResult.success || !lhdnResult.documentDetails) {
+            console.log(`⚠️ No valid LHDN data to create inbound record for ${submissionUid}`);
+            return;
+        }
+
+        const docDetails = lhdnResult.documentDetails;
+        const inboundData = {
+            uuid: docDetails.uuid,
+            submissionUid: submissionUid,
+            longId: lhdnResult.longId || 'N/A',
+            internalId: invoiceNumber,
+            typeName: docDetails.typeName || 'Invoice',
+            typeVersionName: docDetails.typeVersionName || '1.0',
+            issuerTin: docDetails.issuerTin,
+            issuerName: docDetails.issuerName,
+            receiverId: docDetails.receiverId,
+            receiverName: docDetails.receiverName,
+            dateTimeReceived: docDetails.dateTimeReceived || new Date().toISOString(),
+            dateTimeValidated: docDetails.dateTimeValidated,
+            dateTimeIssued: docDetails.dateTimeIssued,
+            status: lhdnResult.status || 'Processing',
+            documentStatusReason: docDetails.documentStatusReason,
+            cancelDateTime: docDetails.cancelDateTime,
+            rejectRequestDateTime: docDetails.rejectRequestDateTime,
+            createdByUserId: docDetails.createdByUserId,
+            totalSales: docDetails.totalSales || 0,
+            totalExcludingTax: docDetails.totalExcludingTax || 0,
+            totalDiscount: docDetails.totalDiscount || 0,
+            totalNetAmount: docDetails.totalNetAmount || 0,
+            totalPayableAmount: docDetails.totalPayableAmount || 0,
+            documentCurrency: docDetails.documentCurrency || 'MYR',
+            last_sync_date: new Date().toISOString(),
+            sync_status: 'success',
+            documentDetails: JSON.stringify(docDetails),
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            document: null,
+            validationResults: docDetails.validationResults ? JSON.stringify(docDetails.validationResults) : null
+        };
+
+        // Upsert the inbound status record with real LHDN data
+        await prisma.wP_INBOUND_STATUS.upsert({
+            where: { uuid: docDetails.uuid },
+            update: {
+                ...inboundData,
+                updated_at: new Date().toISOString()
+            },
+            create: inboundData
+        });
+
+        console.log(`✅ Created/updated inbound record from real LHDN data for UUID: ${docDetails.uuid}, Status: ${lhdnResult.status}`);
+    } catch (error) {
+        console.error('❌ Error creating inbound record from LHDN data:', error);
+        // Don't throw error to avoid breaking the polling flow
+    }
+}
+
+/**
+ * Enhanced polling function with retry logic and better error handling
  * @param {string} submissionUid - The submission UID to poll for
  * @param {string} fileName - The file name
  * @param {string} invoice_number - The invoice number
  * @param {Object} req - The request object for session access
+ * @param {number} maxAttempts - Maximum number of polling attempts (default: 5)
+ * @param {number} attemptNumber - Current attempt number (for recursion)
+ * @param {string} type - Document type
+ * @param {string} company - Company name
+ * @param {string} date - Document date
  * @returns {Promise<Object>} - The polling result
  */
-async function pollSubmissionStatus(submissionUid, fileName, invoice_number, req, type = null, company = null, date = null) {
+async function pollSubmissionStatusEnhanced(submissionUid, fileName, invoice_number, req, maxAttempts = 5, attemptNumber = 1, type = null, company = null, date = null) {
+    const pollingId = `${submissionUid}_${Date.now()}`;
+
     try {
-        console.log(`Starting polling for submission ${submissionUid}`);
+        console.log(`[Polling ${attemptNumber}/${maxAttempts}] Starting enhanced polling for submission ${submissionUid}`);
+
+        // Update polling status tracker
+        updatePollingStatus(pollingId, {
+            submissionUid,
+            fileName,
+            invoice_number,
+            currentAttempt: attemptNumber,
+            maxAttempts,
+            status: 'polling',
+            lastUpdate: new Date()
+        });
 
         // Create a new LHDNSubmitter instance
         const submitter = new LHDNSubmitter(req);
@@ -47,9 +133,9 @@ async function pollSubmissionStatus(submissionUid, fileName, invoice_number, req
 
         try {
             token = await getTokenSession();
-            console.log('Using token from AuthorizeToken.ini for polling');
+            console.log(`[Polling ${attemptNumber}/${maxAttempts}] Using token from AuthorizeToken.ini for polling`);
         } catch (tokenError) {
-            console.error('Error getting token from AuthorizeToken.ini for polling:', tokenError);
+            console.error(`[Polling ${attemptNumber}/${maxAttempts}] Error getting token:`, tokenError);
             throw new Error('Failed to retrieve authentication token from AuthorizeToken.ini');
         }
 
@@ -60,16 +146,23 @@ async function pollSubmissionStatus(submissionUid, fileName, invoice_number, req
         // Check if the document already has a completed status
         const existingStatus = await prisma.wP_OUTBOUND_STATUS.findFirst({
             where: {
-                submissionUid,
+                submissionUid: submissionUid,
                 status: {
-                    in: ['Completed', 'Invalid', 'Partially Valid']
+                    in: ['Submitted', 'Completed', 'Invalid', 'Partially Valid', 'Valid']
                 }
             }
         });
 
         // If the document already has a completed status, don't poll again
         if (existingStatus) {
-            console.log(`Document ${submissionUid} already has status ${existingStatus.status}, skipping polling`);
+            console.log(`[Polling ${attemptNumber}/${maxAttempts}] Document ${submissionUid} already has status ${existingStatus.status}, skipping polling`);
+
+            updatePollingStatus(pollingId, {
+                status: 'completed',
+                finalStatus: existingStatus.status,
+                completedAt: new Date()
+            });
+
             return {
                 success: true,
                 status: existingStatus.status.toLowerCase(),
@@ -83,7 +176,7 @@ async function pollSubmissionStatus(submissionUid, fileName, invoice_number, req
         const result = await submitter.getSubmissionDetails(submissionUid, token);
 
         if (result.success) {
-            console.log(`Polling successful for ${submissionUid}, status: ${result.status}`);
+            console.log(`[Polling ${attemptNumber}/${maxAttempts}] Polling successful for ${submissionUid}, status: ${result.status}`);
 
             // Normalize status to lowercase for consistency
             const normalizedStatus = result.status.toLowerCase();
@@ -103,74 +196,141 @@ async function pollSubmissionStatus(submissionUid, fileName, invoice_number, req
                 date
             });
 
-            // If the status is valid/invalid/partially valid, we're done polling
-            if (normalizedStatus === 'valid' || normalizedStatus === 'invalid' || normalizedStatus === 'partially valid') {
-                console.log(`Document ${submissionUid} has final status ${normalizedStatus}, polling complete`);
-            }
+            // Create/update inbound status record with real LHDN data
+            await createInboundRecordFromLHDNData(result, submissionUid, invoice_number);
 
-            return result;
-        } else {
-            // Special case: If we get an error with "Invalid response format for status: 200",
-            // it might be because the document is already valid but the response format is unexpected
-            if (result.error && result.error.includes('Invalid response format for status: 200')) {
-                console.log(`Received 200 status for ${submissionUid} but with unexpected format, assuming valid`);
+            // If the status is final, we're done polling
+            if (['valid', 'invalid', 'partially valid'].includes(normalizedStatus)) {
+                console.log(`[Polling ${attemptNumber}/${maxAttempts}] Document ${submissionUid} has final status ${normalizedStatus}, polling complete`);
 
-                // Update the status to Valid
-                await submitter.updateSubmissionStatus({
-                    invoice_number,
-                    uuid: 'NA',
-                    submissionUid,
-                    fileName,
-                    status: 'Valid',
-                    longId: 'NA',
-                    type,
-                    company,
-                    date
+                updatePollingStatus(pollingId, {
+                    status: 'completed',
+                    finalStatus: normalizedStatus,
+                    completedAt: new Date()
                 });
 
-                return {
-                    success: true,
-                    status: 'valid',
-                    documentDetails: {},
-                    longId: 'NA',
-                    note: 'Assumed valid based on 200 response'
-                };
-            }
+                return result;
+            } else {
+                // Status is still pending, retry if we haven't reached max attempts
+                if (attemptNumber < maxAttempts) {
+                    console.log(`[Polling ${attemptNumber}/${maxAttempts}] Status still pending (${normalizedStatus}), scheduling retry in 10 seconds`);
 
-            console.error(`Polling failed for ${submissionUid}:`, result.error);
-            return result;
+                    updatePollingStatus(pollingId, {
+                        status: 'retrying',
+                        pendingStatus: normalizedStatus,
+                        nextRetryAt: new Date(Date.now() + 10000)
+                    });
+
+                    // Schedule next attempt with 10-second delay
+                    setTimeout(() => {
+                        pollSubmissionStatusEnhanced(submissionUid, fileName, invoice_number, req, maxAttempts, attemptNumber + 1, type, company, date)
+                            .then(retryResult => {
+                                console.log(`[Polling Retry] Completed for ${submissionUid}:`, retryResult);
+                            })
+                            .catch(retryError => {
+                                console.error(`[Polling Retry] Error for ${submissionUid}:`, retryError);
+                            });
+                    }, 10000);
+
+                    return {
+                        success: true,
+                        status: normalizedStatus,
+                        note: `Polling attempt ${attemptNumber}/${maxAttempts} completed, retry scheduled`,
+                        willRetry: true
+                    };
+                } else {
+                    console.log(`[Polling ${attemptNumber}/${maxAttempts}] Max attempts reached for ${submissionUid}, final status: ${normalizedStatus}`);
+
+                    updatePollingStatus(pollingId, {
+                        status: 'max_attempts_reached',
+                        finalStatus: normalizedStatus,
+                        completedAt: new Date()
+                    });
+
+                    return result;
+                }
+            }
+        } else {
+            // Handle polling failure - will continue in next chunk
+            console.error(`[Polling ${attemptNumber}/${maxAttempts}] Polling failed for ${submissionUid}:`, result.error);
+            throw new Error(`Polling failed: ${result.error}`);
         }
     } catch (error) {
-        console.error(`Error polling submission ${submissionUid}:`, error);
+        console.error(`[Polling ${attemptNumber}/${maxAttempts}] Error polling submission ${submissionUid}:`, error);
 
-        // If the error is about "Invalid response format for status: 200", handle it specially
-        if (error.message && error.message.includes('Invalid response format for status: 200')) {
-            console.log(`Received 200 status for ${submissionUid} but with error, assuming valid`);
-
-            // Update the status to Valid (not Completed)
-            await submitter.updateSubmissionStatus({
-                invoice_number,
-                uuid: 'NA',
-                submissionUid,
-                fileName,
-                status: 'Valid',
-                longId: 'NA',
-                type,
-                company,
-                date
-            });
-
-            return {
-                success: true,
-                status: 'valid',
-                documentDetails: {},
-                longId: 'NA',
-                note: 'Assumed valid based on 200 response with error'
-            };
-        }
-
+        // Will handle error cases in next chunk
         throw error;
     }
+}
+
+/**
+ * Update polling status tracker
+ */
+function updatePollingStatus(pollingId, updates) {
+    try {
+        const existing = pollingStatusTracker.get(pollingId) || {};
+        const updated = { ...existing, ...updates, lastUpdate: new Date() };
+        pollingStatusTracker.set(pollingId, updated);
+
+        // Clean up old entries (older than 1 hour)
+        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+        for (const [id, status] of pollingStatusTracker.entries()) {
+            if (status.lastUpdate < oneHourAgo) {
+                pollingStatusTracker.delete(id);
+            }
+        }
+    } catch (error) {
+        console.error('Error updating polling status:', error);
+    }
+}
+
+/**
+ * Start staggered polling for multiple submissions to avoid rate limits
+ * @param {Array} submissions - Array of submission objects
+ * @param {Object} req - Request object
+ */
+function startStaggeredPolling(submissions, req) {
+    console.log(`Starting staggered polling for ${submissions.length} submissions`);
+
+    submissions.forEach((submission, index) => {
+        const { submissionUid, fileName, invoice_number, type, company, date } = submission;
+
+        // Stagger polling with increasing delays to avoid rate limits
+        // Base delay of 5 seconds + 2 seconds per submission
+        const delay = 5000 + (index * 2000);
+
+        console.log(`Scheduling polling for ${submissionUid} with ${delay}ms delay`);
+
+        setTimeout(() => {
+            pollSubmissionStatusEnhanced(submissionUid, fileName, invoice_number, req, 5, 1, type, company, date)
+                .then(pollResult => {
+                    console.log(`Staggered polling completed for ${submissionUid}:`, pollResult);
+                })
+                .catch(pollError => {
+                    console.error(`Staggered polling error for ${submissionUid}:`, pollError);
+                });
+        }, delay);
+    });
+}
+
+/**
+ * Get active polling statistics
+ */
+function getPollingStatistics() {
+    const statuses = Array.from(pollingStatusTracker.values());
+
+    return {
+        total: statuses.length,
+        byStatus: {
+            polling: statuses.filter(s => s.status === 'polling').length,
+            retrying: statuses.filter(s => s.status === 'retrying').length,
+            completed: statuses.filter(s => s.status === 'completed').length,
+            failed: statuses.filter(s => s.status === 'failed').length,
+            error: statuses.filter(s => s.status === 'error').length
+        },
+        oldestActive: statuses.length > 0 ? Math.min(...statuses.map(s => s.lastUpdate.getTime())) : null,
+        newestActive: statuses.length > 0 ? Math.max(...statuses.map(s => s.lastUpdate.getTime())) : null
+    };
 }
 
 let lastFilesModifiedTime = null;
@@ -2424,6 +2584,8 @@ router.post('/:fileName/submit-to-lhdn', auth.isApiAuthenticated, async (req, re
                 // First update the submission status in database
                 await submitter.updateSubmissionStatus(statusData);
 
+                // Inbound status will be updated by LHDN polling when real data is available
+
                 // Log status update
                 await OutboundLoggingService.logStatusUpdate(req, statusData);
 
@@ -2446,18 +2608,18 @@ router.post('/:fileName/submit-to-lhdn', auth.isApiAuthenticated, async (req, re
                     invoice_number
                 );
 
-                // Start polling for submission status in the background with proper interval
-                // This follows the LHDN SDK best practice for polling (3-5 second interval)
-                console.log(`Starting delayed polling for ${submissionUid} with 5 second initial delay`);
+                // Start enhanced polling for submission status in the background
+                // Uses retry logic and better error handling
+                console.log(`Starting enhanced delayed polling for ${submissionUid} with 5 second initial delay`);
 
                 // Initial delay of 5 seconds before first poll as recommended by LHDN
                 setTimeout(() => {
-                    pollSubmissionStatus(submissionUid, fileName, invoice_number, req, type, company, date)
+                    pollSubmissionStatusEnhanced(submissionUid, fileName, invoice_number, req, 5, 1, type, company, date)
                         .then(pollResult => {
-                            console.log(`Polling completed for ${submissionUid}:`, pollResult);
+                            console.log(`Enhanced polling completed for ${submissionUid}:`, pollResult);
                         })
                         .catch(pollError => {
-                            console.error(`Polling error for ${submissionUid}:`, pollError);
+                            console.error(`Enhanced polling error for ${submissionUid}:`, pollError);
                         });
                 }, 5000); // 5 second delay
 
@@ -3701,7 +3863,7 @@ router.post('/:fileName/submit-to-lhdn-consolidated', auth.isApiAuthenticated, a
                 const submissionUid = result.data.submissionUid;
 
                 // First update the submission status in database
-                await submitter.updateSubmissionStatus({
+                const statusData = {
                     invoice_number,
                     uuid: acceptedDoc.uuid,
                     submissionUid: submissionUid,
@@ -3711,7 +3873,11 @@ router.post('/:fileName/submit-to-lhdn-consolidated', auth.isApiAuthenticated, a
                     type,
                     company,
                     date
-                });
+                };
+
+                await submitter.updateSubmissionStatus(statusData);
+
+                // Inbound status will be updated by LHDN polling when real data is available
 
                 // Then update the Excel file
                 const excelUpdateResult = await submitter.updateExcelWithResponseConsolidated(
@@ -3724,18 +3890,18 @@ router.post('/:fileName/submit-to-lhdn-consolidated', auth.isApiAuthenticated, a
                     invoice_number
                 );
 
-                // Start polling for submission status in the background with proper interval
-                // This follows the LHDN SDK best practice for polling (3-5 second interval)
-                console.log(`Starting delayed polling for ${submissionUid} with 5 second initial delay`);
+                // Start enhanced polling for submission status in the background
+                // Uses retry logic and better error handling
+                console.log(`Starting enhanced delayed polling for ${submissionUid} with 5 second initial delay`);
 
                 // Initial delay of 5 seconds before first poll as recommended by LHDN
                 setTimeout(() => {
-                    pollSubmissionStatus(submissionUid, fileName, invoice_number, req, type, company, date)
+                    pollSubmissionStatusEnhanced(submissionUid, fileName, invoice_number, req, 5, 1, type, company, date)
                         .then(pollResult => {
-                            console.log(`Polling completed for ${submissionUid}:`, pollResult);
+                            console.log(`Enhanced polling completed for ${submissionUid}:`, pollResult);
                         })
                         .catch(pollError => {
-                            console.error(`Polling error for ${submissionUid}:`, pollError);
+                            console.error(`Enhanced polling error for ${submissionUid}:`, pollError);
                         });
                 }, 5000); // 5 second delay
 
@@ -5001,6 +5167,157 @@ router.post('/sync-status', async (req, res) => {
             success: false,
             message: 'Failed to synchronize status',
             error: error.message
+        });
+    }
+});
+
+/**
+ * Get polling status for monitoring
+ */
+router.get('/polling-status', auth.isApiAuthenticated, async (req, res) => {
+    try {
+        const { submissionUid } = req.query;
+
+        if (submissionUid) {
+            // Get status for specific submission
+            const statuses = Array.from(pollingStatusTracker.entries())
+                .filter(([, status]) => status.submissionUid === submissionUid)
+                .map(([id, status]) => ({ id, ...status }));
+
+            res.json({
+                success: true,
+                submissionUid,
+                statuses
+            });
+        } else {
+            // Get all active polling statuses with statistics
+            const allStatuses = Array.from(pollingStatusTracker.entries())
+                .map(([id, status]) => ({ id, ...status }));
+
+            const statistics = getPollingStatistics();
+
+            res.json({
+                success: true,
+                totalActive: allStatuses.length,
+                statistics,
+                statuses: allStatuses
+            });
+        }
+    } catch (error) {
+        console.error('Error getting polling status:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get polling status'
+        });
+    }
+});
+
+/**
+ * Manual polling recovery endpoint
+ */
+router.post('/manual-poll', auth.isApiAuthenticated, async (req, res) => {
+    try {
+        const { submissionUids } = req.body;
+
+        if (!submissionUids || !Array.isArray(submissionUids)) {
+            return res.status(400).json({
+                success: false,
+                error: 'submissionUids array is required'
+            });
+        }
+
+        console.log(`Manual polling requested for ${submissionUids.length} submissions`);
+
+        const results = [];
+
+        for (let i = 0; i < submissionUids.length; i++) {
+            const submissionUid = submissionUids[i];
+            try {
+                console.log(`Manual polling submission ${i + 1}/${submissionUids.length}: ${submissionUid}`);
+
+                const pollResult = await pollSubmissionStatusEnhanced(submissionUid, 'manual', 'manual', req, 3, 1);
+                results.push({
+                    submissionUid,
+                    success: true,
+                    result: pollResult,
+                });
+
+                // Add delay between polls to avoid rate limiting
+                if (i < submissionUids.length - 1) {
+                    await new Promise((resolve) => setTimeout(resolve, 2000));
+                }
+            } catch (error) {
+                console.error(`Manual polling error for ${submissionUid}:`, error);
+                results.push({
+                    submissionUid,
+                    success: false,
+                    error: error.message,
+                });
+            }
+        }
+
+        res.json({
+            success: true,
+            message: `Manual polling completed for ${submissionUids.length} submissions`,
+            results,
+        });
+    } catch (error) {
+        console.error('Manual polling error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to process manual polling request',
+        });
+    }
+});
+
+/**
+ * Check for recent submissions to notify inbound module
+ */
+router.get('/recent-submissions', auth.isApiAuthenticated, async (req, res) => {
+    try {
+        const { since } = req.query;
+
+        if (!since) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing "since" parameter'
+            });
+        }
+
+        // Check for submissions since the given timestamp
+        const recentSubmissions = await prisma.wP_OUTBOUND_STATUS.findMany({
+            where: {
+                updated_at: {
+                    gte: new Date(since)
+                },
+                status: {
+                    in: ['Submitted', 'Valid', 'Invalid']
+                }
+            },
+            select: {
+                id: true,
+                submissionUid: true,
+                fileName: true,
+                status: true,
+                updated_at: true
+            },
+            orderBy: {
+                updated_at: 'desc'
+            }
+        });
+
+        res.json({
+            success: true,
+            hasNewSubmissions: recentSubmissions.length > 0,
+            count: recentSubmissions.length,
+            submissions: recentSubmissions
+        });
+
+    } catch (error) {
+        console.error('Error checking recent submissions:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to check recent submissions'
         });
     }
 });

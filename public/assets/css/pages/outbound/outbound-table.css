@@ -184,6 +184,18 @@
     background-color: #1e3a8a;
 }
 
+.outbound-action-btn.success {
+    background-color: #198754;
+    color: #fff;
+}
+
+.outbound-action-btn.success:hover {
+    background-color: #155a3a;
+}
+
+.outbound-action-btn.success:active {
+    background-color: #155a3a;
+}
 .outbound-action-btn.submit:active {
     background-color: #1e3a8a;
 }

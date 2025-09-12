@@ -268,8 +268,8 @@ const startServer = async () => {
     await ensureDirectories();
     jsreportInstance = await initJsReport();
 
-    const httpPort = process.env.HTTP_PORT || 3010; // HTTP on 3010
-    const httpsPort = process.env.HTTPS_PORT || 3011; // HTTPS on 3011 (different port)
+    const httpPort = process.env.HTTP_PORT || 3000; // HTTP on 3000
+    const httpsPort = process.env.HTTPS_PORT || 443; // HTTPS on 443 (different port)
 
     // Create HTTP server
     httpServer = http.createServer((req, res) => {

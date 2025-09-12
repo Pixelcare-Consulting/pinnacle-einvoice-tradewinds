@@ -190,7 +190,7 @@ document.addEventListener("DOMContentLoaded", () => {
     console.log("Managers initialized successfully");
   } catch (error) {
     console.error("Error initializing managers:", error);
-    Swal.fire({
+    CustomModal.fire({
       icon: "error",
       title: "Initialization Error",
       text: "Failed to initialize the application. Please refresh the page.",
@@ -549,16 +549,20 @@ class InvoiceTableManager {
     if (InvoiceTableManager.instance) {
       return InvoiceTableManager.instance;
     }
-    this.currentDataSource = "archive"; // Start with archive data to avoid rate limiting
+    this.currentDataSource = "live"; // Use live LHDN data as the only data source
     this.table = null;
     this.isRefreshing = false; // Add refresh state tracking
     this.lastRefreshTime = 0; // Track last refresh time for rate limiting
-    this.refreshCooldown = 5000; // 5 second cooldown between refreshes
+    this.refreshCooldown = 3000; // 3 second cooldown between refreshes (optimized)
+    this.cacheTimeout = 30000; // 30 seconds cache timeout (optimized from default)
 
     // Enhanced rate limiting for LHDN API calls
     this.rateLimiter = new RateLimiter();
     this.requestQueue = new RequestQueue();
     this.loadingStates = new Map(); // Track loading states for different operations
+
+    // Test endpoint connectivity before initializing table
+    this.testEndpointConnectivity();
 
     this.initializeTable();
     this.initializeDataSourceToggle();
@@ -567,6 +571,9 @@ class InvoiceTableManager {
     setTimeout(() => {
       this.startRateLimitMonitoring();
     }, 1000);
+
+    // Set up auto-refresh mechanism for new submissions
+    this.setupAutoRefresh();
 
     InvoiceTableManager.instance = this;
   }
@@ -831,17 +838,237 @@ class InvoiceTableManager {
     checkAuth();
   }
 
+  // Test endpoint connectivity
+  async testEndpointConnectivity() {
+    try {
+      console.log("[Inbound] Testing endpoint connectivity...");
+
+      // Test the main endpoint
+      const response = await fetch("/api/lhdn/documents/recent?useDatabase=true&fallbackOnly=true", {
+        method: "GET",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json"
+        }
+      });
+
+      console.log("[Inbound] Endpoint test response:", {
+        status: response.status,
+        statusText: response.statusText,
+        url: response.url
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log("[Inbound] Endpoint test successful:", data);
+      } else {
+        console.warn("[Inbound] Endpoint test failed:", response.status, response.statusText);
+      }
+    } catch (error) {
+      console.error("[Inbound] Endpoint connectivity test failed:", error);
+    }
+  }
+
+  // Setup auto-refresh mechanism for new submissions
+  setupAutoRefresh() {
+    // Listen for storage events (cross-tab communication)
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'newSubmissionNotification') {
+        console.log('📢 New submission detected, refreshing inbound data...');
+        this.handleNewSubmission();
+      } else if (e.key === 'status_update_notification') {
+        console.log('📢 Status update detected, refreshing inbound data...');
+        this.handleStatusUpdate();
+      }
+    });
+
+    // Listen for custom events from outbound module
+    window.addEventListener('outboundSubmissionComplete', (e) => {
+      console.log('📢 Outbound submission complete event received:', e.detail);
+      this.handleNewSubmission();
+    });
+
+    // Listen for status update events
+    window.addEventListener('status-update', (e) => {
+      console.log('📢 Status update event received:', e.detail);
+      this.handleStatusUpdate();
+    });
+
+    // Outbound refresh requests are no longer needed since we only use live LHDN data
+
+    // Check for new submissions periodically (every 15 seconds for faster updates)
+    setInterval(() => {
+      this.checkForNewSubmissions();
+    }, 15000);
+
+    // Additional faster polling for status updates (every 10 seconds)
+    setInterval(() => {
+      this.checkForStatusUpdates();
+    }, 10000);
+  }
+
+  // Handle new submission notification
+  async handleNewSubmission() {
+    try {
+      // Clear cache to force fresh data
+      localStorage.removeItem('inboundTableData');
+      localStorage.removeItem('lastDataUpdate');
+
+      // Show notification to user
+      ToastManager.show('New submission detected. Refreshing data...', 'info', 3000);
+
+      // Refresh current data source
+      await this.refreshCurrentDataSource();
+
+      // Clear the notification flag
+      localStorage.removeItem('newSubmissionNotification');
+    } catch (error) {
+      console.error('Error handling new submission:', error);
+    }
+  }
+
+  // Handle status update notification
+  async handleStatusUpdate() {
+    try {
+      console.log('🔄 Handling status update notification...');
+
+      // Clear cache to force fresh data
+      localStorage.removeItem('inboundTableData');
+      localStorage.removeItem('lastDataUpdate');
+
+      // Show notification to user
+      ToastManager.show('Document status updated. Refreshing data...', 'success', 3000);
+
+      // Refresh current data source with higher priority
+      await this.refreshCurrentDataSourceWithPriority();
+
+      // Clear the notification flag
+      localStorage.removeItem('status_update_notification');
+    } catch (error) {
+      console.error('❌ Error handling status update:', error);
+      ToastManager.show('Error refreshing data after status update', 'error');
+    }
+  }
+
+  // Refresh current data source with priority handling
+  async refreshCurrentDataSourceWithPriority() {
+    try {
+      console.log('🚀 Refreshing data source with priority...');
+
+      // Use standard timeout for live LHDN data
+      const originalTimeout = this.cacheTimeout;
+      this.cacheTimeout = 5000;
+
+      await this.refreshCurrentDataSource();
+
+      // Restore original timeout
+      this.cacheTimeout = originalTimeout;
+
+    } catch (error) {
+      console.error('❌ Error refreshing data source with priority:', error);
+      throw error;
+    }
+  }
+
+  // Outbound-specific methods removed since we only use live LHDN data now
+
+  // Check for new submissions by comparing timestamps
+  async checkForNewSubmissions() {
+    try {
+      const lastCheck = localStorage.getItem('lastSubmissionCheck');
+      const currentTime = Date.now();
+
+      // Only check if it's been more than 15 seconds since last check (optimized)
+      if (lastCheck && (currentTime - parseInt(lastCheck)) < 15000) {
+        return;
+      }
+
+      // Check for recent submissions in the last 5 minutes
+      const fiveMinutesAgo = new Date(currentTime - 5 * 60 * 1000).toISOString();
+      const response = await fetch(`/api/outbound-files/recent-submissions?since=${fiveMinutesAgo}`);
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.hasNewSubmissions) {
+          console.log('New submissions found, triggering refresh...');
+          this.handleNewSubmission();
+        }
+      }
+
+      localStorage.setItem('lastSubmissionCheck', currentTime.toString());
+    } catch (error) {
+      console.error('Error checking for new submissions:', error);
+    }
+  }
+
+  // Check for status updates more frequently
+  async checkForStatusUpdates() {
+    try {
+      const lastStatusCheck = localStorage.getItem('lastStatusCheck');
+      const currentTime = Date.now();
+
+      // Only check if it's been more than 10 seconds since last status check
+      if (lastStatusCheck && (currentTime - parseInt(lastStatusCheck)) < 10000) {
+        return;
+      }
+
+      // Skip if currently refreshing to avoid conflicts
+      if (this.isRefreshing) {
+        return;
+      }
+
+      // Check for any active polling statuses
+      const response = await fetch('/api/outbound-files/polling-status');
+
+      if (response.ok) {
+        const data = await response.json();
+
+        if (data.success && data.statistics) {
+          const { statistics } = data;
+
+          // If there are completed or failed polling operations, refresh data
+          if (statistics.byStatus.completed > 0 || statistics.byStatus.failed > 0) {
+            console.log('📊 Status updates detected via periodic check:', statistics);
+
+            // Use standard refresh interval for live LHDN data
+            const refreshInterval = 8000;
+
+            // Only refresh if we haven't refreshed recently
+            const lastRefresh = localStorage.getItem('lastDataUpdate');
+            if (!lastRefresh || (currentTime - parseInt(lastRefresh)) > refreshInterval) {
+              await this.handleStatusUpdate();
+            }
+          }
+        }
+      }
+
+      localStorage.setItem('lastStatusCheck', currentTime.toString());
+    } catch (error) {
+      console.error('❌ Error checking for status updates:', error);
+    }
+  }
+
+  // Refresh current data source
+  async refreshCurrentDataSource() {
+    try {
+      if (this.currentDataSource === "live") {
+        await this.switchToLiveData();
+      }
+    } catch (error) {
+      console.error('Error refreshing current data source:', error);
+      ToastManager.show('Error refreshing data. Please try again.', 'error', 5000);
+    }
+  }
+
   // Initialize data source toggle functionality
   initializeDataSourceToggle() {
     const self = this;
 
-    // Handle data source toggle
+    // Handle data source toggle (simplified to only live data)
     $('input[name="dataSource"]').on("change", function () {
       const selectedSource = $(this).attr("id");
       if (selectedSource === "liveDataSource") {
         self.switchToLiveData();
-      } else if (selectedSource === "archiveDataSource") {
-        self.switchToArchiveData();
       }
     });
 
@@ -941,43 +1168,8 @@ class InvoiceTableManager {
     }
   }
 
-  // Switch to archive staging data
-  async switchToArchiveData() {
-    try {
-      this.currentDataSource = "archive";
-
-      // Show loading state
-      this.showLoadingBackdrop("Loading Archive Staging Data");
-
-      // Fetch archive data from WP_INBOUND_STATUS table
-      const response = await fetch("/api/lhdn/documents/archive-staging");
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to load archive staging data");
-      }
-
-      // Update table with archive data
-      if (this.table) {
-        this.table
-          .clear()
-          .rows.add(data.result || [])
-          .draw();
-      } else {
-        // Initialize table with archive data
-        this.initializeTableWithLocalData(data.result || []);
-      }
-
-      this.hideLoadingBackdrop();
-      this.updateCardTotals();
-    } catch (error) {
-      console.error("Error switching to archive data:", error);
-      this.hideLoadingBackdrop();
-      this.showErrorMessage(
-        "Failed to load archive staging data: " + error.message
-      );
-    }
-  }
+  // Archive and outbound data sources have been removed for simplicity
+  // Only live LHDN data is now supported
 
   // Refresh current data source with enhanced throttling
   async refreshCurrentDataSource() {
@@ -1026,9 +1218,6 @@ class InvoiceTableManager {
         // Force refresh live data with rate limiting
         window.forceRefreshLHDN = true;
         await this.switchToLiveData();
-      } else {
-        // Refresh archive data (no rate limiting needed)
-        await this.switchToArchiveData();
       }
 
       // Update last refresh time on success
@@ -1101,7 +1290,7 @@ class InvoiceTableManager {
         } catch (fallbackError) {
           console.error("Database fallback also failed:", fallbackError);
           // Show a more neutral message
-          Swal.fire({
+          CustomModal.fire({
             icon: "info",
             title: "Loading Invoice Data",
             text: "We're having trouble loading your invoice data. Would you like to try again?",
@@ -1577,7 +1766,11 @@ class InvoiceTableManager {
         `);
 
     $(".dataTables_length").append(refreshButton);
-    refreshButton.tooltip(); // Initialize tooltip for the refresh button
+    // Initialize tooltip for the refresh button with proper container
+    new bootstrap.Tooltip(refreshButton[0], {
+      container: 'body',
+      boundary: 'viewport'
+    });
 
     // Handle refresh button click with enhanced responsiveness
     $("#refreshLHDNData")
@@ -1624,26 +1817,7 @@ class InvoiceTableManager {
 
         let loadingModal, progressBar, statusText, detailsText, backdrop;
         try {
-          // For local data tables (archive), just refresh the current data source
-          if (this.currentDataSource === "archive") {
-            button.find(".btn-text").text("Refreshing Archive...");
-
-            await this.refreshCurrentDataSource();
-
-            // Success state
-            button.removeClass("processing").addClass("success");
-            button.find(".btn-text").text("Success!");
-
-            // Restore button after delay
-            setTimeout(() => {
-              button.removeClass("success btn-loading");
-              button.find(".btn-text").text("Refresh LHDN Data");
-              button.prop("disabled", false);
-            }, 2000);
-
-            ToastManager.show("Archive data refreshed successfully", "success");
-            return;
-          }
+          // Only live LHDN data is supported now
 
           // For live data, use the full refresh process
           loadingModal = document.getElementById("loadingModal");
@@ -1652,15 +1826,13 @@ class InvoiceTableManager {
           detailsText = document.getElementById("loadingDetails");
 
           if (this.checkDataFreshness() && !window.forceRefreshLHDN) {
-            const result = await Swal.fire({
+            const result = await CustomModal.fire({
               title: "Data is up to date",
               text: "The data was updated less than 15 minutes ago. Do you still want to refresh?",
               icon: "info",
               showCancelButton: true,
               confirmButtonText: "Yes, refresh anyway",
               cancelButtonText: "No, keep current data",
-              confirmButtonColor: "#1e40af",
-              cancelButtonColor: "#dc3545",
             });
 
             if (!result.isConfirmed) {
@@ -1879,9 +2051,11 @@ class InvoiceTableManager {
       processing: false,
       serverSide: false,
       ajax: {
-        url: "/api/lhdn/documents/archive-staging", // Use staging data by default to avoid rate limiting
+        url: "/api/lhdn/documents/recent", // Use live LHDN data as the only data source
         method: "GET",
         data: function (d) {
+          console.log("[Inbound] Making AJAX request to:", "/api/lhdn/documents/recent");
+
           // Check if we should use cached data on page load
           const lastUpdate = localStorage.getItem("lastDataUpdate");
           const cachedData = localStorage.getItem("inboundTableData");
@@ -1894,7 +2068,7 @@ class InvoiceTableManager {
             // If cache is still valid and this is not a forced refresh
             if (now - lastUpdateTime < cacheValidTime) {
               d.useCache = true;
-              console.log("Using cached data for table load");
+              console.log("[Inbound] Using cached data for table load");
             }
           }
 
@@ -1902,9 +2076,12 @@ class InvoiceTableManager {
           d.forceRefresh = window.forceRefreshLHDN || false;
           // Add useDatabase parameter to ensure we get data even if API fails
           d.useDatabase = true;
+
+          console.log("[Inbound] Request parameters:", d);
           return d;
         },
         dataSrc: function (json) {
+          console.log("[Inbound] Received response:", json);
           let result = [];
 
           // Check if we should use cached data
@@ -1914,13 +2091,13 @@ class InvoiceTableManager {
               try {
                 result = JSON.parse(cachedData);
                 console.log(
-                  "Using cached inbound data:",
+                  "[Inbound] Using cached inbound data:",
                   result.length,
                   "records"
                 );
               } catch (e) {
                 console.warn(
-                  "Failed to parse cached data, fetching fresh data"
+                  "[Inbound] Failed to parse cached data, fetching fresh data"
                 );
                 result = json && json.result ? json.result : [];
               }
@@ -1939,17 +2116,17 @@ class InvoiceTableManager {
                 );
                 localStorage.setItem("lastDataUpdate", new Date().getTime());
                 console.log(
-                  "Cached fresh inbound data:",
+                  "[Inbound] Cached fresh inbound data:",
                   result.length,
                   "records"
                 );
               } catch (e) {
-                console.warn("Failed to cache data:", e);
+                console.warn("[Inbound] Failed to cache data:", e);
               }
             }
           }
 
-          console.log("Current Inbound Results: ", result);
+          console.log("[Inbound] Final processed results:", result);
           // Reset the force refresh flag
           window.forceRefreshLHDN = false;
 
@@ -1962,7 +2139,14 @@ class InvoiceTableManager {
           return result;
         },
         error: function (xhr, error, thrown) {
-          console.error("Ajax error:", error, thrown);
+          console.error("[Inbound] Ajax error:", {
+            status: xhr.status,
+            statusText: xhr.statusText,
+            error: error,
+            thrown: thrown,
+            responseText: xhr.responseText,
+            url: "/api/lhdn/documents/recent"
+          });
 
           // Check for specific error types
           let errorMessage = "Error fetching data from server.";
@@ -1974,7 +2158,7 @@ class InvoiceTableManager {
             errorMessage =
               "Authentication error. Please refresh the page to log in again.";
             // Show a more detailed error modal for auth issues
-            Swal.fire({
+            CustomModal.fire({
               icon: "warning",
               title: "Session Expired",
               text: "Your session has expired or you are not authenticated. Please refresh the page to log in again.",
@@ -2470,7 +2654,11 @@ class InvoiceTableManager {
         `);
 
     $(".dataTables_length").append(refreshButton);
-    refreshButton.tooltip(); // Initialize tooltip for the refresh button
+    // Initialize tooltip for the refresh button with proper container
+    new bootstrap.Tooltip(refreshButton[0], {
+      container: 'body',
+      boundary: 'viewport'
+    });
 
     // Handle refresh button click (guard against multiple bindings and concurrent refresh)
     // Guard the second handler as well
@@ -2511,15 +2699,13 @@ class InvoiceTableManager {
           detailsText = document.getElementById("loadingDetails");
 
           if (this.checkDataFreshness() && !window.forceRefreshLHDN) {
-            const result = await Swal.fire({
+            const result = await CustomModal.fire({
               title: "Data is up to date",
               text: "The data was updated less than 15 minutes ago. Do you still want to refresh?",
               icon: "info",
               showCancelButton: true,
               confirmButtonText: "Yes, refresh anyway",
               cancelButtonText: "No, keep current data",
-              confirmButtonColor: "#1e40af",
-              cancelButtonColor: "#dc3545",
             });
             if (!result.isConfirmed) return;
           }
@@ -3341,7 +3527,10 @@ class InvoiceTableManager {
 
           // Initialize tooltip if not already done
           if (typeof bootstrap !== "undefined" && bootstrap.Tooltip) {
-            new bootstrap.Tooltip(avgTimeElement[0]);
+            new bootstrap.Tooltip(avgTimeElement[0], {
+              container: 'body',
+              boundary: 'viewport'
+            });
           }
         } else {
           avgTimeElement.text("N/A").show();
@@ -3412,7 +3601,10 @@ class InvoiceTableManager {
           ].forEach((selector) => {
             const element = document.querySelector(selector);
             if (element) {
-              new bootstrap.Tooltip(element);
+              new bootstrap.Tooltip(element, {
+                container: 'body',
+                boundary: 'viewport'
+              });
             }
           });
         }
@@ -3481,13 +3673,17 @@ class InvoiceTableManager {
           clipboardIcon.style.opacity = "1";
         }
 
-        // Update tooltip
+        // Update tooltip with proper container
         const tooltip = bootstrap.Tooltip.getInstance(element);
         if (tooltip) {
           tooltip.dispose();
         }
         element.setAttribute("data-bs-original-title", "Copied!");
-        new bootstrap.Tooltip(element, { trigger: "manual" }).show();
+        new bootstrap.Tooltip(element, {
+          trigger: "manual",
+          container: 'body',
+          boundary: 'viewport'
+        }).show();
 
         // Reset after 1.5 seconds
         setTimeout(() => {
@@ -3503,7 +3699,10 @@ class InvoiceTableManager {
             currentTooltip.dispose();
           }
           element.setAttribute("data-bs-original-title", "Click to copy");
-          new bootstrap.Tooltip(element);
+          new bootstrap.Tooltip(element, {
+            container: 'body',
+            boundary: 'viewport'
+          });
         }, 1500);
 
         // Show success toast with specific message based on what was copied
@@ -3520,9 +3719,24 @@ class InvoiceTableManager {
       }
     };
 
-    // Initialize tooltips
+    // Initialize tooltips with proper container and boundary settings
     const initTooltips = () => {
-      $('[data-bs-toggle="tooltip"]').tooltip("dispose").tooltip();
+      // Dispose existing tooltips first
+      $('[data-bs-toggle="tooltip"]').each(function() {
+        const existingTooltip = bootstrap.Tooltip.getInstance(this);
+        if (existingTooltip) {
+          existingTooltip.dispose();
+        }
+      });
+
+      // Initialize new tooltips with proper settings
+      $('[data-bs-toggle="tooltip"]').each(function() {
+        new bootstrap.Tooltip(this, {
+          container: 'body',
+          boundary: 'viewport',
+          placement: $(this).data('bs-placement') || 'top'
+        });
+      });
     };
 
     // Initialize tooltips on load
@@ -4058,12 +4272,8 @@ async function cancelInboundDocument(uuid) {
       try {
         bsModal.hide();
 
-        Swal.fire({
-          title: "Cancelling...",
-          text: "Please wait while we process your cancellation request",
-          allowOutsideClick: false,
-          didOpen: () => Swal.showLoading(),
-        });
+        const loadingModal = CustomModal.showLoading();
+        // Note: CustomModal.showLoading() handles the loading state automatically
 
         // Wait for rate limit slot before making the API call
         await manager.rateLimiter.waitForSlot("cancelDocument");
@@ -4105,7 +4315,8 @@ async function cancelInboundDocument(uuid) {
           return result;
         }, 3); // Highest priority for cancel operations
 
-        Swal.fire({
+        CustomModal.close(); // Close the loading modal
+        CustomModal.fire({
           icon: "success",
           title: "Cancelled",
           text: data.message || "Document cancelled successfully",
@@ -4120,7 +4331,8 @@ async function cancelInboundDocument(uuid) {
         }
       } catch (err) {
         console.error("Inbound cancellation failed:", err);
-        Swal.fire({
+        CustomModal.close(); // Close the loading modal
+        CustomModal.fire({
           icon: "error",
           title: "Cancellation Failed",
           text: err.message || "Please try again later.",
@@ -4145,7 +4357,7 @@ async function cancelInboundDocument(uuid) {
     bsModal.show();
   } catch (error) {
     console.error("Error preparing cancellation modal:", error);
-    Swal.fire({
+    CustomModal.fire({
       icon: "error",
       title: "Error",
       text: error.message || "Unable to open cancellation dialog.",
@@ -4455,11 +4667,10 @@ async function viewInvoiceDetails(uuid) {
     }
 
     if (documentInfo.status === "Submitted") {
-      Swal.fire({
+      CustomModal.fire({
         icon: "warning",
         title: "Document Pending",
         text: "This document is still being processed. Please wait for validation to complete.",
-        confirmButtonColor: "#ffc107",
       });
       return;
     }
@@ -4510,11 +4721,10 @@ async function viewInvoiceDetails(uuid) {
         "warning",
         3000
       );
-      Swal.fire({
+      CustomModal.fire({
         icon: "info",
         title: "Document Unavailable",
         text: `Document cannot be viewed when status is ${documentInfo.status}.`,
-        confirmButtonColor: "#0dcaf0",
       });
     }
   } catch (error) {
@@ -4540,9 +4750,9 @@ async function viewInvoiceDetails(uuid) {
 
     showToast(errorMessage, "error", 5000);
 
-    // Also show SweetAlert for critical errors
+    // Also show CustomModal for critical errors
     if (!error.message?.includes("429")) {
-      Swal.fire({
+      CustomModal.fire({
         icon: "error",
         title: "Error",
         text: errorMessage,
@@ -5639,7 +5849,7 @@ async function openValidationResultsModal(uuid) {
             errorMessage = `Error: ${error.message}`;
         }
 
-        Swal.fire({
+        CustomModal.fire({
             icon: 'error',
             title: 'Validation Results Error',
             text: errorMessage,
@@ -5908,8 +6118,35 @@ async function openValidationResultsModal(uuid) {
 
 // Initialize Charts
 function initializeCharts() {
-  // Initialize LHDN Processing Analytics with better timing
+  // Initialize all analytics components with better timing
   setTimeout(() => {
+    console.log('[Charts] Starting analytics initialization...');
+
+    // Initialize Document Status Analytics
+    if (document.getElementById('documentStatusChart')) {
+      try {
+        window.documentStatusAnalytics = new DocumentStatusAnalytics();
+        console.log('[Charts] Document Status Analytics initialized successfully');
+      } catch (error) {
+        console.error('[Charts] Error initializing Document Status Analytics:', error);
+      }
+    } else {
+      console.warn('[Charts] Document status chart canvas not found');
+    }
+
+    // Initialize Daily Submissions Analytics
+    if (document.getElementById('dailySubmissionsChart')) {
+      try {
+        window.dailySubmissionsAnalytics = new DailySubmissionsAnalytics();
+        console.log('[Charts] Daily Submissions Analytics initialized successfully');
+      } catch (error) {
+        console.error('[Charts] Error initializing Daily Submissions Analytics:', error);
+      }
+    } else {
+      console.warn('[Charts] Daily submissions chart canvas not found');
+    }
+
+    // Initialize LHDN Processing Analytics
     if (document.getElementById('processingTimeChart')) {
       try {
         window.lhdnProcessingAnalytics = new LHDNProcessingAnalytics();
@@ -5920,83 +6157,20 @@ function initializeCharts() {
     } else {
       console.warn('[Charts] Processing time chart canvas not found');
     }
+
+    // Mark charts as ready and trigger any pending updates
+    window.chartsInitialized = true;
+    console.log('[Charts] All analytics components initialization completed');
+
+    // Trigger chart updates if table is already loaded
+    if (window.$ && $("#invoiceTable").length && $("#invoiceTable").DataTable) {
+      try {
+        updateCharts();
+      } catch (error) {
+        console.log('[Charts] Table not ready yet for initial update');
+      }
+    }
   }, 1000);
-
-  // Document Status Distribution Chart
-  const statusCtx = document
-    .getElementById("documentStatusChart")
-    .getContext("2d");
-  const statusChart = new Chart(statusCtx, {
-    type: "doughnut",
-    data: {
-      labels: ["Valid", "Invalid", "Cancelled", "Queue"],
-      datasets: [
-        {
-          data: [15, 4, 8, 0], // Initial data, will be updated
-          backgroundColor: [
-            "rgba(25, 135, 84, 0.8)",
-            "rgba(220, 53, 69, 0.8)",
-            "rgba(255, 193, 7, 0.8)",
-            "rgba(108, 117, 125, 0.8)", // Changed Queue color from blue to gray
-          ],
-          borderColor: [
-            "#198754", // Valid - Green
-            "#dc3545", // Invalid - Red
-            "#ffc107", // Cancelled - Yellow
-            "#6c757d", // Queue - Gray (changed from blue)
-          ],
-          borderWidth: 2,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          position: "bottom",
-        },
-      },
-    },
-  });
-
-  // Daily Submissions Chart
-  const submissionsCtx = document
-    .getElementById("dailySubmissionsChart")
-    .getContext("2d");
-  const submissionsChart = new Chart(submissionsCtx, {
-    type: "line",
-    data: {
-      labels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
-      datasets: [
-        {
-          label: "Submissions",
-          data: [12, 19, 3, 5, 2, 3, 7],
-          borderColor: "rgba(13, 110, 253, 0.8)",
-          tension: 0.4,
-          fill: true,
-          backgroundColor: "rgba(13, 110, 253, 0.1)",
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          display: false,
-        },
-      },
-      scales: {
-        y: {
-          beginAtZero: true,
-          ticks: {
-            stepSize: 1,
-          },
-        },
-      },
-    },
-  });
 
   // Processing Time Chart
   // const timeCtx = document
@@ -6033,8 +6207,6 @@ function initializeCharts() {
   //     },
   //   },
   // });
-
-  return { statusChart, submissionsChart };
 }
 
 // Quick Actions Event Handlers
@@ -6352,7 +6524,7 @@ document.addEventListener("DOMContentLoaded", () => {
     console.log("Enhanced features initialized successfully");
   } catch (error) {
     console.error("Error initializing enhanced features:", error);
-    Swal.fire({
+    CustomModal.fire({
       icon: "error",
       title: "Initialization Error",
       text: "Failed to initialize some features. Please refresh the page.",
@@ -6395,13 +6567,565 @@ InvoiceTableManager.prototype.hideLoadingBackdrop = function () {
 };
 
 InvoiceTableManager.prototype.showErrorMessage = function (message) {
-  Swal.fire({
+  CustomModal.fire({
     icon: "error",
     title: "Error",
     text: message,
     confirmButtonText: "OK",
   });
 };
+
+// Document Status Analytics Component
+class DocumentStatusAnalytics {
+  constructor() {
+    this.chart = null;
+    this.currentChartType = 'pie';
+    this.statusData = [];
+    this.isInitialized = false;
+
+    console.log('[Document Status Analytics] Initializing...');
+    this.init();
+  }
+
+  init() {
+    try {
+      this.createChartTypeFilter();
+      this.initializeChart();
+      this.isInitialized = true;
+      console.log('[Document Status Analytics] Initialized successfully');
+    } catch (error) {
+      console.error('[Document Status Analytics] Initialization failed:', error);
+    }
+  }
+
+  createChartTypeFilter() {
+    const chartContainer = document.getElementById('documentStatusChart')?.parentElement;
+    if (!chartContainer) return;
+
+    const filterHTML = `
+      <div class="time-range-filter mb-3">
+        <div class="d-flex justify-content-between align-items-center">
+          <h6 class="mb-0">
+            <i class="bi bi-pie-chart-fill text-primary me-2"></i>
+            Document Status Distribution
+          </h6>
+          <div class="btn-group btn-group-sm" role="group">
+            <input type="radio" class="btn-check" name="statusChartType" id="statusPie" value="pie" checked>
+           
+          </div>
+        </div>
+      </div>
+    `;
+
+    const canvas = document.getElementById('documentStatusChart');
+    if (!canvas) {
+      console.error('[Document Status Analytics] Chart canvas not found for filter insertion');
+      return;
+    }
+
+    canvas.insertAdjacentHTML('beforebegin', filterHTML);
+
+    // Add event listeners for chart type changes
+    setTimeout(() => {
+      document.querySelectorAll('input[name="statusChartType"]').forEach(radio => {
+        radio.addEventListener('change', (e) => {
+          if (e.target.checked) {
+            // Remove active class from all labels
+            document.querySelectorAll('label[for^="status"]').forEach(label => {
+              label.classList.remove('active');
+            });
+
+            // Add active class to the selected label
+            const selectedLabel = document.querySelector(`label[for="${e.target.id}"]`);
+            if (selectedLabel) {
+              selectedLabel.classList.add('active');
+            }
+
+            this.currentChartType = e.target.value;
+            this.updateChartType();
+          }
+        });
+      });
+
+      // Set initial active state
+      const checkedRadio = document.querySelector('input[name="statusChartType"]:checked');
+      if (checkedRadio) {
+        const initialLabel = document.querySelector(`label[for="${checkedRadio.id}"]`);
+        if (initialLabel) {
+          initialLabel.classList.add('active');
+        }
+      }
+    }, 100);
+  }
+
+  updateChartType() {
+    if (!this.isInitialized) return;
+
+    try {
+      this.destroyChart();
+      this.initializeChart();
+
+      // Ensure chart is properly initialized before updating data
+      if (this.chart && this.chart.data) {
+        // Force set labels again after chart type change
+        this.chart.data.labels = ["Valid", "Invalid", "Cancelled", "Queue"];
+        this.updateWithCurrentData();
+      }
+    } catch (error) {
+      console.error('[Document Status Analytics] Error updating chart type:', error);
+    }
+  }
+
+  destroyChart() {
+    if (this.chart) {
+      this.chart.destroy();
+      this.chart = null;
+    }
+  }
+
+  initializeChart() {
+    const canvas = document.getElementById('documentStatusChart');
+    if (!canvas) {
+      console.error('[Document Status Analytics] Chart canvas not found');
+      return;
+    }
+
+    const ctx = canvas.getContext('2d');
+    const config = this.getChartConfig();
+
+    try {
+      this.chart = new Chart(ctx, config);
+
+      // Ensure labels are always set correctly after initialization
+      this.chart.data.labels = ["Valid", "Invalid", "Cancelled", "Queue"];
+
+      console.log('[Document Status Analytics] Chart initialized successfully');
+      console.log('[Document Status Analytics] Chart labels after init:', this.chart.data.labels);
+    } catch (error) {
+      console.error('[Document Status Analytics] Error creating chart:', error);
+      this.showChartError();
+    }
+  }
+
+  getChartConfig() {
+    const baseData = {
+      labels: ["Valid", "Invalid", "Cancelled", "Queue"],
+      datasets: [{
+        data: [0, 0, 0, 0],
+        backgroundColor: [
+          "rgba(64, 81, 137, 0.8)",
+          "rgba(220, 53, 69, 0.8)",
+          "rgba(255, 193, 7, 0.8)",
+          "rgba(108, 117, 125, 0.8)"
+        ],
+        borderColor: [
+          "#405189",
+          "#dc3545",
+          "#ffc107",
+          "#6c757d"
+        ],
+        borderWidth: 2
+      }]
+    };
+
+    const baseOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      aspectRatio: 1,
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: {
+            usePointStyle: true,
+            padding: 12,
+            font: { size: 10 }
+          }
+        },
+        tooltip: {
+          backgroundColor: 'rgba(0, 0, 0, 0.9)',
+          callbacks: {
+            label: function(context) {
+              // Multiple fallbacks to ensure we get a label
+              let label = '';
+
+              if (context.label) {
+                label = context.label;
+              } else if (context.chart && context.chart.data && context.chart.data.labels && context.dataIndex !== undefined) {
+                label = context.chart.data.labels[context.dataIndex] || '';
+              } else {
+                // Final fallback to hardcoded labels
+                const statusLabels = ['Valid', 'Invalid', 'Cancelled', 'Queue'];
+                label = statusLabels[context.dataIndex] || 'Unknown';
+              }
+
+              const value = context.parsed || 0;
+              const total = context.dataset.data.reduce((a, b) => a + b, 0);
+              const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
+
+              console.log('[Document Status Tooltip] Label:', label, 'Value:', value, 'Index:', context.dataIndex);
+
+              return `${label}: ${value} (${percentage}%)`;
+            }
+          }
+        }
+      }
+    };
+
+    // Add scales for bar charts
+    if (this.currentChartType === 'bar') {
+      baseOptions.scales = {
+        y: {
+          beginAtZero: true,
+          ticks: { stepSize: 1 }
+        }
+      };
+      // For bar charts, position legend at top
+      baseOptions.plugins.legend.position = 'top';
+    }
+
+    return {
+      type: this.currentChartType,
+      data: baseData,
+      options: baseOptions
+    };
+  }
+
+  updateWithCurrentData() {
+    if (!this.chart) return;
+
+    const statusCounts = { Valid: 0, Invalid: 0, Cancelled: 0, Queue: 0 };
+
+    // Count statuses even if statusData is empty (will result in all zeros)
+    if (this.statusData && this.statusData.length > 0) {
+      this.statusData.forEach(status => {
+        if (statusCounts.hasOwnProperty(status)) {
+          statusCounts[status]++;
+        }
+      });
+    }
+
+    // Always ensure labels are set correctly
+    this.chart.data.labels = ["Valid", "Invalid", "Cancelled", "Queue"];
+    this.chart.data.datasets[0].data = [
+      statusCounts.Valid,
+      statusCounts.Invalid,
+      statusCounts.Cancelled,
+      statusCounts.Queue
+    ];
+
+    console.log('[Document Status] Updated chart with labels:', this.chart.data.labels);
+    console.log('[Document Status] Updated chart with data:', this.chart.data.datasets[0].data);
+
+    this.chart.update('active');
+  }
+
+  updateWithTableData() {
+    try {
+      const table = $('#invoiceTable').DataTable();
+      if (!table) return;
+
+      const allData = table.rows().data().toArray();
+      this.statusData = allData.map(row => {
+        const status = row.status;
+        if (["Submitted", "Pending", "Queued"].includes(status)) return "Queue";
+        return status;
+      });
+
+      this.updateWithCurrentData();
+    } catch (error) {
+      console.error('[Document Status Analytics] Error updating with table data:', error);
+    }
+  }
+
+  showChartError() {
+    const canvas = document.getElementById('documentStatusChart');
+    if (canvas && canvas.parentElement) {
+      canvas.parentElement.innerHTML = `
+        <div class="chart-error text-center p-4">
+          <i class="bi bi-exclamation-triangle text-warning fs-1"></i>
+          <h6 class="mt-2">Chart Unavailable</h6>
+          <p class="text-muted small">Unable to load status distribution chart</p>
+        </div>
+      `;
+    }
+  }
+}
+
+// Daily Submissions Analytics Component
+class DailySubmissionsAnalytics {
+  constructor() {
+    this.chart = null;
+    this.currentTimeframe = '7days';
+    this.submissionData = [];
+    this.isInitialized = false;
+
+    console.log('[Daily Submissions Analytics] Initializing...');
+    this.init();
+  }
+
+  init() {
+    try {
+      this.createTimeRangeFilter();
+      this.initializeChart();
+      this.isInitialized = true;
+      console.log('[Daily Submissions Analytics] Initialized successfully');
+    } catch (error) {
+      console.error('[Daily Submissions Analytics] Initialization failed:', error);
+    }
+  }
+
+  createTimeRangeFilter() {
+    const chartContainer = document.getElementById('dailySubmissionsChart')?.parentElement;
+    if (!chartContainer) return;
+
+    const filterHTML = `
+      <div class="time-range-filter mb-3">
+        <div class="d-flex justify-content-between align-items-center">
+          <h6 class="mb-0">
+            <i class="bi bi-graph-up text-primary me-2"></i>
+            Daily Submissions
+          </h6>
+          <div class="btn-group btn-group-sm" role="group">
+            <input type="radio" class="btn-check" name="submissionTimeRange" id="submissions7Days" value="7days" checked>
+            <label class="btn btn-outline-primary" for="submissions7Days">
+              <i class="bi bi-calendar-week me-1"></i>7 Days
+            </label>
+            <input type="radio" class="btn-check" name="submissionTimeRange" id="submissions30Days" value="30days">
+            <label class="btn btn-outline-primary" for="submissions30Days">
+              <i class="bi bi-calendar-month me-1"></i>30 Days
+            </label>
+            <input type="radio" class="btn-check" name="submissionTimeRange" id="submissions90Days" value="90days">
+            <label class="btn btn-outline-primary" for="submissions90Days">
+              <i class="bi bi-calendar3 me-1"></i>90 Days
+            </label>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const canvas = document.getElementById('dailySubmissionsChart');
+    if (!canvas) {
+      console.error('[Daily Submissions Analytics] Chart canvas not found for filter insertion');
+      return;
+    }
+
+    canvas.insertAdjacentHTML('beforebegin', filterHTML);
+
+    // Add event listeners for time range changes
+    setTimeout(() => {
+      document.querySelectorAll('input[name="submissionTimeRange"]').forEach(radio => {
+        radio.addEventListener('change', (e) => {
+          if (e.target.checked) {
+            // Remove active class from all labels
+            document.querySelectorAll('label[for^="submissions"]').forEach(label => {
+              label.classList.remove('active');
+            });
+
+            // Add active class to the selected label
+            const selectedLabel = document.querySelector(`label[for="${e.target.id}"]`);
+            if (selectedLabel) {
+              selectedLabel.classList.add('active');
+            }
+
+            this.currentTimeframe = e.target.value;
+            this.updateTimeframe();
+          }
+        });
+      });
+
+      // Set initial active state
+      const checkedRadio = document.querySelector('input[name="submissionTimeRange"]:checked');
+      if (checkedRadio) {
+        const initialLabel = document.querySelector(`label[for="${checkedRadio.id}"]`);
+        if (initialLabel) {
+          initialLabel.classList.add('active');
+        }
+      }
+    }, 100);
+  }
+
+  updateTimeframe() {
+    if (!this.isInitialized) return;
+
+    try {
+      this.updateWithCurrentData();
+    } catch (error) {
+      console.error('[Daily Submissions Analytics] Error updating timeframe:', error);
+    }
+  }
+
+  destroyChart() {
+    if (this.chart) {
+      this.chart.destroy();
+      this.chart = null;
+    }
+  }
+
+  initializeChart() {
+    const canvas = document.getElementById('dailySubmissionsChart');
+    if (!canvas) {
+      console.error('[Daily Submissions Analytics] Chart canvas not found');
+      return;
+    }
+
+    const ctx = canvas.getContext('2d');
+    const config = this.getChartConfig();
+
+    try {
+      this.chart = new Chart(ctx, config);
+      console.log('[Daily Submissions Analytics] Chart initialized successfully');
+    } catch (error) {
+      console.error('[Daily Submissions Analytics] Error creating chart:', error);
+      this.showChartError();
+    }
+  }
+
+  getChartConfig() {
+    return {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [{
+          label: "Submissions",
+          data: [],
+          borderColor: "#405189",
+          backgroundColor: "rgba(64, 81, 137, 0.1)",
+          borderWidth: 3,
+          fill: true,
+          tension: 0.4,
+          pointBackgroundColor: "#405189",
+          pointBorderColor: "#ffffff",
+          pointBorderWidth: 2,
+          pointRadius: 5,
+          pointHoverRadius: 7
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        aspectRatio: 1,
+        plugins: {
+          legend: {
+            display: false
+          },
+          tooltip: {
+            backgroundColor: 'rgba(0, 0, 0, 0.9)',
+            callbacks: {
+              title: (context) => `Date: ${context[0].label}`,
+              label: (context) => `Submissions: ${context.parsed.y}`
+            }
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            ticks: {
+              stepSize: 1,
+              color: '#6c757d',
+              font: { size: 10 }
+            },
+            grid: {
+              color: 'rgba(0, 0, 0, 0.1)'
+            }
+          },
+          x: {
+            ticks: {
+              color: '#6c757d',
+              font: { size: 10 }
+            },
+            grid: {
+              color: 'rgba(0, 0, 0, 0.1)'
+            }
+          }
+        },
+        interaction: {
+          intersect: false,
+          mode: 'index'
+        }
+      }
+    };
+  }
+
+  updateWithCurrentData() {
+    if (!this.chart || !this.submissionData.length) return;
+
+    const days = this.currentTimeframe === '7days' ? 7 :
+                 this.currentTimeframe === '30days' ? 30 : 90;
+
+    const dateLabels = [];
+    const submissionCounts = [];
+    const dailySubmissions = new Map();
+
+    // Generate date range
+    for (let i = days - 1; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      const dateStr = date.toISOString().split('T')[0];
+      dateLabels.push(date.toLocaleDateString("en-US", {
+        weekday: days <= 7 ? "short" : undefined,
+        month: "short",
+        day: "numeric"
+      }));
+      dailySubmissions.set(dateStr, 0);
+    }
+
+    // Count submissions by date
+    this.submissionData.forEach(dateStr => {
+      if (dailySubmissions.has(dateStr)) {
+        dailySubmissions.set(dateStr, dailySubmissions.get(dateStr) + 1);
+      }
+    });
+
+    // Convert to array for chart
+    dateLabels.forEach((label, index) => {
+      const date = new Date();
+      date.setDate(date.getDate() - (days - 1 - index));
+      const dateStr = date.toISOString().split('T')[0];
+      submissionCounts.push(dailySubmissions.get(dateStr) || 0);
+    });
+
+    this.chart.data.labels = dateLabels;
+    this.chart.data.datasets[0].data = submissionCounts;
+    this.chart.update('active');
+  }
+
+  updateWithTableData() {
+    try {
+      const table = $('#invoiceTable').DataTable();
+      if (!table) return;
+
+      const allData = table.rows().data().toArray();
+      this.submissionData = allData.map(row => {
+        if (row.dateTimeValidated) {
+          try {
+            const date = new Date(row.dateTimeValidated);
+            return date.toISOString().split('T')[0];
+          } catch (e) {
+            return null;
+          }
+        }
+        return null;
+      }).filter(Boolean);
+
+      this.updateWithCurrentData();
+    } catch (error) {
+      console.error('[Daily Submissions Analytics] Error updating with table data:', error);
+    }
+  }
+
+  showChartError() {
+    const canvas = document.getElementById('dailySubmissionsChart');
+    if (canvas && canvas.parentElement) {
+      canvas.parentElement.innerHTML = `
+        <div class="chart-error text-center p-4">
+          <i class="bi bi-exclamation-triangle text-warning fs-1"></i>
+          <h6 class="mt-2">Chart Unavailable</h6>
+          <p class="text-muted small">Unable to load daily submissions chart</p>
+        </div>
+      `;
+    }
+  }
+}
 
 // LHDN Processing Analytics Component
 class LHDNProcessingAnalytics {
@@ -6827,21 +7551,21 @@ class LHDNProcessingAnalytics {
           data: new Array(labels.length).fill(0),
           backgroundColor: isToday ? [
             'rgba(25, 135, 84, 0.8)',
-            'rgba(13, 110, 253, 0.8)',
+            'rgba(64, 81, 137, 0.8)',
             'rgba(255, 193, 7, 0.8)',
             'rgba(220, 53, 69, 0.8)'
           ] : [
             'rgba(25, 135, 84, 0.8)',
-            'rgba(13, 110, 253, 0.8)',
+            'rgba(64, 81, 137, 0.8)',
             'rgba(255, 193, 7, 0.8)',
             'rgba(255, 131, 7, 0.8)',
             'rgba(220, 53, 69, 0.8)',
             'rgba(108, 117, 125, 0.8)'
           ],
           borderColor: isToday ? [
-            '#198754', '#0d6efd', '#ffc107', '#dc3545'
+            '#198754', '#405189', '#ffc107', '#dc3545'
           ] : [
-            '#198754', '#0d6efd', '#ffc107', '#ff8307', '#dc3545', '#6c757d'
+            '#198754', '#405189', '#ffc107', '#ff8307', '#dc3545', '#6c757d'
           ],
           borderWidth: 2,
           borderRadius: 6
@@ -6891,9 +7615,9 @@ class LHDNProcessingAnalytics {
         datasets: [{
           data: new Array(labels.length).fill(0),
           backgroundColor: isToday ? [
-            '#198754', '#0d6efd', '#ffc107', '#dc3545'
+            '#198754', '#405189', '#ffc107', '#dc3545'
           ] : [
-            '#198754', '#0d6efd', '#ffc107', '#ff8307', '#dc3545', '#6c757d'
+            '#198754', '#405189', '#ffc107', '#ff8307', '#dc3545', '#6c757d'
           ],
           borderWidth: 3
         }]
@@ -6917,11 +7641,11 @@ class LHDNProcessingAnalytics {
         datasets: [{
           data: [0, 24],
           backgroundColor: [
-            'rgba(13, 110, 253, 0.8)',
+            'rgba(64, 81, 137, 0.8)',
             'rgba(233, 236, 239, 0.3)'
           ],
           borderColor: [
-            '#0d6efd',
+            '#405189',
             '#e9ecef'
           ],
           borderWidth: 2,
@@ -6969,7 +7693,7 @@ class LHDNProcessingAnalytics {
         datasets: [{
           label: 'Processing Timeline',
           data: [],
-          backgroundColor: '#0d6efd',
+          backgroundColor: '#405189',
           borderColor: '#ffffff',
           borderWidth: 2,
           pointRadius: 6
@@ -7360,7 +8084,7 @@ class LHDNProcessingAnalytics {
         `${avgHours.toFixed(1)}h`;
 
       centerText.innerHTML = `
-        <div style="font-size: 1.2rem; font-weight: bold; color: #0d6efd;">${displayTime}</div>
+        <div style="font-size: 1.2rem; font-weight: bold; color: #405189;">${displayTime}</div>
         <div style="font-size: 0.8rem; color: #6c757d;">Avg Time</div>
       `;
     }
@@ -7426,6 +8150,15 @@ class LHDNProcessingAnalytics {
       setTimeout(() => element.classList.remove('updated'), 1000);
     }
   }
+
+  showFallbackStatistics() {
+    // Show fallback statistics when no data is available
+    const fallbackMessage = this.currentTimeframe === 'today' ? 'No data today' : 'No data this week';
+    this.updateElement('avgProcessingHours', fallbackMessage);
+    this.updateElement('fastestProcessing', fallbackMessage);
+    this.updateElement('slowestProcessing', fallbackMessage);
+    console.log('[LHDN Analytics] Showing fallback statistics');
+  }
 }
 
 // Add CSS styles for LHDN Processing Analytics
@@ -7465,15 +8198,15 @@ if (!document.getElementById('lhdn-analytics-styles')) {
 
     .time-range-filter .btn:hover {
       transform: translateY(-1px);
-      box-shadow: 0 4px 8px rgba(13, 110, 253, 0.2);
+      box-shadow: 0 4px 8px rgba(64, 81, 137, 0.2);
     }
 
     .time-range-filter .btn-check:checked + .btn,
     .time-range-filter .btn.active {
-      background: linear-gradient(135deg, #0d6efd, #4dabf7) !important;
+      background: linear-gradient(135deg, #405189, #3a4a7e) !important;
       color: white !important;
       box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
-      border-color: #0d6efd !important;
+      border-color: #405189 !important;
     }
 
     .chart-type-selector {
@@ -7498,15 +8231,15 @@ if (!document.getElementById('lhdn-analytics-styles')) {
 
     .chart-type-selector .btn:hover {
       transform: translateY(-1px);
-      box-shadow: 0 4px 8px rgba(13, 110, 253, 0.2);
+      box-shadow: 0 4px 8px rgba(64, 81, 137, 0.2);
     }
 
     .chart-type-selector .btn-check:checked + .btn,
     .chart-type-selector .btn.active {
-      background: linear-gradient(135deg, #0d6efd, #4dabf7) !important;
+      background: linear-gradient(135deg, #405189, #3a4a7e) !important;
       color: white !important;
       box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
-      border-color: #0d6efd !important;
+      border-color: #405189 !important;
     }
 
     .chart-error {
@@ -7540,7 +8273,7 @@ if (!document.getElementById('lhdn-analytics-styles')) {
     .gauge-center-text div:first-child {
       font-size: 1.2rem;
       font-weight: bold;
-      color: #0d6efd;
+      color: #405189;
       margin-bottom: 2px;
     }
 
@@ -7557,7 +8290,7 @@ if (!document.getElementById('lhdn-analytics-styles')) {
 
     @keyframes highlight {
       0% { transform: scale(1); }
-      50% { transform: scale(1.05); color: #0d6efd; }
+      50% { transform: scale(1.05); color: #405189; }
       100% { transform: scale(1); }
     }
 
@@ -7587,6 +8320,73 @@ if (!document.getElementById('lhdn-analytics-styles')) {
         width: 100%;
       }
     }
+
+    /* Additional styles for Document Status and Daily Submissions Analytics */
+    .chart-type-filter {
+      background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+      border: 1px solid #dee2e6;
+      border-radius: 12px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    }
+
+    .chart-type-filter h6 {
+      color: #495057;
+      font-weight: 600;
+      margin: 0;
+    }
+
+    .chart-type-filter .btn-group-sm .btn {
+      padding: 4px 12px;
+      font-size: 0.75rem;
+      border-radius: 6px;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+
+    .time-range-filter .btn-outline-primary {
+      color: #405189;
+      border-color: #405189;
+      background: rgba(64, 81, 137, 0.05);
+    }
+
+    .time-range-filter .btn-outline-primary:hover,
+    .time-range-filter .btn-outline-primary.active {
+      background-color: #405189;
+      border-color: #405189;
+      color: white;
+      transform: translateY(-1px);
+      box-shadow: 0 2px 4px rgba(64, 81, 137, 0.3);
+    }
+
+    /* Chart container sizing for all analytics - consistent and responsive */
+    #documentStatusChart,
+    #dailySubmissionsChart,
+    #processingTimeChart {
+      max-height: 200px !important;
+      height: 200px !important;
+      width: 100% !important;
+    }
+
+    /* Responsive chart heights */
+    @media (max-width: 768px) {
+      #documentStatusChart,
+      #dailySubmissionsChart,
+      #processingTimeChart {
+        max-height: 180px !important;
+        height: 180px !important;
+      }
+    }
+
+    @media (max-width: 576px) {
+      #documentStatusChart,
+      #dailySubmissionsChart,
+      #processingTimeChart {
+        max-height: 160px !important;
+        height: 160px !important;
+      }
+    }
   `;
   document.head.appendChild(style);
 }
@@ -7595,122 +8395,52 @@ function updateCharts() {
   try {
     const table = $("#invoiceTable").DataTable();
     if (!table) {
-      console.warn("Table not initialized yet");
       return;
     }
 
-    // Get all data from the table
-    const allData = table.rows().data().toArray();
+    // Check if any analytics components are initialized
+    const hasAnyAnalytics = window.documentStatusAnalytics ||
+                           window.dailySubmissionsAnalytics ||
+                           window.lhdnProcessingAnalytics;
+
+    // If no analytics are initialized yet, schedule a retry
+    if (!hasAnyAnalytics) {
+      // Retry after a short delay, but only if we haven't been retrying too long
+      if (!window.chartUpdateRetryCount) {
+        window.chartUpdateRetryCount = 0;
+      }
+
+      if (window.chartUpdateRetryCount < 10) { // Max 10 retries (5 seconds)
+        window.chartUpdateRetryCount++;
+        setTimeout(updateCharts, 500);
+      }
+      return;
+    }
+
+    // Reset retry counter once we have at least one analytics component
+    window.chartUpdateRetryCount = 0;
+
+    console.log("Updating all analytics components with table data...");
+
+    // Update Document Status Analytics
+    if (window.documentStatusAnalytics) {
+      window.documentStatusAnalytics.updateWithTableData();
+      console.log("Document Status Analytics updated");
+    }
+
+    // Update Daily Submissions Analytics
+    if (window.dailySubmissionsAnalytics) {
+      window.dailySubmissionsAnalytics.updateWithTableData();
+      console.log("Daily Submissions Analytics updated");
+    }
 
     // Update LHDN Processing Analytics
     if (window.lhdnProcessingAnalytics) {
       window.lhdnProcessingAnalytics.updateWithTableData();
+      console.log("LHDN Processing Analytics updated");
     }
 
-    // Status Distribution Chart Update
-    const statusCounts = {
-      Valid: 0,
-      Invalid: 0,
-      Cancelled: 0,
-      Queue: 0,
-    };
-
-    // Process status counts
-    allData.forEach((row) => {
-      if (row.status === "Valid") statusCounts.Valid++;
-      else if (row.status === "Invalid") statusCounts.Invalid++;
-      else if (row.status === "Cancelled") statusCounts.Cancelled++;
-      else if (["Submitted", "Pending", "Queued"].includes(row.status))
-        statusCounts.Queue++;
-    });
-
-    // Update Status Chart
-    const statusChart = Chart.getChart("documentStatusChart");
-    if (statusChart) {
-      statusChart.data.datasets[0].data = [
-        statusCounts.Valid,
-        statusCounts.Invalid,
-        statusCounts.Cancelled,
-        statusCounts.Queue,
-      ];
-      statusChart.update();
-    }
-
-    // Daily Submissions Chart Update
-    const dailySubmissions = new Map();
-    const last7Days = [];
-
-    // Generate last 7 days dates
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date();
-      date.setDate(date.getDate() - i);
-      const dateStr = date.toISOString().split("T")[0];
-      last7Days.push(dateStr);
-      dailySubmissions.set(dateStr, 0);
-    }
-
-    // Count submissions per day
-    allData.forEach((row) => {
-      if (row.dateTimeReceived) {
-        const submissionDate = new Date(row.dateTimeReceived)
-          .toISOString()
-          .split("T")[0];
-        if (dailySubmissions.has(submissionDate)) {
-          dailySubmissions.set(
-            submissionDate,
-            dailySubmissions.get(submissionDate) + 1
-          );
-        }
-      }
-    });
-
-    // Update Daily Submissions Chart
-    const submissionsChart = Chart.getChart("dailySubmissionsChart");
-    if (submissionsChart) {
-      submissionsChart.data.labels = last7Days.map((date) => {
-        const d = new Date(date);
-        return d.toLocaleDateString("en-US", {
-          weekday: "short",
-          month: "short",
-          day: "numeric",
-        });
-      });
-      submissionsChart.data.datasets[0].data = last7Days.map((date) =>
-        dailySubmissions.get(date)
-      );
-      submissionsChart.update();
-    }
-
-    // // Processing Time Chart Update
-    // const processingTimes = [0, 0, 0, 0, 0]; // [<1min, 1-5min, 5-15min, 15-30min, >30min]
-
-    // allData.forEach((row) => {
-    //   // Use processingTimeMinutes from backend if available
-    //   const processingTime =
-    //     typeof row.processingTimeMinutes === "number"
-    //       ? row.processingTimeMinutes
-    //       : null;
-    //   if (processingTime !== null && !isNaN(processingTime)) {
-    //     if (processingTime < 1) processingTimes[0]++;
-    //     else if (processingTime < 5) processingTimes[1]++;
-    //     else if (processingTime < 15) processingTimes[2]++;
-    //     else if (processingTime < 30) processingTimes[3]++;
-    //     else processingTimes[4]++;
-    //   }
-    // });
-
-    // Update Processing Time Chart
-    // const timeChart = Chart.getChart("processingTimeChart");
-    // if (timeChart) {
-    //   timeChart.data.datasets[0].data = processingTimes;
-    //   timeChart.update();
-    // }
-
-    console.log("Charts updated with table data:", {
-      statusCounts,
-      dailySubmissions: Object.fromEntries(dailySubmissions),
-      // processingTimes,
-    });
+    console.log("All analytics components updated successfully");
   } catch (error) {
     console.error("Error updating charts:", error);
   }

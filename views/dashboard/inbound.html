@@ -472,29 +472,8 @@
                 <h3 class="text-xl font-semibold text-white-800 md:text-2xl tracking-tight">
                     Inbound
                 </h3>
-                        <p class="mb-0 cursor-pointer" data-bs-toggle="tooltip" data-bs-placement="bottom" data-bs-html="true"
-                        title="<div class='tooltip-content'>
-                                    <div class='tooltip-row'>
-                                    <i class='bi bi-info-circle'></i>
-                                    <span><b>LHDN Response Information:</b></span>
-                                    </div>
-                                    <div class='tooltip-row'>
-                                    <i class='bi bi-1-circle'></i>
-                                    <span>View submission results from LHDN</span>
-                                    </div>
-                                    <div class='tooltip-row'>
-                                    <i class='bi bi-2-circle'></i>
-                                    <span>Check validation results</span>
-                                    </div>
-                                    <div class='tooltip-row'>
-                                    <i class='bi bi-3-circle'></i>
-                                    <span>Review any error messages</span>
-                                    </div>
-                                    <div class='tooltip-row'>
-                                    <i class='bi bi-4-circle'></i>
-                                    <span>Track submission timestamps</span>
-                                    </div>
-                                </div>">
+                        <p class="mb-0 " data-bs-toggle="tooltip" data-bs-placement="bottom" data-bs-html="true"
+                        >
                 View and manage your inbound responses from LHDN. Track the status and results of your IRBM submissions here.
             </p>
             </div>
@@ -632,35 +611,45 @@
             <div class="card shadow-sm">
               <div class="card-body">
                 <h6 class="card-title d-flex align-items-center">
-                  <i class="bi bi-pie-chart-fill me-2"></i>
-                  Document Status Distribution
                 </h6>
+
                 <canvas id="documentStatusChart" height="200"></canvas>
+                <div class="mt-0">
+                  <small class="text-muted">
+                    <i class="bi bi-info-circle me-1"></i>
+                    Distribution of document validation statuses
+                  </small>
+                </div>
               </div>
             </div>
           </div>
 
           <!-- Daily Submissions Chart -->
-          <div class="col-md-4 col-lg-4">
+          <div class="col-md-4">
             <div class="card shadow-sm">
               <div class="card-body">
                 <h6 class="card-title d-flex align-items-center">
-                  <i class="bi bi-graph-up me-2"></i>
-                  Daily Submissions
                 </h6>
+
                 <canvas id="dailySubmissionsChart" height="200"></canvas>
+                <div class="mt-0">
+                  <small class="text-muted">
+                    <i class="bi bi-info-circle me-1"></i>
+                    Daily submission trends and patterns
+                  </small>
+                </div>
               </div>
             </div>
           </div>
 
           <!-- Processing Time Chart -->
-        <div class="col-md-4">
+          <div class="col-md-4">
             <div class="card shadow-sm">
               <div class="card-body">
                 <h6 class="card-title d-flex align-items-center">
                 </h6>
-                
-                <canvas id="processingTimeChart" height="100"></canvas>
+
+                <canvas id="processingTimeChart" height="200"></canvas>
                 <div class="mt-0">
                   <small class="text-muted">
                     <i class="bi bi-info-circle me-1"></i>
@@ -672,6 +661,7 @@
           </div> 
 
         </div>
+        
       </div>
 
 
@@ -684,49 +674,23 @@
                 <div class="table-actions">
                     <!-- Data Source Toggle -->
                     <div class="btn-group me-2" role="group" aria-label="Data source toggle">
-                        <input type="radio" class="btn-check" name="dataSource" id="liveDataSource" autocomplete="off">
+                        <input type="radio" class="btn-check" name="dataSource" id="liveDataSource" autocomplete="off" checked>
                         <label class="btn outbound-action-btn submit btn-sm" for="liveDataSource">
                             <i class="bi bi-cloud-arrow-down me-1"></i>Live LHDN Data
                         </label>
-
-                        <input type="radio" class="btn-check" name="dataSource" id="archiveDataSource" autocomplete="off" checked>
-                        <label class="btn outbound-action-btn cancel btn-sm" for="archiveDataSource">
-                            <i class="bi bi-archive me-1"></i>Archive Staging
-                        </label>
                     </div>
 
+                    <!-- Refresh Button -->
+                    <button class="btn outbound-action-btn submit btn-sm" id="refreshDataSource"
+                            data-bs-toggle="tooltip"
+                            data-bs-placement="top"
+                            title="Refresh current data source">
+                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                    </button>
 
                 </div>
             </div>
-              <!-- LHDN Validation Note -->
-              <div class="filter-note alert alert-warning mt-3" role="alert">
-                <div class="d-flex align-items-start">
-                    <i class="bi bi-exclamation-triangle-fill me-2 mt-1"></i>
-                    <div>
-                        <h6 class="mb-2"><strong>Note: LHDN Validation Status</strong></h6>
-                        <small>
-                            <ul class="mb-2 ps-3">
-                                <li><i class="bi bi-clock me-1"></i>Document validation is currently experiencing longer processing times (up to 24 hours)</li>
-                                <li><i class="bi bi-arrow-repeat me-1"></i>Documents in "Queue" status are being processed & validated by LHDN servers</li>
-                                <li><i class="bi bi-info-circle me-1"></i>Check document status by refreshing the page periodically</li>
-                                <li><i class="bi bi-shield-exclamation me-1"></i>We have no control over validation speed or outcome</li>
-                            </ul>
-                            <div class="mt-2">
-                                <div class="d-flex align-items-center mb-2">
-                                    <span class="badge bg-warning text-dark me-2">
-                                        <i class="bi bi-clock-history me-1"></i>Queue
-                                    </span>
-                                    <span>Please be patient while your documents are being validated.</span>
-                                </div>
-                                <div class="text-muted fst-italic">
-                                    <i class="bi bi-info-circle-fill me-1"></i>
-                                    Note: The validation process is entirely dependent on LHDN's system availability and processing capacity.
-                                </div>
-                            </div>
-                        </small>
-                    </div>
-                </div>
-            </div>
+            
         </div>
 
         <div class="table-controls">
@@ -934,10 +898,40 @@
 
 
         <div class="table-footer">
+             <!-- LHDN Validation Note -->
+              <div class="filter-note alert alert-warning mt-0" role="alert">
+                <div class="d-flex align-items-start">
+                    <i class="bi bi-exclamation-triangle-fill  mt-0"></i>
+                    <div>
+                        <h6 class="mb-2"><strong>Note: LHDN Validation Status</strong></h6>
+                        <small>
+                            <ul class="mb-2 ps-3">
+                                <li><i class="bi bi-clock me-1"></i>Document validation is currently experiencing longer processing times (up to 24 hours)</li>
+                                <li><i class="bi bi-arrow-repeat me-1"></i>Documents in "Queue" status are being processed & validated by LHDN servers</li>
+                                <li><i class="bi bi-info-circle me-1"></i>Check document status by refreshing the page periodically</li>
+                                <li><i class="bi bi-shield-exclamation me-1"></i>We have no control over validation speed or outcome</li>
+                            </ul>
+                            <div class="mt-0">
+                                <div class="d-flex align-items-center mb-0">
+                                    <span class="badge bg-warning text-dark me-2">
+                                        <i class="bi bi-clock-history me-1"></i>Queue
+                                    </span>
+                                    <span>Please be patient while your documents are being validated.</span>
+                                </div>
+                                <div class="text-muted fst-italic">
+                                    <i class="bi bi-info-circle-fill me-1"></i>
+                                    Note: The validation process is entirely dependent on LHDN's system availability and processing capacity.
+                                </div>
+                            </div>
+                        </small>
+                    </div>
+                </div>
+            </div>
             <div class="pagination-container">
                 <!-- Pagination will be inserted by DataTables -->
             </div>
         </div>
+         
     </div>
 </div>
 
@@ -1197,9 +1191,22 @@
 
 {% endblock %}
 {% block scripts %}
+<!-- Fix tooltip positioning -->
+<style>
+.tooltip {
+    z-index: 9999 !important;
+    position: absolute !important;
+}
+.tooltip-inner {
+    max-width: 300px;
+    text-align: left;
+}
+</style>
+
 <!-- Toast Notification Utility -->
 <script src="/assets/js/utils/toast.js"></script>
-
+<!-- Chart Options Component -->
+<script src="/assets/js/components/lhdn-chart-options.js"></script>
 <!-- Authentication and Fetch Utilities -->
 <script src="/assets/js/utils/auth-status-global.js"></script>
 <script src="/assets/js/utils/fetch-wrapper-global.js"></script>
@@ -1207,8 +1214,7 @@
 <!-- Original Inbound Excel Module (for backward compatibility) -->
 <script src="/assets/js/modules/excel/inbound-excel.js"></script>
 
-<!-- Chart Options Component -->
-<script src="/assets/js/components/lhdn-chart-options.js"></script>
+
 
 
 {% endblock %}

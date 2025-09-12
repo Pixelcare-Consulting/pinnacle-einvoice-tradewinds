@@ -623,16 +623,30 @@ router.get('/refresh-queue', async (req, res) => {
 // Individual Count Endpoints
 router.get('/outbound/count', async (req, res) => {
     try {
-        const count = await prisma.wP_OUTBOUND_STATUS.count();
+        // Count total uploaded Excel files from WP_UPLOADED_EXCEL_FILES table
+        const count = await prisma.wP_UPLOADED_EXCEL_FILES.count();
+
+        // Also get total invoice count across all files for additional context
+        const totalInvoicesResult = await prisma.wP_UPLOADED_EXCEL_FILES.aggregate({
+            _sum: {
+                invoice_count: true
+            }
+        });
+
+        const totalInvoices = totalInvoicesResult._sum.invoice_count || 0;
+
         res.json({
             success: true,
-            count
+            count,
+            totalInvoices,
+            description: 'Total uploaded Excel files'
         });
     } catch (error) {
         console.error('Error getting outbound count:', error);
         res.status(500).json({
             success: false,
             count: 0,
+            totalInvoices: 0,
             error: error.message
         });
     }
@@ -675,30 +689,85 @@ router.get('/companies/count', async (req, res) => {
 // Success Rate Calculation
 router.get('/success-rate', async (req, res) => {
     try {
-        // Get total outbound invoices
-        const totalOutbound = await prisma.wP_OUTBOUND_STATUS.count();
+        // Get total uploaded Excel files
+        const totalFiles = await prisma.wP_UPLOADED_EXCEL_FILES.count();
 
-        // Get valid/successful invoices
-        const validOutbound = await prisma.wP_OUTBOUND_STATUS.count({
+        // Get successful files (processed or submitted with no errors)
+        const successfulFiles = await prisma.wP_UPLOADED_EXCEL_FILES.count({
             where: {
-                status: 'VALID'
+                AND: [
+                    {
+                        processing_status: {
+                            in: ['processed', 'submitted']
+                        }
+                    },
+                    {
+                        OR: [
+                            { error_message: null },
+                            { error_message: '' }
+                        ]
+                    }
+                ]
             }
         });
 
-        // Calculate success rate
-        const successRate = totalOutbound > 0 ? Math.round((validOutbound / totalOutbound) * 100) : 0;
+        // Get total invoices across all files
+        const totalInvoicesResult = await prisma.wP_UPLOADED_EXCEL_FILES.aggregate({
+            _sum: {
+                invoice_count: true
+            }
+        });
+
+        // Get total invoices from successful files only
+        const successfulInvoicesResult = await prisma.wP_UPLOADED_EXCEL_FILES.aggregate({
+            _sum: {
+                invoice_count: true
+            },
+            where: {
+                AND: [
+                    {
+                        processing_status: {
+                            in: ['processed', 'submitted']
+                        }
+                    },
+                    {
+                        OR: [
+                            { error_message: null },
+                            { error_message: '' }
+                        ]
+                    }
+                ]
+            }
+        });
+
+        const totalInvoices = totalInvoicesResult._sum.invoice_count || 0;
+        const successfulInvoices = successfulInvoicesResult._sum.invoice_count || 0;
+
+        // Calculate success rates
+        const fileSuccessRate = totalFiles > 0 ? Math.round((successfulFiles / totalFiles) * 100) : 0;
+        const invoiceSuccessRate = totalInvoices > 0 ? Math.round((successfulInvoices / totalInvoices) * 100) : 0;
+
+        // Use the higher of the two rates for display (typically invoice-level is more meaningful)
+        const displaySuccessRate = Math.max(fileSuccessRate, invoiceSuccessRate);
 
         res.json({
             success: true,
-            successRate,
-            totalInvoices: totalOutbound,
-            validInvoices: validOutbound
+            successRate: displaySuccessRate,
+            fileSuccessRate,
+            invoiceSuccessRate,
+            totalFiles,
+            successfulFiles,
+            totalInvoices,
+            successfulInvoices,
+            description: 'Success rate based on processed/submitted Excel files without errors'
         });
     } catch (error) {
         console.error('Error calculating success rate:', error);
         res.status(500).json({
             success: false,
             successRate: 0,
+            fileSuccessRate: 0,
+            invoiceSuccessRate: 0,
             error: error.message
         });
     }

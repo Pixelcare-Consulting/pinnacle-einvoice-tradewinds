@@ -1868,12 +1868,37 @@ class LHDNSubmitter {
 
   async updateSubmissionStatus(data, transaction = null) {
     try {
+      // Handle missing filePath by constructing one or finding existing record
+      let filePath = data.filePath;
+      let whereClause;
+
+      if (!filePath) {
+        // Try to find existing record by submissionUid first
+        const existingRecord = await prisma.wP_OUTBOUND_STATUS.findFirst({
+          where: {
+            submissionUid: data.submissionUid || 'NA'
+          }
+        });
+
+        if (existingRecord) {
+          // Use existing record's id for upsert
+          whereClause = { id: existingRecord.id };
+          filePath = existingRecord.filePath; // Use existing filePath
+        } else {
+          // Construct a filePath using fileName as fallback
+          filePath = data.fileName || `${data.submissionUid || 'unknown'}_${Date.now()}`;
+          whereClause = { filePath: filePath };
+        }
+      } else {
+        whereClause = { filePath: filePath };
+      }
+
       const submissionData = {
         invoice_number: data.invoice_number,
         UUID: data.uuid || 'NA',
         submissionUid: data.submissionUid || 'NA',
         fileName: data.fileName,
-        filePath: data.filePath,
+        filePath: filePath,
         status: data.status,
         date_submitted: new Date(),
         created_at: new Date(),
@@ -1881,7 +1906,7 @@ class LHDNSubmitter {
       };
 
       await prisma.wP_OUTBOUND_STATUS.upsert({
-        where: { filePath: data.filePath },
+        where: whereClause,
         update: submissionData,
         create: submissionData
       });

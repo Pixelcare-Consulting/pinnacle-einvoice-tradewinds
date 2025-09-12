@@ -682,7 +682,7 @@ const mapToLHDNFormat = (excelData, version) => {
             "_": doc.header.documentCurrencyCode
           }],
           "TargetCurrencyCode": [{
-            "_": "MYR"
+            "_": 'MYR'
           }],
           "CalculationRate": [{
             "_": Number(doc.header.exchangeRate) || 0

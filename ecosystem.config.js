@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: "Pinnacle x Tradewinds eInvoice v3.0",
+      name: "Pinnacle x STES eInvoice v3.1",
       script: "./server.js",
       instances: 1, // Keep at 1 unless you have multi-core (avoid overhead of clustering on low RAM)
       autorestart: true, // Good — restarts on crash or stop (not on exit)
