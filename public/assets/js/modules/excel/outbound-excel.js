@@ -6880,6 +6880,15 @@ async function showExcelValidationError(error) {
                         if (errorText.includes('TIN')) {
                             return 'Tax Identification Number (TIN) is missing or invalid. Please verify the TIN format.';
                         }
+                        if (errorText.includes('SST format')) {
+                            return errorText; // Keep SST error messages as they are already user-friendly
+                        }
+                        if (errorText.includes('Email address contains whitespace')) {
+                            return errorText; // Keep email whitespace error messages as they are already user-friendly
+                        }
+                        if (errorText.includes('Invalid email format')) {
+                            return errorText; // Keep email format error messages as they are already user-friendly
+                        }
                         if (errorText.includes('required')) {
                             return errorText.replace('is required', 'must be provided');
                         }

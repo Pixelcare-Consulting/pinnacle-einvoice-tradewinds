@@ -97,6 +97,12 @@ swig.setDefaults({
   },
 });
 
+// Clear Swig cache on startup to prevent old template conflicts
+if (process.env.NODE_ENV === "production") {
+  swig.invalidateCache();
+  console.log("Swig template cache cleared on startup");
+}
+
 app.engine("html", swig.renderFile);
 app.set("view engine", "html");
 app.set("views", path.join(__dirname, "views"));
@@ -171,6 +177,23 @@ app.get("/api/version", (req, res) => {
     fullVersion: appVersion.getFullVersion(),
     timestamp: appVersion.buildDate,
   });
+});
+
+// Clear template cache endpoint (for debugging UI issues)
+app.get("/api/clear-cache", (req, res) => {
+  try {
+    swig.invalidateCache();
+    res.json({
+      success: true,
+      message: "Template cache cleared successfully"
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to clear cache",
+      error: error.message
+    });
+  }
 });
 
 // CAPTCHA routes (public access)
@@ -268,8 +291,8 @@ const startServer = async () => {
     await ensureDirectories();
     jsreportInstance = await initJsReport();
 
-    const httpPort = process.env.HTTP_PORT || 3000; // HTTP on 3000
-    const httpsPort = process.env.HTTPS_PORT || 443; // HTTPS on 443 (different port)
+    const httpPort = process.env.HTTP_PORT || 3010; // HTTP on 3000
+    const httpsPort = process.env.HTTPS_PORT || 3012; // HTTPS on 443 (different port)
 
     // Create HTTP server
     httpServer = http.createServer((req, res) => {

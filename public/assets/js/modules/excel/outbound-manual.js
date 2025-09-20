@@ -3139,7 +3139,7 @@ class InvoiceTableManager {
                         title: 'STATUS',
                         width: '8%',
                         className: 'text-center',
-                        render: (data) => this.renderStatus(data)
+                        render: (data, type, row) => this.renderStatus(data, type, row)
                     },
                     {
                         data: 'totalAmount',
@@ -3202,7 +3202,8 @@ class InvoiceTableManager {
                                 processedDate: file.processedDate,
                                 submittedDate: file.submittedDate,
                                 submissionUid: file.submissionUid,
-                                metadata: file.metadata
+                                metadata: file.metadata,
+                                lhdnResponse: file.lhdn_response
                             };
 
                             // Status priority mapping for custom sort
@@ -3533,7 +3534,7 @@ class InvoiceTableManager {
         return '<span class="text-muted">-</span>';
     }
 
-    renderStatus(data) {
+    renderStatus(data, type, row) {
         const raw = (data || 'Pending').toString();
         const statusClass = raw.toLowerCase();
 
@@ -3575,9 +3576,55 @@ class InvoiceTableManager {
             invalid: '#dc3545',
             valid: '#198754'
         };
-        const icon = icons[statusClass] || 'question-circle';
-        const color = statusColors[statusClass] || '#6c757d';
-        const displayName = statusDisplayNames[statusClass] || raw;
+
+        let icon = icons[statusClass] || 'question-circle';
+        let color = statusColors[statusClass] || '#6c757d';
+        let displayName = statusDisplayNames[statusClass] || raw;
+
+        // Enhanced status display with success/failure counts
+        if (row && row.lhdnResponse) {
+            try {
+                const lhdnData = typeof row.lhdnResponse === 'string'
+                    ? JSON.parse(row.lhdnResponse)
+                    : row.lhdnResponse;
+
+                // Check for validation results with success/failure counts
+                if (lhdnData && lhdnData.summary) {
+                    const { totalDocuments, validDocuments, failedDocuments } = lhdnData.summary;
+
+                    if (totalDocuments > 0) {
+                        if (failedDocuments === 0) {
+                            // All successful
+                            displayName = `${validDocuments} of ${totalDocuments} Submitted`;
+                            icon = 'check-circle-fill';
+                            color = '#198754';
+                        } else if (validDocuments === 0) {
+                            // All failed
+                            displayName = `${failedDocuments} of ${totalDocuments} Failed`;
+                            icon = 'exclamation-triangle-fill';
+                            color = '#dc3545';
+                        } else {
+                            // Partial success
+                            displayName = `${validDocuments} of ${totalDocuments} Submitted`;
+                            icon = 'exclamation-circle';
+                            color = '#ff8307';
+                        }
+                    }
+                } else if (lhdnData && lhdnData.status === 'success') {
+                    // Single document success
+                    displayName = 'Submitted';
+                    icon = 'check-circle-fill';
+                    color = '#198754';
+                } else if (lhdnData && lhdnData.status === 'failed' && lhdnData.error) {
+                    // Single document failure
+                    displayName = 'Failed';
+                    icon = 'exclamation-triangle-fill';
+                    color = '#dc3545';
+                }
+            } catch (e) {
+                console.warn('Error parsing LHDN response for status display:', e);
+            }
+        }
 
         return `<span class="outbound-status ${statusClass.replace(/\s+/g,'-')}" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 6px; background: ${color}15; color: ${color}; font-weight: 500; transition: all 0.2s ease;">
             <i class="bi bi-${icon}" style="font-size: 14px;"></i>${displayName}</span>`;
@@ -3661,21 +3708,12 @@ class InvoiceTableManager {
     renderActions(row) {
         const actions = [];
 
-        // View/Download action
+        // View Details action - show LHDN validation details
         actions.push(`
-            <button class="outbound-action-btn submit" onclick="window.location.href='/inbound'" title="View File">
+            <button class="outbound-action-btn view" onclick="window.outboundManualExcel.showLHDNDetailsModal('${row.id}')" title="View Details">
                 <i class="fas fa-eye"></i>
             </button>
         `);
-
-        // // Submit action (only for ready to submit files)
-        // if (row.status === 'processed' || row.status === 'Ready to Submit') {
-        //     actions.push(`
-        //         <button class="outbound-action-btn submit" onclick="uploadedFilesManager.submitFile('${row.id}')" title="Submit to LHDN">
-        //             <i class="fas fa-cloud-upload-alt"></i> Submit
-        //         </button>
-        //     `);
-        // }
 
         // Delete action (only for non-submitted files)
         if (!['submitted', 'cancelled'].includes(row.status?.toLowerCase())) {
@@ -4392,6 +4430,594 @@ class InvoiceTableManager {
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+    }
+
+    // Show detailed LHDN validation results modal
+    async showLHDNDetailsModal(fileId) {
+        try {
+            // Find the file data from the current table data or fetch fresh data
+            let tableData = dataCache.getCachedData();
+            let fileData = tableData?.find(file => file.id === fileId);
+
+            // If not found in cache, try to refresh the table data
+            if (!fileData) {
+                console.log('File not found in cache, refreshing table data...');
+                try {
+                    // Force refresh the table to get latest data
+                    if (this.table && this.table.ajax) {
+                        await new Promise((resolve, reject) => {
+                            this.table.ajax.reload((json) => {
+                                if (json && json.data) {
+                                    // Update cache with fresh data
+                                    dataCache.updateCache(json.data);
+                                    resolve();
+                                } else {
+                                    reject(new Error('No data received'));
+                                }
+                            }, false);
+                        });
+
+                        // Try to find the file again after refresh
+                        tableData = dataCache.getCachedData();
+                        fileData = tableData?.find(file => file.id === fileId);
+                    }
+                } catch (refreshError) {
+                    console.warn('Failed to refresh table data:', refreshError);
+                }
+            }
+
+            if (!fileData) {
+                console.error('File data not found for ID:', fileId);
+                this.showErrorModal('File data not found', 'The requested file could not be found. Please refresh the page and try again.');
+                return;
+            }
+
+            // Parse LHDN response if available
+            let lhdnData = null;
+            if (fileData.lhdnResponse) {
+                try {
+                    lhdnData = typeof fileData.lhdnResponse === 'string'
+                        ? JSON.parse(fileData.lhdnResponse)
+                        : fileData.lhdnResponse;
+                } catch (e) {
+                    console.warn('Error parsing LHDN response:', e);
+                }
+            }
+
+            this.displayLHDNDetailsModal(fileData, lhdnData);
+
+        } catch (error) {
+            console.error('Error showing LHDN details:', error);
+            this.showErrorModal('Error', 'Failed to load LHDN details: ' + (error.message || 'Unknown error'));
+        }
+    }
+
+    // Display the LHDN details modal with validation results
+    displayLHDNDetailsModal(fileData, lhdnData) {
+        // Remove any existing modal
+        const existingModal = document.getElementById('lhdnDetailsModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+
+        // Determine modal content based on available data
+        let modalContent = '';
+        let modalTitle = 'File Details';
+        let statusInfo = '';
+
+        if (lhdnData) {
+            if (lhdnData.summary) {
+                // Multi-document submission with summary
+                const { totalDocuments, validDocuments, failedDocuments } = lhdnData.summary;
+                modalTitle = 'LHDN Submission Results';
+
+                if (failedDocuments === 0) {
+                    statusInfo = `<div class="alert alert-success">
+                        <i class="bi bi-check-circle-fill me-2"></i>
+                        <strong>Success:</strong> All ${validDocuments} documents were successfully submitted to LHDN.
+                    </div>`;
+                } else if (validDocuments === 0) {
+                    statusInfo = `<div class="alert alert-danger">
+                        <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                        <strong>Failed:</strong> All ${failedDocuments} documents failed validation.
+                    </div>`;
+                } else {
+                    statusInfo = `<div class="alert alert-warning">
+                        <i class="bi bi-exclamation-circle me-2"></i>
+                        <strong>Partial Success:</strong> ${validDocuments} of ${totalDocuments} documents were submitted. ${failedDocuments} failed validation.
+                    </div>`;
+                }
+
+                modalContent = this.generateValidationErrorsContent(lhdnData);
+            } else if (lhdnData.status === 'success') {
+                // Single document success
+                modalTitle = 'LHDN Submission Results';
+                statusInfo = `<div class="alert alert-success">
+                    <i class="bi bi-check-circle-fill me-2"></i>
+                    <strong>Success:</strong> Document was successfully submitted to LHDN.
+                </div>`;
+                modalContent = this.generateSingleDocumentContent(lhdnData);
+            } else if (lhdnData.status === 'failed') {
+                // Single document failure
+                modalTitle = 'LHDN Submission Results';
+                statusInfo = `<div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                    <strong>Failed:</strong> Document submission failed.
+                </div>`;
+                modalContent = this.generateSingleDocumentErrorContent(lhdnData);
+            } else {
+                // Unknown LHDN response format
+                modalContent = `<div class="alert alert-info">
+                    <i class="bi bi-info-circle me-2"></i>
+                    LHDN response data is available but in an unrecognized format.
+                </div>
+                <pre class="bg-light p-3 rounded">${JSON.stringify(lhdnData, null, 2)}</pre>`;
+            }
+        } else {
+            // No LHDN data available
+            modalTitle = 'File Information';
+            statusInfo = `<div class="alert alert-info">
+                <i class="bi bi-info-circle me-2"></i>
+                This file has not been submitted to LHDN yet, or no response data is available.
+            </div>`;
+            modalContent = this.generateFileInfoContent(fileData);
+        }
+
+        // Create modal HTML
+        const modalHTML = `
+            <div id="lhdnDetailsModal" class="lhdn-details-modal">
+                <div class="lhdn-details-overlay" onclick="this.parentElement.remove()"></div>
+                <div class="lhdn-details-content">
+                    <div class="lhdn-details-header">
+                        <div class="d-flex align-items-center">
+                            <div class="header-icon-wrapper me-3">
+                                <i class="bi bi-file-earmark-text-fill"></i>
+                            </div>
+                            <div>
+                                <h4 class="mb-1 fw-semibold">${modalTitle}</h4>
+                                <p class="mb-0 small text-muted">${fileData.fileName || 'Unknown File'}</p>
+                            </div>
+                        </div>
+                        <button class="btn-close-custom" onclick="this.closest('.lhdn-details-modal').remove()">
+                            <i class="bi bi-x"></i>
+                        </button>
+                    </div>
+                    <div class="lhdn-details-body">
+                        ${statusInfo}
+                        ${modalContent}
+                    </div>
+                    <div class="lhdn-details-footer">
+                        <button class="btn btn-secondary" onclick="this.closest('.lhdn-details-modal').remove()">
+                            <i class="bi bi-x-circle me-2"></i>Close
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // Add styles if not already present
+        this.addLHDNDetailsStyles();
+
+        // Add modal to body
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+
+        // Show modal with animation
+        setTimeout(() => {
+            const modal = document.getElementById('lhdnDetailsModal');
+            if (modal) {
+                modal.classList.add('show');
+            }
+        }, 10);
+    }
+
+    // Generate content for validation errors
+    generateValidationErrorsContent(lhdnData) {
+        if (!lhdnData.validationErrors || lhdnData.validationErrors.length === 0) {
+            return '<div class="alert alert-info">No detailed validation errors available.</div>';
+        }
+
+        let content = '<div class="validation-errors-section">';
+        content += '<h6 class="mb-3"><i class="bi bi-exclamation-triangle me-2"></i>Validation Errors</h6>';
+
+        lhdnData.validationErrors.forEach((errorGroup, index) => {
+            content += `
+                <div class="error-group mb-4">
+                    <div class="error-group-header">
+                        <strong>Invoice ${errorGroup.invoiceNumber || `#${index + 1}`}</strong>
+                        <span class="badge bg-danger ms-2">${errorGroup.errors.length} error(s)</span>
+                    </div>
+                    <div class="error-list mt-2">
+            `;
+
+            errorGroup.errors.forEach(error => {
+                content += `
+                    <div class="error-item">
+                        <div class="error-field">
+                            <i class="bi bi-arrow-right me-2"></i>
+                            <strong>${error.field || 'Unknown Field'}</strong>
+                        </div>
+                        <div class="error-message">${error.userFriendlyMessage || error.message || 'Validation failed'}</div>
+                        ${error.value ? `<div class="error-value">Current value: <code>${error.value}</code></div>` : ''}
+                        ${error.code ? `<div class="error-code">Error code: ${error.code}</div>` : ''}
+                    </div>
+                `;
+            });
+
+            content += '</div></div>';
+        });
+
+        content += '</div>';
+        return content;
+    }
+
+    // Generate content for single document success
+    generateSingleDocumentContent(lhdnData) {
+        let content = '<div class="submission-details">';
+
+        if (lhdnData.submissionId) {
+            content += `<div class="detail-item">
+                <strong>Submission ID:</strong> ${lhdnData.submissionId}
+            </div>`;
+        }
+
+        if (lhdnData.timestamp) {
+            content += `<div class="detail-item">
+                <strong>Submitted:</strong> ${new Date(lhdnData.timestamp).toLocaleString()}
+            </div>`;
+        }
+
+        if (lhdnData.lhdnResponse) {
+            content += `<div class="detail-item">
+                <strong>LHDN Response:</strong>
+                <pre class="bg-light p-2 rounded mt-1">${JSON.stringify(lhdnData.lhdnResponse, null, 2)}</pre>
+            </div>`;
+        }
+
+        content += '</div>';
+        return content;
+    }
+
+    // Generate content for single document errors
+    generateSingleDocumentErrorContent(lhdnData) {
+        let content = '<div class="error-details">';
+
+        if (lhdnData.error) {
+            content += `<div class="alert alert-danger">
+                <strong>Error:</strong> ${lhdnData.error.message || lhdnData.error}
+            </div>`;
+
+            if (lhdnData.error.details && Array.isArray(lhdnData.error.details)) {
+                content += '<h6 class="mt-3 mb-2">Error Details:</h6>';
+                lhdnData.error.details.forEach(detail => {
+                    content += `<div class="error-item">
+                        <div class="error-message">${detail.message}</div>
+                        ${detail.code ? `<div class="error-code">Code: ${detail.code}</div>` : ''}
+                        ${detail.target ? `<div class="error-target">Target: ${detail.target}</div>` : ''}
+                    </div>`;
+                });
+            }
+        }
+
+        content += '</div>';
+        return content;
+    }
+
+    // Generate content for file info when no LHDN data
+    generateFileInfoContent(fileData) {
+        let content = '<div class="file-info-section">';
+        content += '<h6 class="mb-3"><i class="bi bi-file-earmark me-2"></i>File Information</h6>';
+
+        content += `<div class="detail-item">
+            <strong>File Name:</strong> ${fileData.fileName || 'Unknown'}
+        </div>`;
+
+        if (fileData.uploadDate) {
+            content += `<div class="detail-item">
+                <strong>Upload Date:</strong> ${new Date(fileData.uploadDate).toLocaleString()}
+            </div>`;
+        }
+
+        if (fileData.status) {
+            content += `<div class="detail-item">
+                <strong>Status:</strong> ${fileData.status}
+            </div>`;
+        }
+
+        if (fileData.invoiceNumber) {
+            content += `<div class="detail-item">
+                <strong>Invoice Count:</strong> ${Array.isArray(fileData.invoiceNumber) ? fileData.invoiceNumber.length : 1}
+            </div>`;
+        }
+
+        content += '</div>';
+        return content;
+    }
+
+    // Add CSS styles for LHDN details modal
+    addLHDNDetailsStyles() {
+        // Check if styles already exist
+        if (document.getElementById('lhdnDetailsStyles')) {
+            return;
+        }
+
+        const styles = `
+            <style id="lhdnDetailsStyles">
+                .lhdn-details-modal {
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    z-index: 9999;
+                    opacity: 0;
+                    visibility: hidden;
+                    transition: opacity 0.3s ease, visibility 0.3s ease;
+                }
+
+                .lhdn-details-modal.show {
+                    opacity: 1;
+                    visibility: visible;
+                }
+
+                .lhdn-details-overlay {
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    background: rgba(0, 0, 0, 0.5);
+                    backdrop-filter: blur(2px);
+                }
+
+                .lhdn-details-content {
+                    position: absolute;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    width: 90%;
+                    max-width: 800px;
+                    max-height: 90vh;
+                    background: white;
+                    border-radius: 12px;
+                    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+                    display: flex;
+                    flex-direction: column;
+                    overflow: hidden;
+                }
+
+                .lhdn-details-header {
+                    background: #405189;
+                    color: white;
+                    padding: 20px 24px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                }
+
+                .lhdn-details-header .header-icon-wrapper {
+                    width: 40px;
+                    height: 40px;
+                    background: rgba(255, 255, 255, 0.2);
+                    border-radius: 8px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 18px;
+                }
+
+                .lhdn-details-header .btn-close-custom {
+                    background: rgba(255, 255, 255, 0.2);
+                    border: none;
+                    color: white;
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 6px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    cursor: pointer;
+                    transition: background 0.2s ease;
+                }
+
+                .lhdn-details-header .btn-close-custom:hover {
+                    background: rgba(255, 255, 255, 0.3);
+                }
+
+                .lhdn-details-body {
+                    padding: 24px;
+                    flex: 1;
+                    overflow-y: auto;
+                }
+
+                .lhdn-details-footer {
+                    padding: 16px 24px;
+                    border-top: 1px solid #e5e7eb;
+                    display: flex;
+                    justify-content: flex-end;
+                    gap: 12px;
+                }
+
+                .validation-errors-section .error-group {
+                    border: 1px solid #fecaca;
+                    border-radius: 8px;
+                    background: #fef2f2;
+                }
+
+                .validation-errors-section .error-group-header {
+                    padding: 12px 16px;
+                    background: #fee2e2;
+                    border-bottom: 1px solid #fecaca;
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                }
+
+                .validation-errors-section .error-list {
+                    padding: 16px;
+                }
+
+                .validation-errors-section .error-item {
+                    margin-bottom: 12px;
+                    padding: 12px;
+                    background: white;
+                    border-radius: 6px;
+                    border-left: 4px solid #dc2626;
+                }
+
+                .validation-errors-section .error-item:last-child {
+                    margin-bottom: 0;
+                }
+
+                .validation-errors-section .error-field {
+                    font-weight: 600;
+                    color: #1f2937;
+                    margin-bottom: 4px;
+                }
+
+                .validation-errors-section .error-message {
+                    color: #4b5563;
+                    margin-bottom: 8px;
+                }
+
+                .validation-errors-section .error-value {
+                    font-size: 0.875rem;
+                    color: #6b7280;
+                    margin-bottom: 4px;
+                }
+
+                .validation-errors-section .error-value code {
+                    background: #f3f4f6;
+                    padding: 2px 6px;
+                    border-radius: 4px;
+                    font-family: monospace;
+                }
+
+                .validation-errors-section .error-code {
+                    font-size: 0.75rem;
+                    color: #9ca3af;
+                }
+
+                .detail-item {
+                    margin-bottom: 12px;
+                    padding: 8px 0;
+                    border-bottom: 1px solid #f3f4f6;
+                }
+
+                .detail-item:last-child {
+                    border-bottom: none;
+                }
+
+                .detail-item strong {
+                    color: #374151;
+                    display: inline-block;
+                    min-width: 120px;
+                }
+
+                @media (max-width: 768px) {
+                    .lhdn-details-content {
+                        width: 95%;
+                        max-height: 95vh;
+                    }
+
+                    .lhdn-details-header {
+                        padding: 16px 20px;
+                    }
+
+                    .lhdn-details-body {
+                        padding: 20px;
+                    }
+                }
+
+                /* Action button styling */
+                .outbound-action-btn.view {
+                    background: #0d6efd;
+                    color: white;
+                    border: none;
+                    padding: 6px 10px;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    transition: background 0.2s ease;
+                    font-size: 12px;
+                }
+
+                .outbound-action-btn.view:hover {
+                    background: #0b5ed7;
+                }
+
+                .outbound-action-btn.cancel {
+                    background: #dc3545;
+                    color: white;
+                    border: none;
+                    padding: 6px 10px;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    transition: background 0.2s ease;
+                    font-size: 12px;
+                }
+
+                .outbound-action-btn.cancel:hover {
+                    background: #bb2d3b;
+                }
+            </style>
+        `;
+
+        document.head.insertAdjacentHTML('beforeend', styles);
+    }
+
+    // Simple error modal for InvoiceTableManager
+    showErrorModal(title, message) {
+        // Remove any existing error modal
+        const existingModal = document.getElementById('invoiceTableErrorModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+
+        const modalHTML = `
+            <div id="invoiceTableErrorModal" class="lhdn-details-modal">
+                <div class="lhdn-details-overlay" onclick="this.parentElement.remove()"></div>
+                <div class="lhdn-details-content" style="max-width: 500px;">
+                    <div class="lhdn-details-header">
+                        <div class="d-flex align-items-center">
+                            <div class="header-icon-wrapper me-3">
+                                <i class="bi bi-exclamation-triangle-fill"></i>
+                            </div>
+                            <div>
+                                <h4 class="mb-1 fw-semibold">${title}</h4>
+                                <p class="mb-0 small text-muted">Error Details</p>
+                            </div>
+                        </div>
+                        <button class="btn-close-custom" onclick="this.closest('.lhdn-details-modal').remove()">
+                            <i class="bi bi-x"></i>
+                        </button>
+                    </div>
+                    <div class="lhdn-details-body">
+                        <div class="alert alert-danger">
+                            <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                            ${message}
+                        </div>
+                    </div>
+                    <div class="lhdn-details-footer">
+                        <button class="btn btn-secondary" onclick="this.closest('.lhdn-details-modal').remove()">
+                            <i class="bi bi-x-circle me-2"></i>Close
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // Add styles if not already present
+        this.addLHDNDetailsStyles();
+
+        // Add modal to body
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+
+        // Show modal with animation
+        setTimeout(() => {
+            const modal = document.getElementById('invoiceTableErrorModal');
+            if (modal) {
+                modal.classList.add('show');
+            }
+        }, 10);
     }
 
 

@@ -387,6 +387,11 @@ async function handleAddUser(e) {
 
 // Add email validation helper function
 function isValidEmail(email) {
+    if (!email || typeof email !== 'string') return false;
+
+    // Check for any whitespace characters
+    if (/\s/.test(email)) return false;
+
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(email);
 }

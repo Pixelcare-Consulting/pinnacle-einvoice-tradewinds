@@ -305,6 +305,12 @@ function getPortalUrl(environment) {
 const fetchRecentDocuments = async (req) => {
   console.log("Starting enhanced document fetch process...");
 
+  // MyInvois API Compliance Warning
+  console.warn("⚠️  COMPLIANCE NOTICE: Using 'Get Recent Documents' API");
+  console.warn("   This API is designed for troubleshooting, not bulk reconciliation");
+  console.warn("   Rate limit: 12 RPM. Excessive use may result in throttling");
+  console.warn("   Consider using 'Search Documents' API for regular operations");
+
   try {
     // Get LHDN configuration
     const lhdnConfig = await getLHDNConfig();
@@ -315,16 +321,25 @@ const fetchRecentDocuments = async (req) => {
     });
 
     // Check sync strategy from query parameters
-    const incrementalSync = req.query.incrementalSync !== "false"; // Default to true
     const forceRefresh = req.query.forceRefresh === "true";
-    const maxIncrementalPages = parseInt(req.query.maxIncrementalPages) || 5; // Limit incremental sync pages
+    // Force full sync when refreshing, otherwise allow incremental sync
+    const incrementalSync = forceRefresh ? false : (req.query.incrementalSync !== "false");
+    // Increase pagination limits - configurable via environment or query params
+    const maxIncrementalPages = parseInt(req.query.maxIncrementalPages) ||
+                               parseInt(process.env.MAX_INCREMENTAL_PAGES) || 50; // Increased from 5 to 50
+    const maxFullSyncPages = parseInt(req.query.maxFullSyncPages) ||
+                            parseInt(process.env.MAX_FULL_SYNC_PAGES) || 200; // Allow up to 20,000 records
+
+    console.log(`Sync strategy: ${incrementalSync ? 'incremental' : 'full'}, forceRefresh: ${forceRefresh}`);
+    console.log(`Pagination limits - Incremental: ${maxIncrementalPages} pages, Full: ${maxFullSyncPages} pages`);
 
     // First, check if we have data in the database
+    const dbLimit = parseInt(process.env.DB_DOCUMENT_LIMIT) || 5000; // Increased from 1000 to 5000
     const dbDocuments = await prisma.wP_INBOUND_STATUS.findMany({
       orderBy: {
         dateTimeReceived: "desc",
       },
-      take: 1000, // Limit to latest 1000 records
+      take: dbLimit, // Configurable limit for database records
     });
 
     // Get the most recent document timestamp for incremental sync
@@ -558,11 +573,11 @@ const fetchRecentDocuments = async (req) => {
                   newDocumentsFound++;
                 } else {
                   existingDocumentsFound++;
-                  // If we're finding old documents, we can stop pagination early
-                  if (existingDocumentsFound >= 10) {
-                    // Stop if we find 10 consecutive old documents
+                  // Only stop pagination early in incremental sync mode
+                  if (incrementalSync && existingDocumentsFound >= 10) {
+                    // Stop if we find 10 consecutive old documents in incremental mode
                     console.log(
-                      `Found ${existingDocumentsFound} existing documents, stopping pagination early`
+                      `Incremental sync: Found ${existingDocumentsFound} existing documents, stopping pagination early`
                     );
                     hasMorePages = false;
                     break;
@@ -593,20 +608,31 @@ const fetchRecentDocuments = async (req) => {
               );
             }
 
-            // Limit incremental sync to maxIncrementalPages to prevent excessive API calls
-            if (incrementalSync && pageNo >= maxIncrementalPages) {
+            // Apply appropriate page limits based on sync mode
+            const currentPageLimit = incrementalSync ? maxIncrementalPages : maxFullSyncPages;
+            if (pageNo >= currentPageLimit) {
               console.log(
-                `Reached maximum incremental pages (${maxIncrementalPages}), stopping sync`
+                `Reached maximum ${incrementalSync ? 'incremental' : 'full'} pages (${currentPageLimit}), stopping sync`
               );
               hasMorePages = false;
             }
 
-            // Check if we have more pages based on pagination info (only if not stopped by incremental logic)
+            // Check if we have more pages based on pagination info (only if not stopped by other logic)
             if (hasMorePages) {
-              if (pagination) {
+              if (pagination && pagination.totalPages && pagination.totalCount) {
                 hasMorePages = pageNo < pagination.totalPages;
+                const documentsRetrieved = (pageNo - 1) * pageSize + result.length;
+                console.log(`MyInvois Pagination: page ${pageNo}/${pagination.totalPages}, retrieved ${documentsRetrieved}/${pagination.totalCount}, hasMore: ${hasMorePages}`);
+
+                // MyInvois API limit: maximum 10,000 documents can be returned
+                if (documentsRetrieved >= 10000) {
+                  console.warn("⚠️  Approaching MyInvois API limit of 10,000 documents");
+                  hasMorePages = false;
+                }
               } else {
+                // If no pagination info, check if we got a full page of results
                 hasMorePages = result.length === pageSize;
+                console.log(`No pagination metadata: got ${result.length}/${pageSize} results, hasMore: ${hasMorePages}`);
               }
             }
 
@@ -617,19 +643,22 @@ const fetchRecentDocuments = async (req) => {
 
             // Adaptive delay between requests based on rate limit headers
             if (hasMorePages) {
-              let adaptiveDelay = 500; // Base delay
+              // MyInvois API compliance: 12 RPM for Get Recent Documents
+              // This means minimum 5000ms between requests (60000ms / 12 = 5000ms)
+              const MYINVOIS_MIN_DELAY = 5000; // 5 seconds to comply with 12 RPM limit
+              let adaptiveDelay = MYINVOIS_MIN_DELAY;
 
               // Adjust delay based on remaining rate limit
               if (rateLimitRemaining !== null && rateLimitRemaining >= 0) {
-                if (rateLimitRemaining < 10) {
-                  adaptiveDelay = 2000; // Slow down when approaching limit
-                } else if (rateLimitRemaining < 50) {
-                  adaptiveDelay = 1000; // Moderate slowdown
+                if (rateLimitRemaining < 3) {
+                  adaptiveDelay = 10000; // 10 seconds when very close to limit
+                } else if (rateLimitRemaining < 6) {
+                  adaptiveDelay = 7000; // 7 seconds when approaching limit
                 }
               }
 
               // Add jitter to prevent thundering herd
-              const jitter = Math.random() * 200; // 0-200ms jitter
+              const jitter = Math.random() * 1000; // 0-1000ms jitter
               adaptiveDelay += jitter;
 
               console.log(
@@ -777,7 +806,7 @@ const fetchRecentDocuments = async (req) => {
       }
 
       console.log(
-        `Fetch complete. Total documents retrieved: ${documents.length}`
+        `Fetch complete. Total documents retrieved: ${documents.length} using ${incrementalSync ? 'incremental' : 'full'} sync (${pageNo - 1} pages fetched)`
       );
 
       // Save the fetched documents to database
@@ -1999,6 +2028,10 @@ router.post("/documents/refresh", async (req, res) => {
     // Force refresh by clearing cache
     const cacheKey = `recentDocuments_${req.session?.user?.TIN || "default"}`;
     cache.del(cacheKey);
+
+    // Force full sync for refresh operations
+    req.query.forceRefresh = "true";
+    req.query.incrementalSync = "false";
 
     // Fetch fresh data from LHDN API
     const fetchResult = await fetchRecentDocuments(req);
@@ -3229,8 +3262,9 @@ router.post("/documents/refresh", async (req, res) => {
       details: { requestId },
     });
 
-    // Force fetch from API by setting forceRefresh flag
+    // Force fetch from API by setting forceRefresh flag and disabling incremental sync
     req.query.forceRefresh = "true";
+    req.query.incrementalSync = "false";
     const apiData = await fetchRecentDocuments(req);
 
     // Save to database
@@ -5570,8 +5604,8 @@ router.post("/documents/refresh", async (req, res) => {
       const pageSize = 100;
       let hasMorePages = true;
 
-      // Fetch up to 5 pages (500 documents)
-      const maxPages = 5;
+      // Fetch up to configurable number of pages for full refresh
+      const maxPages = parseInt(process.env.MAX_FULL_SYNC_PAGES) || 200; // Increased from 5 to 200
 
       while (hasMorePages && pageNo <= maxPages) {
         try {
@@ -5598,11 +5632,12 @@ router.post("/documents/refresh", async (req, res) => {
 
           const pageDocuments = response.data.result || [];
           console.log(
-            `Fetched ${pageDocuments.length} documents from page ${pageNo}`
+            `Fetched ${pageDocuments.length} documents from page ${pageNo}/${maxPages}`
           );
 
           // If we got fewer documents than pageSize, we've reached the end
           if (pageDocuments.length < pageSize) {
+            console.log(`Reached end of data: got ${pageDocuments.length}/${pageSize} documents`);
             hasMorePages = false;
           }
 
@@ -5851,17 +5886,22 @@ router.post("/documents/refresh", async (req, res) => {
 // Sync strategy configuration endpoint
 router.get("/sync/config", async (req, res) => {
   try {
-    // Get current sync configuration
+    // Get current sync configuration - Updated for MyInvois API compliance
     const config = {
       syncStrategy: "incremental", // Default strategy
       incrementalSync: true,
-      maxIncrementalPages: 5,
+      maxIncrementalPages: parseInt(process.env.MAX_INCREMENTAL_PAGES) || 50, // Updated from 5
+      maxFullSyncPages: parseInt(process.env.MAX_FULL_SYNC_PAGES) || 200,
       syncThresholdMinutes: 15,
       rateLimitHandling: {
         enabled: true,
         adaptiveDelay: true,
-        baseDelay: 500,
+        baseDelay: 5000, // Updated to comply with 12 RPM limit
         maxDelay: 60000,
+        myinvoisCompliance: {
+          rpmLimit: 12,
+          minDelayMs: 5000, // 60000ms / 12 RPM = 5000ms minimum
+        }
       },
       paginationControl: {
         smartPagination: true,
@@ -5869,6 +5909,7 @@ router.get("/sync/config", async (req, res) => {
         maxConsecutiveErrors: 3,
         pageSize: 100,
       },
+      apiUsageWarning: "This API is for troubleshooting only, not bulk reconciliation",
     };
 
     res.json({

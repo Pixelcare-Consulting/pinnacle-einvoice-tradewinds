@@ -462,10 +462,15 @@ const InvoiceSettingsUtil = {
 
     /**
      * Validate email format
-     * @param {string} email 
+     * @param {string} email
      * @returns {boolean}
      */
     isValidEmail(email) {
+        if (!email || typeof email !== 'string') return false;
+
+        // Check for any whitespace characters
+        if (/\s/.test(email)) return false;
+
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         return emailRegex.test(email);
     }

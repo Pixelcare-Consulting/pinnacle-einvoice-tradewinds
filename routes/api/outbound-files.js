@@ -2598,6 +2598,15 @@ router.post('/:fileName/submit-to-lhdn', auth.isApiAuthenticated, async (req, re
                     invoiceNumber: invoice_number
                 });
 
+                // Cleanup JSON files after successful submission
+                try {
+                    await cleanupLHDNJsonFiles([invoice_number]);
+                    console.log(`✅ Cleaned up JSON files for invoice: ${invoice_number}`);
+                } catch (cleanupError) {
+                    console.error(`⚠️ Warning: Failed to cleanup JSON files for invoice ${invoice_number}:`, cleanupError);
+                    // Don't fail the submission if cleanup fails
+                }
+
                 // Then update the Excel file
                 const excelUpdateResult = await submitter.updateExcelWithResponse(
                     fileName,
@@ -3876,6 +3885,15 @@ router.post('/:fileName/submit-to-lhdn-consolidated', auth.isApiAuthenticated, a
                 };
 
                 await submitter.updateSubmissionStatus(statusData);
+
+                // Cleanup JSON files after successful submission
+                try {
+                    await cleanupLHDNJsonFiles([invoice_number]);
+                    console.log(`✅ Cleaned up JSON files for invoice: ${invoice_number}`);
+                } catch (cleanupError) {
+                    console.error(`⚠️ Warning: Failed to cleanup JSON files for invoice ${invoice_number}:`, cleanupError);
+                    // Don't fail the submission if cleanup fails
+                }
 
                 // Inbound status will be updated by LHDN polling when real data is available
 
@@ -5321,5 +5339,93 @@ router.get('/recent-submissions', auth.isApiAuthenticated, async (req, res) => {
         });
     }
 });
+
+/**
+ * Cleanup function to delete LHDN JSON files after successful submission
+ * This prevents reuse of old JSON files when the same InvoiceNo is submitted again
+ * @param {Array} invoiceNumbers - Array of invoice numbers to cleanup
+ */
+async function cleanupLHDNJsonFiles(invoiceNumbers) {
+  if (!invoiceNumbers || invoiceNumbers.length === 0) {
+    console.log('No invoice numbers provided for cleanup');
+    return;
+  }
+
+  const logsDir = path.join(process.cwd(), 'logs', 'lhdn');
+
+  // Check if logs directory exists
+  if (!fs.existsSync(logsDir)) {
+    console.log('LHDN logs directory does not exist, no cleanup needed');
+    return;
+  }
+
+  let totalFilesDeleted = 0;
+  const deletionResults = [];
+
+  for (const invoiceNo of invoiceNumbers) {
+    try {
+      // Find all JSON files for this invoice number
+      const files = fs.readdirSync(logsDir);
+      const invoiceFiles = files.filter(file => {
+        // Match both output and process files for this invoice
+        return (file.startsWith(`lhdn_output_${invoiceNo}_`) ||
+                file.startsWith(`lhdn_process_${invoiceNo}_`)) &&
+               file.endsWith('.json');
+      });
+
+      let filesDeleted = 0;
+      for (const file of invoiceFiles) {
+        const filePath = path.join(logsDir, file);
+        try {
+          fs.unlinkSync(filePath);
+          filesDeleted++;
+          totalFilesDeleted++;
+          console.log(`🗑️ Deleted JSON file: ${file}`);
+        } catch (deleteError) {
+          console.error(`❌ Failed to delete file ${file}:`, deleteError.message);
+        }
+      }
+
+      deletionResults.push({
+        invoiceNo,
+        filesFound: invoiceFiles.length,
+        filesDeleted,
+        success: filesDeleted === invoiceFiles.length
+      });
+
+      if (invoiceFiles.length === 0) {
+        console.log(`ℹ️ No JSON files found for invoice: ${invoiceNo}`);
+      } else {
+        console.log(`✅ Cleaned up ${filesDeleted}/${invoiceFiles.length} files for invoice: ${invoiceNo}`);
+      }
+
+    } catch (error) {
+      console.error(`❌ Error cleaning up files for invoice ${invoiceNo}:`, error.message);
+      deletionResults.push({
+        invoiceNo,
+        filesFound: 0,
+        filesDeleted: 0,
+        success: false,
+        error: error.message
+      });
+    }
+  }
+
+  console.log(`🧹 Cleanup Summary: Deleted ${totalFilesDeleted} JSON files for ${invoiceNumbers.length} invoices`);
+
+  // Log detailed results for debugging
+  const failedCleanups = deletionResults.filter(result => !result.success);
+  if (failedCleanups.length > 0) {
+    console.warn(`⚠️ Failed to cleanup files for ${failedCleanups.length} invoices:`,
+                 failedCleanups.map(f => f.invoiceNo));
+  }
+
+  return {
+    totalInvoices: invoiceNumbers.length,
+    totalFilesDeleted,
+    results: deletionResults,
+    success: failedCleanups.length === 0
+  };
+}
 
 module.exports = router;

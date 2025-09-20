@@ -81,13 +81,6 @@ router.get('/consolidated', auth.middleware, (req, res) => {
   });
 });
 
-router.get('/inbound', auth.middleware, (req, res) => {
-  res.render('dashboard/inbound.html', {
-    title: 'Inbound',
-    user: req.session.user || null,
-    layout: 'layout'
-  });
-});
 
 router.get('/sdk-updates', auth.middleware, (req, res) => {
   res.render('dashboard/sdk-updates.html', {

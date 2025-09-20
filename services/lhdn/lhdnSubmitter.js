@@ -1116,8 +1116,19 @@ class LHDNSubmitter {
       if (!value) return true; // empty is allowed; we only validate when present
       const v = String(value).trim();
       if (!v || v.toUpperCase() === 'NA') return true; // treat NA/blank as not provided
-      // LHDN/Customs SST number format e.g., W10-0123-12345678
-      return /^W\d{2}-\d{4}-\d{8}$/i.test(v);
+
+      // Multiple valid SST registration number formats based on LHDN/Customs requirements
+      // Format: [PREFIX][2-digits]-[4-digits]-[8-digits]
+      // Common prefixes: A, B, W, and potentially others
+      // Examples: A01-2345-67891012, W10-0123-12345678, B05-1234-56789012
+      const sstPatterns = [
+        /^[A-Z]\d{2}-\d{4}-\d{8}$/i,  // Standard format: Letter + 2 digits - 4 digits - 8 digits
+        /^[A-Z]\d{2}-\d{4}-\d{10}$/i, // Alternative format with 10 digits at end
+        /^[A-Z]\d{1}-\d{4}-\d{8}$/i,  // Format with single digit after letter
+      ];
+
+      // Check if the value matches any of the valid patterns
+      return sstPatterns.some(pattern => pattern.test(v));
     };
 
     // Iterate all docs and collect validation errors

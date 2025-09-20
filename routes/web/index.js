@@ -95,49 +95,32 @@ router.get('/v1', auth.middleware, (req, res) => {
   });
 });
 
-router.get('/dashboard', auth.middleware, (req, res) => {
-    res.render('dashboard/index.html', {
-        title: 'Dashboard',
-        user: req.session.user || null,
-        layout: 'layout'
-    });
-});
-
-// Inbound redirect
 router.get('/inbound', auth.middleware, (req, res) => {
-    res.render('dashboard/inbound.html', {
-        title: 'Inbound',
-        user: req.session.user || null,
-        layout: 'layout'
-    });
-});
-
-// Outbound redirect
-router.get('/outbound', auth.middleware, (req, res) => {
-    res.render('dashboard/outbound.html', {
-        title: 'Outbound',
-        user: req.session.user || null,
-        layout: 'layout'
-    });
-});
-
-// Security dashboard (admin only)
-router.get('/security', auth.middleware, (req, res) => {
-  res.render('admin/security-dashboard.html', {
-    title: 'Security Dashboard',
+  res.render('dashboard/inbound.html', {
+    title: 'Inbound',
     user: req.session.user || null,
     layout: 'layout'
   });
 });
 
-// Outbound redirect
 router.get('/outbound-manual', auth.middleware, (req, res) => {
-    res.render('dashboard/outbound-manual.html', {
-        title: 'Outbound Manual',
-        user: req.session.user || null,
-        layout: 'layout'
-    });
+  res.render('dashboard/outbound-manual.html', {
+    title: 'Outbound Manual',
+    user: req.session.user || null,
+    layout: 'layout'
+  });
 });
+
+
+// Note: Dashboard routes are now handled by routes/dashboard.routes.js
+// This prevents conflicts between old UI (index.html) and new UI (v2.html)
+//
+// Removed duplicate routes:
+// - /dashboard (now handled by dashboardRoutes -> renders v2.html)
+// - /inbound (now handled by dashboardRoutes)
+// - /outbound (now handled by dashboardRoutes)
+// - /outbound-manual (now handled by dashboardRoutes)
+// - /security (now handled by dashboardRoutes)
 
 // Consolidated redirect
 router.get('/consolidated', auth.middleware, (req, res) => {

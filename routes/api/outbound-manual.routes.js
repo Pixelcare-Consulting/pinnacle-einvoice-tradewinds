@@ -620,6 +620,32 @@ router.post('/validate-excel', [auth.isApiAuthenticated, excelUpload.single('exc
                     const issues = [];
                     if (!email || typeof email !== 'string') return issues;
 
+                    // Check for whitespace BEFORE trimming to catch whitespace issues
+                    if (email !== email.trim()) {
+                        issues.push({
+                            severity: 'Critical',
+                            type: 'Email Contains Whitespace',
+                            row: rowIndex,
+                            field: fieldName,
+                            value: email,
+                            message: `Email address contains leading or trailing whitespace: "${email}"`,
+                            suggestion: `Remove whitespace from email address. Suggested value: "${email.trim()}"`
+                        });
+                    }
+
+                    // Check for any whitespace characters within the email
+                    if (/\s/.test(email)) {
+                        issues.push({
+                            severity: 'Critical',
+                            type: 'Email Contains Whitespace',
+                            row: rowIndex,
+                            field: fieldName,
+                            value: email,
+                            message: `Email address contains whitespace characters: "${email}"`,
+                            suggestion: 'Email addresses cannot contain spaces, tabs, or other whitespace characters'
+                        });
+                    }
+
                     const emailStr = email.trim();
                     if (!emailStr) return issues;
 
@@ -1617,6 +1643,15 @@ router.post('/submit-excel-invoice-to-lhdn', [auth.isApiAuthenticated], async (r
             }
 
             if (result.status === 'success') {
+                // Cleanup JSON files after successful submission
+                try {
+                    await cleanupLHDNJsonFiles([invoice_number]);
+                    console.log(`✅ Cleaned up JSON files for invoice: ${invoice_number}`);
+                } catch (cleanupError) {
+                    console.error(`⚠️ Warning: Failed to cleanup JSON files for invoice ${invoice_number}:`, cleanupError);
+                    // Don't fail the submission if cleanup fails
+                }
+
                 res.json({
                     success: true,
                     message: 'Invoice submitted to LHDN successfully',
@@ -3080,6 +3115,17 @@ router.post(
       const submitter = new LHDNSubmitter(req);
       const result = await submitter.submitToLHDNDocument(documents);
 
+      // Cleanup JSON files after successful submission
+      if (result.status === "success" && preparedInvoices.length > 0) {
+        try {
+          await cleanupLHDNJsonFiles(preparedInvoices);
+          console.log(`✅ Cleaned up JSON files for ${preparedInvoices.length} invoices in single submission`);
+        } catch (cleanupError) {
+          console.error(`⚠️ Warning: Failed to cleanup JSON files in single submission:`, cleanupError);
+          // Don't fail the submission if cleanup fails
+        }
+      }
+
       // Update DB quickly with result snapshot
       // Do not flip status to "error" for pre-submission validation failures.
       // Keep it as "processed" (which renders as "Ready to Submit") so users can fix and retry.
@@ -3767,22 +3813,66 @@ async function processBulkSubmissionEnhanced(files, user, sessionId) {
           allDocuments
         );
 
-        if (submissionResult.status !== "success") {
+        console.log(`LHDN submission result for ${file.filename}:`, JSON.stringify(submissionResult, null, 2));
+
+        // FIXED: Parse LHDN response to handle mixed success/failure results
+        // Previously, the code only checked for overall success/failure and stored a simplified response.
+        // Now we properly parse acceptedDocuments and rejectedDocuments to show accurate status in the UI.
+        let totalDocuments = processedData.length;
+        let validDocuments = 0;
+        let failedDocuments = 0;
+        let submissionUid = null;
+        let finalStatus = "error";
+        let lhdnResponseData = submissionResult;
+
+        if (submissionResult.status === "success" && submissionResult.data) {
+          const acceptedDocs = submissionResult.data.acceptedDocuments || [];
+          const rejectedDocs = submissionResult.data.rejectedDocuments || [];
+
+          validDocuments = acceptedDocs.length;
+          failedDocuments = rejectedDocs.length;
+          submissionUid = submissionResult.data.submissionUid || submissionResult.submissionId;
+
+          // Determine final status based on results
+          if (failedDocuments === 0 && validDocuments > 0) {
+            finalStatus = "submitted"; // All successful
+          } else if (validDocuments === 0 && failedDocuments > 0) {
+            finalStatus = "error"; // All failed
+          } else if (validDocuments > 0 && failedDocuments > 0) {
+            finalStatus = "submitted"; // Partial success - still mark as submitted since some succeeded
+          } else {
+            finalStatus = "error"; // No documents processed
+          }
+
+          // Create enhanced response with summary for frontend display
+          lhdnResponseData = {
+            ...submissionResult,
+            summary: {
+              totalDocuments,
+              validDocuments,
+              failedDocuments,
+              submissionUid,
+              processedAt: new Date().toISOString()
+            }
+          };
+
+          console.log(`📊 Submission summary for ${file.filename}: ${validDocuments}/${totalDocuments} successful, ${failedDocuments} failed`);
+        } else {
+          // Complete failure
+          failedDocuments = totalDocuments;
+          finalStatus = "error";
+
           throw {
             code: "SUBMISSION_FAILED",
-            message:
-              submissionResult.error?.message || "LHDN submission failed",
+            message: submissionResult.error?.message || "LHDN submission failed",
             details: submissionResult.error?.details || [],
             totalDocuments: processedData.length,
           };
         }
 
-        // PHASE 4: TRIGGER POLLING FOR ALL SUBMITTED DOCUMENTS
-        console.log(`Phase 4: Setting up polling for submitted documents`);
-
-        const submissionUid =
-          submissionResult.submissionId || submissionResult.submissionUid;
+        // PHASE 4: TRIGGER POLLING FOR ALL SUBMITTED DOCUMENTS (only if we have a submission UID)
         if (submissionUid) {
+          console.log(`Phase 4: Setting up polling for submitted documents`);
           console.log(
             `Starting delayed polling for bulk submission ${submissionUid} (file: ${file.filename})`
           );
@@ -3804,33 +3894,56 @@ async function processBulkSubmissionEnhanced(files, user, sessionId) {
           }, 5000);
         }
 
-        // Update file status to submitted
+        // PHASE 5: CLEANUP JSON FILES (only for successfully submitted invoices)
+        if (validDocuments > 0) {
+          console.log(`Phase 5: Cleaning up JSON files for ${validDocuments} successfully submitted invoices`);
+          try {
+            // Only cleanup files for successfully submitted documents
+            const successfulInvoiceNumbers = submissionResult.data?.acceptedDocuments?.map(doc =>
+              doc.invoiceCodeNumber || doc.codeNumber
+            ).filter(Boolean) || [];
+
+            if (successfulInvoiceNumbers.length > 0) {
+              await cleanupLHDNJsonFiles(successfulInvoiceNumbers);
+              console.log(`✅ Cleaned up JSON files for ${successfulInvoiceNumbers.length} successful invoices`);
+            }
+          } catch (cleanupError) {
+            console.error(`⚠️ Warning: Failed to cleanup JSON files:`, cleanupError);
+            // Don't fail the submission if cleanup fails
+          }
+        }
+
+        // Update file status with detailed LHDN response
         await prisma.wP_UPLOADED_EXCEL_FILES.update({
           where: { id: file.id },
           data: {
-            processing_status: "submitted",
-            submitted_date: new Date(),
-            lhdn_response: JSON.stringify({
-              success: true,
-              submittedAt: new Date(),
-              invoicesProcessed: processedData.length,
-              submissionUid: submissionUid,
-              validationPassed: true,
-            }),
+            processing_status: finalStatus,
+            submitted_date: validDocuments > 0 ? new Date() : file.submitted_date,
+            lhdn_response: JSON.stringify(lhdnResponseData),
+            updated_at: new Date(),
           },
         });
+
+        // Create result entry with detailed status information
+        const resultMessage = failedDocuments === 0
+          ? `All ${validDocuments} invoices successfully submitted`
+          : validDocuments === 0
+            ? `All ${failedDocuments} invoices failed submission`
+            : `${validDocuments} of ${totalDocuments} invoices submitted successfully, ${failedDocuments} failed`;
 
         results.push({
           fileId: file.id,
           filename: file.filename,
-          status: "success",
-          invoicesProcessed: processedData.length,
+          status: finalStatus === "submitted" ? "success" : "failed",
+          invoicesProcessed: totalDocuments,
+          validDocuments: validDocuments,
+          failedDocuments: failedDocuments,
           submissionUid: submissionUid,
-          message: `All ${processedData.length} invoices successfully submitted`,
+          message: resultMessage,
         });
 
         console.log(
-          `✅ File ${file.filename} successfully processed: ${processedData.length} invoices submitted`
+          `✅ File ${file.filename} processed: ${validDocuments}/${totalDocuments} invoices submitted successfully`
         );
       } catch (fileError) {
         console.error(`❌ Error processing file ${file.filename}:`, fileError);
@@ -4347,5 +4460,93 @@ router.post(
     }
   }
 );
+
+/**
+ * Cleanup function to delete LHDN JSON files after successful submission
+ * This prevents reuse of old JSON files when the same InvoiceNo is submitted again
+ * @param {Array} invoiceNumbers - Array of invoice numbers to cleanup
+ */
+async function cleanupLHDNJsonFiles(invoiceNumbers) {
+  if (!invoiceNumbers || invoiceNumbers.length === 0) {
+    console.log('No invoice numbers provided for cleanup');
+    return;
+  }
+
+  const logsDir = path.join(process.cwd(), 'logs', 'lhdn');
+
+  // Check if logs directory exists
+  if (!fs.existsSync(logsDir)) {
+    console.log('LHDN logs directory does not exist, no cleanup needed');
+    return;
+  }
+
+  let totalFilesDeleted = 0;
+  const deletionResults = [];
+
+  for (const invoiceNo of invoiceNumbers) {
+    try {
+      // Find all JSON files for this invoice number
+      const files = fs.readdirSync(logsDir);
+      const invoiceFiles = files.filter(file => {
+        // Match both output and process files for this invoice
+        return (file.startsWith(`lhdn_output_${invoiceNo}_`) ||
+                file.startsWith(`lhdn_process_${invoiceNo}_`)) &&
+               file.endsWith('.json');
+      });
+
+      let filesDeleted = 0;
+      for (const file of invoiceFiles) {
+        const filePath = path.join(logsDir, file);
+        try {
+          fs.unlinkSync(filePath);
+          filesDeleted++;
+          totalFilesDeleted++;
+          console.log(`🗑️ Deleted JSON file: ${file}`);
+        } catch (deleteError) {
+          console.error(`❌ Failed to delete file ${file}:`, deleteError.message);
+        }
+      }
+
+      deletionResults.push({
+        invoiceNo,
+        filesFound: invoiceFiles.length,
+        filesDeleted,
+        success: filesDeleted === invoiceFiles.length
+      });
+
+      if (invoiceFiles.length === 0) {
+        console.log(`ℹ️ No JSON files found for invoice: ${invoiceNo}`);
+      } else {
+        console.log(`✅ Cleaned up ${filesDeleted}/${invoiceFiles.length} files for invoice: ${invoiceNo}`);
+      }
+
+    } catch (error) {
+      console.error(`❌ Error cleaning up files for invoice ${invoiceNo}:`, error.message);
+      deletionResults.push({
+        invoiceNo,
+        filesFound: 0,
+        filesDeleted: 0,
+        success: false,
+        error: error.message
+      });
+    }
+  }
+
+  console.log(`🧹 Cleanup Summary: Deleted ${totalFilesDeleted} JSON files for ${invoiceNumbers.length} invoices`);
+
+  // Log detailed results for debugging
+  const failedCleanups = deletionResults.filter(result => !result.success);
+  if (failedCleanups.length > 0) {
+    console.warn(`⚠️ Failed to cleanup files for ${failedCleanups.length} invoices:`,
+                 failedCleanups.map(f => f.invoiceNo));
+  }
+
+  return {
+    totalInvoices: invoiceNumbers.length,
+    totalFilesDeleted,
+    results: deletionResults,
+    success: failedCleanups.length === 0
+  };
+}
 
 module.exports = router;

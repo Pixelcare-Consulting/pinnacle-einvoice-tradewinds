@@ -1,6 +1,8 @@
 // @ts-nocheck
 // Toast Manager Class
 
+// ValidationTranslations is now loaded from /assets/js/config/validation-translations.js
+
 // Custom Modal Utility to replace SweetAlert
 class CustomModal {
     static show(options = {}) {
@@ -552,6 +554,7 @@ class InvoiceTableManager {
     this.currentDataSource = "live"; // Use live LHDN data as the only data source
     this.table = null;
     this.isRefreshing = false; // Add refresh state tracking
+    this.isInitializing = false; // Add initialization state tracking
     this.lastRefreshTime = 0; // Track last refresh time for rate limiting
     this.refreshCooldown = 3000; // 3 second cooldown between refreshes (optimized)
     this.cacheTimeout = 30000; // 30 seconds cache timeout (optimized from default)
@@ -563,6 +566,9 @@ class InvoiceTableManager {
 
     // Test endpoint connectivity before initializing table
     this.testEndpointConnectivity();
+
+    // Validate and fix LHDN configuration
+    this.validateLHDNConfiguration();
 
     this.initializeTable();
     this.initializeDataSourceToggle();
@@ -770,9 +776,22 @@ class InvoiceTableManager {
   }
 
   initializeTable() {
-    if ($.fn.DataTable.isDataTable("#invoiceTable")) {
-      this.table.destroy();
+    // Prevent concurrent initialization
+    if (this.isInitializing) {
+      console.log("[DataTable] Initialization already in progress, skipping...");
+      return;
     }
+
+    // Properly destroy existing DataTable if it exists
+    if ($.fn.DataTable.isDataTable("#invoiceTable")) {
+      console.log("[DataTable] Destroying existing table instance...");
+      const existingTable = $("#invoiceTable").DataTable();
+      existingTable.destroy(true); // Remove from DOM completely
+      $("#invoiceTable").empty(); // Clear the table content
+      this.table = null; // Clear reference
+    }
+
+    this.isInitializing = true;
     const self = this;
 
     // Show enhanced loading skeleton
@@ -835,13 +854,18 @@ class InvoiceTableManager {
     };
 
     // Call the authentication check
-    checkAuth();
+    checkAuth().finally(() => {
+      this.isInitializing = false;
+    });
   }
 
   // Test endpoint connectivity
   async testEndpointConnectivity() {
     try {
       console.log("[Inbound] Testing endpoint connectivity...");
+
+      // Clear any cached problematic configurations
+      this.clearProblematicCache();
 
       // Test the main endpoint
       const response = await fetch("/api/lhdn/documents/recent?useDatabase=true&fallbackOnly=true", {
@@ -866,6 +890,96 @@ class InvoiceTableManager {
       }
     } catch (error) {
       console.error("[Inbound] Endpoint connectivity test failed:", error);
+    }
+  }
+
+  // Clear problematic cached configurations
+  clearProblematicCache() {
+    try {
+      // Clear localStorage items that might contain old server references
+      const keysToCheck = [
+        'lhdn_config',
+        'server_config',
+        'api_config',
+        'middleware_config',
+        'inboundTableData',
+        'lastDataUpdate'
+      ];
+
+      keysToCheck.forEach(key => {
+        const value = localStorage.getItem(key);
+        if (value && (value.includes('paceserver') || value.includes('ddns.net'))) {
+          console.log(`[Cache] Removing problematic cached config: ${key}`);
+          localStorage.removeItem(key);
+        }
+      });
+
+      // Clear sessionStorage as well
+      keysToCheck.forEach(key => {
+        const value = sessionStorage.getItem(key);
+        if (value && (value.includes('paceserver') || value.includes('ddns.net'))) {
+          console.log(`[Cache] Removing problematic session config: ${key}`);
+          sessionStorage.removeItem(key);
+        }
+      });
+
+    } catch (error) {
+      console.warn("[Cache] Error clearing problematic cache:", error);
+    }
+  }
+
+  // Validate LHDN configuration and fix if needed
+  async validateLHDNConfiguration() {
+    try {
+      console.log("[Config] Validating LHDN configuration...");
+
+      // Check if there are any problematic server references in the current page
+      const pageContent = document.documentElement.outerHTML;
+      if (pageContent.includes('paceserver.ddns.net')) {
+        console.warn("[Config] Found paceserver reference in page content");
+
+        // Show user-friendly notification
+        ToastManager.show(
+          'Updating server configuration for better connectivity...',
+          'info',
+          3000
+        );
+
+        // Try to refresh the LHDN configuration via API
+        try {
+          const response = await fetch('/api/lhdn/test/config', {
+            method: 'GET',
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json'
+            }
+          });
+
+          if (response.ok) {
+            const config = await response.json();
+            console.log("[Config] Current LHDN config:", config);
+
+            // Check if the config contains problematic URLs
+            const configStr = JSON.stringify(config);
+            if (configStr.includes('paceserver') || configStr.includes('ddns.net')) {
+              console.warn("[Config] LHDN configuration contains problematic server references");
+
+              // Show warning to user
+              CustomModal.fire({
+                icon: 'warning',
+                title: 'Configuration Update Required',
+                text: 'The system detected an outdated server configuration. Please contact your administrator to update the LHDN configuration.',
+                confirmButtonText: 'OK'
+              });
+            }
+          }
+        } catch (apiError) {
+          console.warn("[Config] Could not validate LHDN config via API:", apiError);
+        }
+      }
+
+    } catch (error) {
+      console.warn("[Config] Error validating LHDN configuration:", error);
     }
   }
 
@@ -910,15 +1024,11 @@ class InvoiceTableManager {
   // Handle new submission notification
   async handleNewSubmission() {
     try {
-      // Clear cache to force fresh data
-      localStorage.removeItem('inboundTableData');
-      localStorage.removeItem('lastDataUpdate');
-
       // Show notification to user
       ToastManager.show('New submission detected. Refreshing data...', 'info', 3000);
 
-      // Refresh current data source
-      await this.refreshCurrentDataSource();
+      // Use unified refresh method with force refresh
+      await this.refreshTable(true);
 
       // Clear the notification flag
       localStorage.removeItem('newSubmissionNotification');
@@ -932,15 +1042,11 @@ class InvoiceTableManager {
     try {
       console.log('🔄 Handling status update notification...');
 
-      // Clear cache to force fresh data
-      localStorage.removeItem('inboundTableData');
-      localStorage.removeItem('lastDataUpdate');
-
       // Show notification to user
       ToastManager.show('Document status updated. Refreshing data...', 'success', 3000);
 
-      // Refresh current data source with higher priority
-      await this.refreshCurrentDataSourceWithPriority();
+      // Use unified refresh method with force refresh
+      await this.refreshTable(true);
 
       // Clear the notification flag
       localStorage.removeItem('status_update_notification');
@@ -950,25 +1056,7 @@ class InvoiceTableManager {
     }
   }
 
-  // Refresh current data source with priority handling
-  async refreshCurrentDataSourceWithPriority() {
-    try {
-      console.log('🚀 Refreshing data source with priority...');
 
-      // Use standard timeout for live LHDN data
-      const originalTimeout = this.cacheTimeout;
-      this.cacheTimeout = 5000;
-
-      await this.refreshCurrentDataSource();
-
-      // Restore original timeout
-      this.cacheTimeout = originalTimeout;
-
-    } catch (error) {
-      console.error('❌ Error refreshing data source with priority:', error);
-      throw error;
-    }
-  }
 
   // Outbound-specific methods removed since we only use live LHDN data now
 
@@ -1078,7 +1166,7 @@ class InvoiceTableManager {
 
       // Prevent spam clicking
       if (self.isRefreshing || button.prop("disabled")) {
-        console.log("Refresh already in progress or button disabled");
+        console.log("[DataTable] Refresh already in progress or button disabled");
         return;
       }
 
@@ -1090,12 +1178,12 @@ class InvoiceTableManager {
       );
 
       try {
-        await self.refreshCurrentDataSource();
+        await self.refreshTable(true); // Use unified refresh method with force refresh
 
         // Show success feedback
         ToastManager.show("Data refreshed successfully", "success");
       } catch (error) {
-        console.error("Error refreshing data:", error);
+        console.error("[DataTable] Error refreshing data:", error);
         ToastManager.show("Failed to refresh data. Please try again.", "error");
       } finally {
         // Re-enable button and restore original text
@@ -1137,14 +1225,25 @@ class InvoiceTableManager {
 
       // Queue the request to manage concurrency
       await this.requestQueue.add(async () => {
-        // Update the table's AJAX URL to live endpoint
-        if (this.table) {
-          this.table.ajax.url("/api/lhdn/documents/recent").load(() => {
-            this.hideLoadingBackdrop();
-            this.updateCardTotals();
+        // If table exists, just reload it to prevent reinitialization
+        if (this.table && $.fn.DataTable.isDataTable("#invoiceTable")) {
+          console.log("[DataTable] Switching to live data via reload...");
+          // Clear cache first
+          localStorage.removeItem('inboundTableData');
+          localStorage.removeItem('lastDataUpdate');
+          window.forceRefreshLHDN = true;
+
+          // Use reload instead of url().load() to prevent timing issues
+          return new Promise((resolve, reject) => {
+            this.table.ajax.reload((json) => {
+              this.hideLoadingBackdrop();
+              this.updateCardTotals();
+              resolve();
+            }, false);
           });
         } else {
-          // If table doesn't exist, initialize it
+          // Only initialize if table doesn't exist
+          console.log("[DataTable] Table doesn't exist, initializing...");
           await this.initializeTableWithData();
           this.hideLoadingBackdrop();
         }
@@ -1171,11 +1270,11 @@ class InvoiceTableManager {
   // Archive and outbound data sources have been removed for simplicity
   // Only live LHDN data is now supported
 
-  // Refresh current data source with enhanced throttling
-  async refreshCurrentDataSource() {
+  // Unified table refresh method to prevent reinitialization issues
+  async refreshTable(forceRefresh = false) {
     // Prevent concurrent refreshes
     if (this.isRefreshing) {
-      console.log("Refresh already in progress, ignoring request");
+      console.log("[DataTable] Refresh already in progress, ignoring request");
       return;
     }
 
@@ -1197,39 +1296,50 @@ class InvoiceTableManager {
     this.lastRefreshTime = now;
 
     try {
-      if (this.currentDataSource === "live") {
-        // Check LHDN rate limits before refreshing
-        const endpoint = "getRecentDocuments";
-        const remainingRequests =
-          this.rateLimiter.getRemainingRequests(endpoint);
-        const nextAvailable = this.rateLimiter.getNextAvailableTime(endpoint);
+      // Check LHDN rate limits before refreshing
+      const endpoint = "getRecentDocuments";
+      const remainingRequests = this.rateLimiter.getRemainingRequests(endpoint);
+      const nextAvailable = this.rateLimiter.getNextAvailableTime(endpoint);
 
-        if (remainingRequests === 0 || nextAvailable > 0) {
-          const waitTime = Math.max(nextAvailable, 1000);
-          ToastManager.show(
-            `Rate limit reached. Waiting ${Math.ceil(
-              waitTime / 1000
-            )} seconds...`,
-            "warning"
-          );
-          await new Promise((resolve) => setTimeout(resolve, waitTime));
-        }
+      if (remainingRequests === 0 || nextAvailable > 0) {
+        const waitTime = Math.max(nextAvailable, 1000);
+        ToastManager.show(
+          `Rate limit reached. Waiting ${Math.ceil(waitTime / 1000)} seconds...`,
+          "warning"
+        );
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+      }
 
-        // Force refresh live data with rate limiting
+      // Clear cache if force refresh
+      if (forceRefresh) {
+        localStorage.removeItem('inboundTableData');
+        localStorage.removeItem('lastDataUpdate');
         window.forceRefreshLHDN = true;
-        await this.switchToLiveData();
+      }
+
+      // Use ajax.reload for existing tables to prevent reinitialization
+      if (this.table && $.fn.DataTable.isDataTable("#invoiceTable")) {
+        console.log("[DataTable] Reloading existing table data...");
+        return new Promise((resolve, reject) => {
+          this.table.ajax.reload((json) => {
+            console.log("[DataTable] Table reload completed");
+            this.updateCardTotals();
+            resolve();
+          }, false);
+        });
+      } else {
+        // Only reinitialize if table doesn't exist
+        console.log("[DataTable] Table doesn't exist, reinitializing...");
+        await this.initializeTable();
       }
 
       // Update last refresh time on success
       this.lastRefreshTime = Date.now();
     } catch (error) {
-      console.error("Error refreshing data source:", error);
+      console.error("[DataTable] Error refreshing table:", error);
 
       // Handle specific error types
-      if (
-        error.message.includes("429") ||
-        error.message.includes("rate limit")
-      ) {
+      if (error.message.includes("429") || error.message.includes("rate limit")) {
         ToastManager.show(
           "LHDN server is busy. Please try again in a few minutes.",
           "warning"
@@ -1245,6 +1355,11 @@ class InvoiceTableManager {
     } finally {
       this.isRefreshing = false;
     }
+  }
+
+  // Legacy method for backward compatibility - now uses unified refresh
+  async refreshCurrentDataSource() {
+    return this.refreshTable(true);
   }
 
   // New method with retry logic
@@ -1304,12 +1419,15 @@ class InvoiceTableManager {
                 .closest(".card")
                 .find(".loading-overlay")
                 .remove();
-              // Retry from the beginning
+              // Reset initialization state and retry from the beginning
+              this.isInitializing = false;
               this.initializeTable();
             }
           });
         }
       }
+    } finally {
+      this.isInitializing = false;
     }
   }
 
@@ -1362,6 +1480,8 @@ class InvoiceTableManager {
     } catch (error) {
       console.error("Database-only load failed:", error);
       throw error;
+    } finally {
+      this.isInitializing = false;
     }
   }
 
@@ -1943,6 +2063,9 @@ class InvoiceTableManager {
       });
 
     this.startRefreshTimer();
+
+    // Mark initialization as complete
+    this.isInitializing = false;
   }
 
   // Enhanced loading backdrop with rate limit info
@@ -2732,14 +2855,9 @@ class InvoiceTableManager {
 
           progressBar.style.width = "50%";
           statusText.textContent = "Refreshing data...";
-          window.forceRefreshLHDN = true;
-          localStorage.removeItem("lastDataUpdate");
 
-          if (this.table.ajax && this.table.ajax.reload) {
-            await this.table.ajax.reload(null, false);
-          } else {
-            await this.refreshCurrentDataSource();
-          }
+          // Use unified refresh method
+          await this.refreshTable(true);
 
           progressBar.style.width = "100%";
           statusText.textContent = "Success! Your data is now up to date.";
@@ -2791,6 +2909,9 @@ class InvoiceTableManager {
       });
 
     this.startRefreshTimer();
+
+    // Mark initialization as complete
+    this.isInitializing = false;
   }
 
   initializeFilters() {
@@ -4072,19 +4193,8 @@ class InvoiceTableManager {
   }
 
   refresh() {
-    if (this.table) {
-      // Check if table has AJAX configuration (live data) or uses local data (archive)
-      if (this.table.ajax && this.table.ajax.reload) {
-        // AJAX-based table (live data)
-        this.table.ajax.reload(() => {
-          this.updateCardTotals();
-          updateCharts(); // Update charts after refresh
-        }, false);
-      } else {
-        // Local data table (archive data) - refresh by calling the appropriate method
-        this.refreshCurrentDataSource();
-      }
-    }
+    // Use unified refresh method to prevent reinitialization issues
+    return this.refreshTable(false);
   }
 
   // Show refresh cooldown timer
@@ -4322,10 +4432,10 @@ async function cancelInboundDocument(uuid) {
           text: data.message || "Document cancelled successfully",
         });
 
-        if (window.inboundDataTable) {
-          window.inboundDataTable.ajax
-            ? window.inboundDataTable.ajax.reload(null, false)
-            : window.location.reload();
+        // Use unified refresh method via the manager instance
+        const invoiceManager = InvoiceTableManager.getInstance();
+        if (invoiceManager) {
+          await invoiceManager.refreshTable(true);
         } else {
           window.location.reload();
         }
@@ -5654,32 +5764,32 @@ async function openValidationResultsModal(uuid) {
                 .trim()
                 .replace(/^[\.\-\s]+|[\.\-\s]+$/g, "");
 
-            // Get all errors from the step
-            const errors = step.error?.errors || [];
-            console.log(`Step "${cleanedName}" raw errors:`, errors);
-
-            // Handle different error structures
+            // Handle LHDN error structure - check for innerError first
             let allInnerErrors = [];
-            if (errors.length > 0) {
-                // Check if errors have innerError arrays (LHDN format)
+
+            if (step.error?.innerError && Array.isArray(step.error.innerError)) {
+                // Direct innerError array on step.error (LHDN format)
+                allInnerErrors = step.error.innerError;
+                console.log(`Step "${cleanedName}" found innerError array:`, allInnerErrors);
+            } else if (step.error?.errors && Array.isArray(step.error.errors)) {
+                // Alternative errors array format
+                const errors = step.error.errors;
                 allInnerErrors = errors.reduce((acc, err) => {
                     if (err.innerError && Array.isArray(err.innerError)) {
                         acc.push(...err.innerError);
                     } else {
-                        // If no innerError, treat the error itself as the error to display
                         acc.push(err);
                     }
                     return acc;
                 }, []);
-            } else if (step.error?.innerError && Array.isArray(step.error.innerError)) {
-                // Direct innerError array on step.error
-                allInnerErrors = step.error.innerError;
-            } else if (step.error && !step.error.errors) {
-                // Single error object without errors array
+                console.log(`Step "${cleanedName}" processed errors array:`, allInnerErrors);
+            } else if (step.error && typeof step.error === 'object') {
+                // Single error object - treat the error itself as the error to display
                 allInnerErrors = [step.error];
+                console.log(`Step "${cleanedName}" using single error object:`, allInnerErrors);
             }
 
-            console.log(`Step "${cleanedName}" processed errors:`, allInnerErrors);
+            console.log(`Step "${cleanedName}" final processed errors:`, allInnerErrors);
 
             const contentId = `collapse${index}`;
             stepDiv.innerHTML = `
@@ -6272,19 +6382,13 @@ function initializeQuickActions() {
           refreshDataBtn.innerHTML =
             '<i class="bi bi-arrow-clockwise me-2 spin"></i>Refreshing...';
 
-          const table = $("#invoiceTable").DataTable();
           const invoiceManager = InvoiceTableManager.getInstance();
 
-          // Check if table has AJAX capability or use refresh method
-          if (table.ajax && table.ajax.reload) {
-            await table.ajax.reload();
-          } else if (invoiceManager && invoiceManager.refresh) {
-            await invoiceManager.refresh();
+          // Use unified refresh method
+          if (invoiceManager) {
+            await invoiceManager.refreshTable(true);
           } else {
-            // Fallback to refreshing current data source
-            if (invoiceManager && invoiceManager.refreshCurrentDataSource) {
-              await invoiceManager.refreshCurrentDataSource();
-            }
+            console.warn("Invoice manager not available for refresh");
           }
 
           updateCharts(); // Update charts with new data
