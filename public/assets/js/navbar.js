@@ -230,6 +230,9 @@
     }
   }
 
+  // Store event listeners for cleanup
+  const eventListeners = [];
+
   // Function to setup idle detection
   function setupIdleDetection() {
     // Reset timer on various user activities
@@ -243,15 +246,26 @@
     ];
 
     events.forEach(event => {
-      document.addEventListener(event, () => {
+      const listener = () => {
         if (!isWarningShown) {
           resetIdleTimer();
         }
-      });
+      };
+      document.addEventListener(event, listener);
+      // Store for cleanup
+      eventListeners.push({ event, listener });
     });
 
     // Initial setup of idle timer
     resetIdleTimer();
+  }
+
+  // Function to cleanup event listeners
+  function cleanupEventListeners() {
+    eventListeners.forEach(({ event, listener }) => {
+      document.removeEventListener(event, listener);
+    });
+    eventListeners.length = 0;
   }
 
   // Function to check session status - DISABLED, now relying on server middleware
@@ -985,4 +999,7 @@
     // No session check needed - middleware handles it
     return refreshNavbar();
   };
+
+  // Cleanup on page unload
+  window.addEventListener('beforeunload', cleanupEventListeners);
 })();

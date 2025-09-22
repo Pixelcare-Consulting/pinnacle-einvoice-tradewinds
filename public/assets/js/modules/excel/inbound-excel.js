@@ -1,8 +1,6 @@
 // @ts-nocheck
 // Toast Manager Class
 
-// ValidationTranslations is now loaded from /assets/js/config/validation-translations.js
-
 // Custom Modal Utility to replace SweetAlert
 class CustomModal {
     static show(options = {}) {
@@ -554,7 +552,6 @@ class InvoiceTableManager {
     this.currentDataSource = "live"; // Use live LHDN data as the only data source
     this.table = null;
     this.isRefreshing = false; // Add refresh state tracking
-    this.isInitializing = false; // Add initialization state tracking
     this.lastRefreshTime = 0; // Track last refresh time for rate limiting
     this.refreshCooldown = 3000; // 3 second cooldown between refreshes (optimized)
     this.cacheTimeout = 30000; // 30 seconds cache timeout (optimized from default)
@@ -566,9 +563,6 @@ class InvoiceTableManager {
 
     // Test endpoint connectivity before initializing table
     this.testEndpointConnectivity();
-
-    // Validate and fix LHDN configuration
-    this.validateLHDNConfiguration();
 
     this.initializeTable();
     this.initializeDataSourceToggle();
@@ -776,22 +770,13 @@ class InvoiceTableManager {
   }
 
   initializeTable() {
-    // Prevent concurrent initialization
-    if (this.isInitializing) {
-      console.log("[DataTable] Initialization already in progress, skipping...");
-      return;
-    }
-
-    // Properly destroy existing DataTable if it exists
+    // Properly destroy existing DataTable instance
     if ($.fn.DataTable.isDataTable("#invoiceTable")) {
-      console.log("[DataTable] Destroying existing table instance...");
-      const existingTable = $("#invoiceTable").DataTable();
-      existingTable.destroy(true); // Remove from DOM completely
+      console.log("Destroying existing DataTable instance");
+      $("#invoiceTable").DataTable().destroy();
       $("#invoiceTable").empty(); // Clear the table content
-      this.table = null; // Clear reference
     }
 
-    this.isInitializing = true;
     const self = this;
 
     // Show enhanced loading skeleton
@@ -854,18 +839,13 @@ class InvoiceTableManager {
     };
 
     // Call the authentication check
-    checkAuth().finally(() => {
-      this.isInitializing = false;
-    });
+    checkAuth();
   }
 
   // Test endpoint connectivity
   async testEndpointConnectivity() {
     try {
       console.log("[Inbound] Testing endpoint connectivity...");
-
-      // Clear any cached problematic configurations
-      this.clearProblematicCache();
 
       // Test the main endpoint
       const response = await fetch("/api/lhdn/documents/recent?useDatabase=true&fallbackOnly=true", {
@@ -893,97 +873,7 @@ class InvoiceTableManager {
     }
   }
 
-  // Clear problematic cached configurations
-  clearProblematicCache() {
-    try {
-      // Clear localStorage items that might contain old server references
-      const keysToCheck = [
-        'lhdn_config',
-        'server_config',
-        'api_config',
-        'middleware_config',
-        'inboundTableData',
-        'lastDataUpdate'
-      ];
-
-      keysToCheck.forEach(key => {
-        const value = localStorage.getItem(key);
-        if (value && (value.includes('paceserver') || value.includes('ddns.net'))) {
-          console.log(`[Cache] Removing problematic cached config: ${key}`);
-          localStorage.removeItem(key);
-        }
-      });
-
-      // Clear sessionStorage as well
-      keysToCheck.forEach(key => {
-        const value = sessionStorage.getItem(key);
-        if (value && (value.includes('paceserver') || value.includes('ddns.net'))) {
-          console.log(`[Cache] Removing problematic session config: ${key}`);
-          sessionStorage.removeItem(key);
-        }
-      });
-
-    } catch (error) {
-      console.warn("[Cache] Error clearing problematic cache:", error);
-    }
-  }
-
-  // Validate LHDN configuration and fix if needed
-  async validateLHDNConfiguration() {
-    try {
-      console.log("[Config] Validating LHDN configuration...");
-
-      // Check if there are any problematic server references in the current page
-      const pageContent = document.documentElement.outerHTML;
-      if (pageContent.includes('paceserver.ddns.net')) {
-        console.warn("[Config] Found paceserver reference in page content");
-
-        // Show user-friendly notification
-        ToastManager.show(
-          'Updating server configuration for better connectivity...',
-          'info',
-          3000
-        );
-
-        // Try to refresh the LHDN configuration via API
-        try {
-          const response = await fetch('/api/lhdn/test/config', {
-            method: 'GET',
-            headers: {
-              'Accept': 'application/json',
-              'Content-Type': 'application/json'
-            }
-          });
-
-          if (response.ok) {
-            const config = await response.json();
-            console.log("[Config] Current LHDN config:", config);
-
-            // Check if the config contains problematic URLs
-            const configStr = JSON.stringify(config);
-            if (configStr.includes('paceserver') || configStr.includes('ddns.net')) {
-              console.warn("[Config] LHDN configuration contains problematic server references");
-
-              // Show warning to user
-              CustomModal.fire({
-                icon: 'warning',
-                title: 'Configuration Update Required',
-                text: 'The system detected an outdated server configuration. Please contact your administrator to update the LHDN configuration.',
-                confirmButtonText: 'OK'
-              });
-            }
-          }
-        } catch (apiError) {
-          console.warn("[Config] Could not validate LHDN config via API:", apiError);
-        }
-      }
-
-    } catch (error) {
-      console.warn("[Config] Error validating LHDN configuration:", error);
-    }
-  }
-
-  // Setup auto-refresh mechanism for new submissions
+  // Setup event listeners for manual refresh triggers (auto-refresh disabled)
   setupAutoRefresh() {
     // Listen for storage events (cross-tab communication)
     window.addEventListener('storage', (e) => {
@@ -1010,25 +900,34 @@ class InvoiceTableManager {
 
     // Outbound refresh requests are no longer needed since we only use live LHDN data
 
+    // AUTO-REFRESH DISABLED: Automatic polling has been disabled to prevent unwanted refreshes
+    // The following setInterval calls have been commented out:
+
     // Check for new submissions periodically (every 15 seconds for faster updates)
-    setInterval(() => {
-      this.checkForNewSubmissions();
-    }, 15000);
+    // setInterval(() => {
+    //   this.checkForNewSubmissions();
+    // }, 15000);
 
     // Additional faster polling for status updates (every 10 seconds)
-    setInterval(() => {
-      this.checkForStatusUpdates();
-    }, 10000);
+    // setInterval(() => {
+    //   this.checkForStatusUpdates();
+    // }, 10000);
+
+    console.log('📋 Auto-refresh disabled - manual refresh only');
   }
 
   // Handle new submission notification
   async handleNewSubmission() {
     try {
+      // Clear cache to force fresh data
+      localStorage.removeItem('inboundTableData');
+      localStorage.removeItem('lastDataUpdate');
+
       // Show notification to user
       ToastManager.show('New submission detected. Refreshing data...', 'info', 3000);
 
-      // Use unified refresh method with force refresh
-      await this.refreshTable(true);
+      // Refresh current data source
+      await this.refreshCurrentDataSource();
 
       // Clear the notification flag
       localStorage.removeItem('newSubmissionNotification');
@@ -1042,11 +941,15 @@ class InvoiceTableManager {
     try {
       console.log('🔄 Handling status update notification...');
 
+      // Clear cache to force fresh data
+      localStorage.removeItem('inboundTableData');
+      localStorage.removeItem('lastDataUpdate');
+
       // Show notification to user
       ToastManager.show('Document status updated. Refreshing data...', 'success', 3000);
 
-      // Use unified refresh method with force refresh
-      await this.refreshTable(true);
+      // Refresh current data source with higher priority
+      await this.refreshCurrentDataSourceWithPriority();
 
       // Clear the notification flag
       localStorage.removeItem('status_update_notification');
@@ -1056,7 +959,25 @@ class InvoiceTableManager {
     }
   }
 
+  // Refresh current data source with priority handling
+  async refreshCurrentDataSourceWithPriority() {
+    try {
+      console.log('🚀 Refreshing data source with priority...');
 
+      // Use standard timeout for live LHDN data
+      const originalTimeout = this.cacheTimeout;
+      this.cacheTimeout = 5000;
+
+      await this.refreshCurrentDataSource();
+
+      // Restore original timeout
+      this.cacheTimeout = originalTimeout;
+
+    } catch (error) {
+      console.error('❌ Error refreshing data source with priority:', error);
+      throw error;
+    }
+  }
 
   // Outbound-specific methods removed since we only use live LHDN data now
 
@@ -1136,17 +1057,17 @@ class InvoiceTableManager {
     }
   }
 
-  // Refresh current data source
-  async refreshCurrentDataSource() {
-    try {
-      if (this.currentDataSource === "live") {
-        await this.switchToLiveData();
-      }
-    } catch (error) {
-      console.error('Error refreshing current data source:', error);
-      ToastManager.show('Error refreshing data. Please try again.', 'error', 5000);
-    }
-  }
+  // // Refresh current data source
+  // async refreshCurrentDataSource() {
+  //   try {
+  //     if (this.currentDataSource === "live") {
+  //       await this.switchToLiveData();
+  //     }
+  //   } catch (error) {
+  //     console.error('Error refreshing current data source:', error);
+  //     ToastManager.show('Error refreshing data. Please try again.', 'error', 5000);
+  //   }
+  // }
 
   // Initialize data source toggle functionality
   initializeDataSourceToggle() {
@@ -1166,7 +1087,7 @@ class InvoiceTableManager {
 
       // Prevent spam clicking
       if (self.isRefreshing || button.prop("disabled")) {
-        console.log("[DataTable] Refresh already in progress or button disabled");
+        console.log("Refresh already in progress or button disabled");
         return;
       }
 
@@ -1178,12 +1099,12 @@ class InvoiceTableManager {
       );
 
       try {
-        await self.refreshTable(true); // Use unified refresh method with force refresh
+        await self.refreshCurrentDataSource();
 
         // Show success feedback
         ToastManager.show("Data refreshed successfully", "success");
       } catch (error) {
-        console.error("[DataTable] Error refreshing data:", error);
+        console.error("Error refreshing data:", error);
         ToastManager.show("Failed to refresh data. Please try again.", "error");
       } finally {
         // Re-enable button and restore original text
@@ -1225,25 +1146,14 @@ class InvoiceTableManager {
 
       // Queue the request to manage concurrency
       await this.requestQueue.add(async () => {
-        // If table exists, just reload it to prevent reinitialization
-        if (this.table && $.fn.DataTable.isDataTable("#invoiceTable")) {
-          console.log("[DataTable] Switching to live data via reload...");
-          // Clear cache first
-          localStorage.removeItem('inboundTableData');
-          localStorage.removeItem('lastDataUpdate');
-          window.forceRefreshLHDN = true;
-
-          // Use reload instead of url().load() to prevent timing issues
-          return new Promise((resolve, reject) => {
-            this.table.ajax.reload((json) => {
-              this.hideLoadingBackdrop();
-              this.updateCardTotals();
-              resolve();
-            }, false);
+        // Update the table's AJAX URL to live endpoint
+        if (this.table) {
+          this.table.ajax.url("/api/lhdn/documents/recent").load(() => {
+            this.hideLoadingBackdrop();
+            this.updateCardTotals();
           });
         } else {
-          // Only initialize if table doesn't exist
-          console.log("[DataTable] Table doesn't exist, initializing...");
+          // If table doesn't exist, initialize it
           await this.initializeTableWithData();
           this.hideLoadingBackdrop();
         }
@@ -1270,11 +1180,11 @@ class InvoiceTableManager {
   // Archive and outbound data sources have been removed for simplicity
   // Only live LHDN data is now supported
 
-  // Unified table refresh method to prevent reinitialization issues
-  async refreshTable(forceRefresh = false) {
+  // Refresh current data source with enhanced throttling
+  async refreshCurrentDataSource() {
     // Prevent concurrent refreshes
     if (this.isRefreshing) {
-      console.log("[DataTable] Refresh already in progress, ignoring request");
+      console.log("Refresh already in progress, ignoring request");
       return;
     }
 
@@ -1296,50 +1206,39 @@ class InvoiceTableManager {
     this.lastRefreshTime = now;
 
     try {
-      // Check LHDN rate limits before refreshing
-      const endpoint = "getRecentDocuments";
-      const remainingRequests = this.rateLimiter.getRemainingRequests(endpoint);
-      const nextAvailable = this.rateLimiter.getNextAvailableTime(endpoint);
+      if (this.currentDataSource === "live") {
+        // Check LHDN rate limits before refreshing
+        const endpoint = "getRecentDocuments";
+        const remainingRequests =
+          this.rateLimiter.getRemainingRequests(endpoint);
+        const nextAvailable = this.rateLimiter.getNextAvailableTime(endpoint);
 
-      if (remainingRequests === 0 || nextAvailable > 0) {
-        const waitTime = Math.max(nextAvailable, 1000);
-        ToastManager.show(
-          `Rate limit reached. Waiting ${Math.ceil(waitTime / 1000)} seconds...`,
-          "warning"
-        );
-        await new Promise((resolve) => setTimeout(resolve, waitTime));
-      }
+        if (remainingRequests === 0 || nextAvailable > 0) {
+          const waitTime = Math.max(nextAvailable, 1000);
+          ToastManager.show(
+            `Rate limit reached. Waiting ${Math.ceil(
+              waitTime / 1000
+            )} seconds...`,
+            "warning"
+          );
+          await new Promise((resolve) => setTimeout(resolve, waitTime));
+        }
 
-      // Clear cache if force refresh
-      if (forceRefresh) {
-        localStorage.removeItem('inboundTableData');
-        localStorage.removeItem('lastDataUpdate');
+        // Force refresh live data with rate limiting
         window.forceRefreshLHDN = true;
-      }
-
-      // Use ajax.reload for existing tables to prevent reinitialization
-      if (this.table && $.fn.DataTable.isDataTable("#invoiceTable")) {
-        console.log("[DataTable] Reloading existing table data...");
-        return new Promise((resolve, reject) => {
-          this.table.ajax.reload((json) => {
-            console.log("[DataTable] Table reload completed");
-            this.updateCardTotals();
-            resolve();
-          }, false);
-        });
-      } else {
-        // Only reinitialize if table doesn't exist
-        console.log("[DataTable] Table doesn't exist, reinitializing...");
-        await this.initializeTable();
+        await this.switchToLiveData();
       }
 
       // Update last refresh time on success
       this.lastRefreshTime = Date.now();
     } catch (error) {
-      console.error("[DataTable] Error refreshing table:", error);
+      console.error("Error refreshing data source:", error);
 
       // Handle specific error types
-      if (error.message.includes("429") || error.message.includes("rate limit")) {
+      if (
+        error.message.includes("429") ||
+        error.message.includes("rate limit")
+      ) {
         ToastManager.show(
           "LHDN server is busy. Please try again in a few minutes.",
           "warning"
@@ -1355,11 +1254,6 @@ class InvoiceTableManager {
     } finally {
       this.isRefreshing = false;
     }
-  }
-
-  // Legacy method for backward compatibility - now uses unified refresh
-  async refreshCurrentDataSource() {
-    return this.refreshTable(true);
   }
 
   // New method with retry logic
@@ -1419,15 +1313,12 @@ class InvoiceTableManager {
                 .closest(".card")
                 .find(".loading-overlay")
                 .remove();
-              // Reset initialization state and retry from the beginning
-              this.isInitializing = false;
+              // Retry from the beginning
               this.initializeTable();
             }
           });
         }
       }
-    } finally {
-      this.isInitializing = false;
     }
   }
 
@@ -1480,8 +1371,6 @@ class InvoiceTableManager {
     } catch (error) {
       console.error("Database-only load failed:", error);
       throw error;
-    } finally {
-      this.isInitializing = false;
     }
   }
 
@@ -2063,9 +1952,6 @@ class InvoiceTableManager {
       });
 
     this.startRefreshTimer();
-
-    // Mark initialization as complete
-    this.isInitializing = false;
   }
 
   // Enhanced loading backdrop with rate limit info
@@ -2855,9 +2741,14 @@ class InvoiceTableManager {
 
           progressBar.style.width = "50%";
           statusText.textContent = "Refreshing data...";
+          window.forceRefreshLHDN = true;
+          localStorage.removeItem("lastDataUpdate");
 
-          // Use unified refresh method
-          await this.refreshTable(true);
+          if (this.table.ajax && this.table.ajax.reload) {
+            await this.table.ajax.reload(null, false);
+          } else {
+            await this.refreshCurrentDataSource();
+          }
 
           progressBar.style.width = "100%";
           statusText.textContent = "Success! Your data is now up to date.";
@@ -2909,9 +2800,6 @@ class InvoiceTableManager {
       });
 
     this.startRefreshTimer();
-
-    // Mark initialization as complete
-    this.isInitializing = false;
   }
 
   initializeFilters() {
@@ -3213,7 +3101,18 @@ class InvoiceTableManager {
 
   renderTotalAmount(data) {
     if (!data) return '<span class="text-muted">N/A</span>';
+    
+        // Format the amount properly
+        let formattedAmount = data;
 
+    // Determine color based on currency
+        const currencyColors = {
+            'USD': '#059669', // Green for USD
+            'EUR': '#7c3aed', // Purple for EUR
+            'SGD': '#dc2626', // Red for SGD
+            'MYR': '#1e40af', // Blue for MYR (default)
+        };
+        const color = currencyColors[currency] || '#1e40af';
     return `
             <div class="total-amount-wrapper" style="
                 display: flex;
@@ -3231,8 +3130,9 @@ class InvoiceTableManager {
                     letter-spacing: 0.5px;
                     white-space: nowrap;
                     transition: all 0.2s ease;
+                    border: 1px solid ${color}30;
                 ">
-                    ${data}
+                    ${this.formatCurrency(data)}
                 </span>
             </div>
         `;
@@ -4193,8 +4093,19 @@ class InvoiceTableManager {
   }
 
   refresh() {
-    // Use unified refresh method to prevent reinitialization issues
-    return this.refreshTable(false);
+    if (this.table) {
+      // Check if table has AJAX configuration (live data) or uses local data (archive)
+      if (this.table.ajax && this.table.ajax.reload) {
+        // AJAX-based table (live data)
+        this.table.ajax.reload(() => {
+          this.updateCardTotals();
+          updateCharts(); // Update charts after refresh
+        }, false);
+      } else {
+        // Local data table (archive data) - refresh by calling the appropriate method
+        this.refreshCurrentDataSource();
+      }
+    }
   }
 
   // Show refresh cooldown timer
@@ -4432,10 +4343,10 @@ async function cancelInboundDocument(uuid) {
           text: data.message || "Document cancelled successfully",
         });
 
-        // Use unified refresh method via the manager instance
-        const invoiceManager = InvoiceTableManager.getInstance();
-        if (invoiceManager) {
-          await invoiceManager.refreshTable(true);
+        if (window.inboundDataTable) {
+          window.inboundDataTable.ajax
+            ? window.inboundDataTable.ajax.reload(null, false)
+            : window.location.reload();
         } else {
           window.location.reload();
         }
@@ -4818,11 +4729,16 @@ async function viewInvoiceDetails(uuid) {
       } catch (pdfError) {
         console.warn("PDF loading failed, but modal is still shown:", pdfError);
         // Show partial success toast if PDF fails but modal loads
-        showToast(
-          "Document details loaded (PDF generation failed)",
-          "warning",
-          3000
-        );
+        let errorMessage = "Document details loaded (PDF generation failed)";
+
+        // Provide more specific error messages based on error type
+        if (pdfError.message.includes("500")) {
+          errorMessage = "Document details loaded (PDF service temporarily unavailable)";
+        } else if (pdfError.message.includes("PDF generation service error")) {
+          errorMessage = "Document details loaded (PDF generation service error)";
+        }
+
+        showToast(errorMessage, "warning", 3000);
       }
     } else {
       // For any other status
@@ -5493,13 +5409,21 @@ async function loadPDF(uuid, documentData) {
     const pdfData = await manager.requestQueue.add(async () => {
       updateStatus("Processing request...", "Generating or retrieving PDF", 50);
 
-      const response = await fetch(`/api/lhdn/documents/${uuid}/pdf`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(documentData),
-      });
+      // Add timeout and retry logic
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
+
+      try {
+        const response = await fetch(`/api/lhdn/documents/${uuid}/pdf`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(documentData),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
 
       if (!response.ok) {
         // Handle rate limiting specifically
@@ -5517,6 +5441,13 @@ async function loadPDF(uuid, documentData) {
       }
 
       return response.json();
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          throw new Error('PDF generation timed out. Please try again.');
+        }
+        throw fetchError;
+      }
     }, 1); // High priority for PDF requests
 
     console.log("PDF response:", pdfData);
@@ -5670,6 +5601,287 @@ function extractErrorMessage(errorObj) {
   return String(errorObj) || "Validation failed";
 }
 
+// Helper function to intelligently extract error information from complex objects
+function extractErrorInfo(errorObj) {
+    if (!errorObj) return { field: 'Not specified', message: 'Not specified', code: 'VALIDATION_ERROR' };
+
+    // If it's a string, return as message
+    if (typeof errorObj === 'string') {
+        return { field: 'Not specified', message: errorObj, code: 'VALIDATION_ERROR' };
+    }
+
+    // If it's not an object, convert to string
+    if (typeof errorObj !== 'object') {
+        return { field: 'Not specified', message: String(errorObj), code: 'VALIDATION_ERROR' };
+    }
+
+    // Extract field information
+    const field = errorObj.propertyPath ||
+                  errorObj.field ||
+                  errorObj.target ||
+                  errorObj.path ||
+                  'Not specified';
+
+    // Extract error message with multiple fallbacks
+    let message = errorObj.error ||
+                  errorObj.message ||
+                  errorObj.errorMessage ||
+                  errorObj.description ||
+                  errorObj.details ||
+                  errorObj.text ||
+                  errorObj.reason;
+
+    // If message is still an object, try to extract from it
+    if (typeof message === 'object' && message !== null) {
+        message = message.message ||
+                  message.errorMessage ||
+                  message.description ||
+                  message.details ||
+                  'Complex validation error';
+    }
+
+    // Extract error code
+    const code = errorObj.errorCode ||
+                 errorObj.code ||
+                 errorObj.type ||
+                 'VALIDATION_ERROR';
+
+    return {
+        field: String(field),
+        message: String(message || 'Unknown error'),
+        code: String(code)
+    };
+}
+
+// Helper functions for validation translations with fallback
+function getFieldName(path) {
+    // Use ValidationTranslations as primary method
+    if (typeof window !== 'undefined' && window.ValidationTranslations && window.ValidationTranslations.getFieldName) {
+        const translatedField = window.ValidationTranslations.getFieldName(path);
+        if (translatedField && translatedField !== "Not specified" && translatedField !== path) {
+            return translatedField;
+        }
+    }
+
+    // Use the existing lhdnErrorMapper as fallback
+    if (typeof window !== 'undefined' && window.lhdnErrorMapper) {
+        // Try to find the field in the error code mappings
+        const errorCodes = Object.keys(window.lhdnErrorMapper.errorCodeMap);
+        for (const code of errorCodes) {
+            const mapping = window.lhdnErrorMapper.errorCodeMap[code];
+            if (mapping.fieldPath === path) {
+                return mapping.field;
+            }
+        }
+    }
+
+    // Fallback implementation
+    if (!path || path === 'undefined' || path === 'null') return "Not specified";
+
+    // Remove JSON path syntax
+    let readable = path.replace(/\$\.Invoice\[\*\]\./, '');
+    readable = readable.replace(/\[\*\]/g, '');
+    readable = readable.replace(/\._$/, '');
+
+    // Basic field name mappings (enhanced with more fields)
+    const fieldMappings = {
+        'AccountingSupplierParty.Party.PostalAddress.CountrySubentityCode': 'Supplier State Code',
+        'AccountingCustomerParty.Party.PostalAddress.CountrySubentityCode': 'Customer State Code',
+        'InvoiceLine.Item.CommodityClassification.ItemClassificationCode': 'Item Classification Code',
+        'AccountingSupplierParty.Party.PartyTaxScheme.CompanyID': 'Supplier Tax ID',
+        'AccountingCustomerParty.Party.PartyTaxScheme.CompanyID': 'Customer Tax ID',
+        'InvoiceLine.Item.Description': 'Item Description',
+        'PaymentMeans.PaymentMeansCode': 'Payment Method',
+        'DocumentCurrencyCode': 'Currency Code',
+        'TaxCurrencyCode': 'Tax Currency Code',
+        'PaymentCurrencyCode': 'Payment Currency Code',
+        'PaymentTerms.Note': 'Payment Terms',
+        'InvoicePeriod.StartDate': 'Invoice Period Start',
+        'InvoicePeriod.EndDate': 'Invoice Period End',
+        'Invoice.TaxExchangeRate.TargetCurrencyCode': 'Tax Exchange Rate Target Currency'
+    };
+
+    return fieldMappings[readable] || readable;
+}
+
+function getErrorMessage(error) {
+    // Use lhdnErrorMapper first for comprehensive error mapping
+    if (typeof window !== 'undefined' && window.lhdnErrorMapper) {
+        try {
+            // If error is an object with a code, try to map it
+            if (typeof error === 'object' && error !== null && error.code) {
+                const mappedError = window.lhdnErrorMapper.mapError(error.code, error.message);
+                if (mappedError && mappedError.userMessage) {
+                    return mappedError.userMessage;
+                }
+            }
+
+            // Try to parse complex LHDN validation errors
+            if (typeof error === 'object' && error !== null) {
+                const parsedErrors = window.lhdnErrorMapper.parseLHDNValidationError(error);
+                if (parsedErrors && parsedErrors.length > 0) {
+                    return parsedErrors[0].userMessage || parsedErrors[0].technicalMessage;
+                }
+            }
+        } catch (e) {
+            console.warn('Error using lhdnErrorMapper:', e);
+        }
+    }
+
+    // Use the existing lhdnUIHelper as secondary option
+    if (typeof window !== 'undefined' && window.lhdnUIHelper && window.lhdnUIHelper.formatLHDNError) {
+        try {
+            const formattedError = window.lhdnUIHelper.formatLHDNError(error);
+            if (formattedError && formattedError.message) {
+                return formattedError.message;
+            }
+        } catch (e) {
+            console.warn('Error using lhdnUIHelper:', e);
+        }
+    }
+
+    // Use ValidationTranslations as primary translation method
+    if (typeof window !== 'undefined' && window.ValidationTranslations && window.ValidationTranslations.getErrorMessage) {
+        try {
+            const translatedMessage = window.ValidationTranslations.getErrorMessage(error);
+            if (translatedMessage && translatedMessage !== 'Not specified' && translatedMessage !== error) {
+                console.log('ValidationTranslations provided translation:', translatedMessage);
+                return translatedMessage;
+            }
+        } catch (e) {
+            console.warn('Error using ValidationTranslations:', e);
+        }
+    }
+
+    // Enhanced fallback implementation
+    if (!error || error === 'undefined' || error === 'null') return "Not specified";
+
+    console.log('Processing error object:', error, 'Type:', typeof error);
+
+    // Handle the specific "[object Object]" case early
+    if (String(error) === '[object Object]') {
+        return 'Document validation failed. Please check the document format and required fields.';
+    }
+
+    // Handle enhanced error structure from backend
+    if (typeof error === 'object' && error !== null) {
+        // Check if this is an enhanced error from our backend validation mapper
+        if (error.userMessage) {
+            return error.userMessage;
+        }
+
+        // Check for guidance information
+        if (error.guidance && Array.isArray(error.guidance)) {
+            const guidance = error.guidance.join('. ');
+            const message = error.message || error.userMessage || 'Validation error occurred';
+            return `${message}. ${guidance}`;
+        }
+
+        // Enhanced object handling for LHDN error structures
+        if (error.errorMessage) {
+            return error.errorMessage;
+        } else if (error.message && typeof error.message === 'object') {
+            // If message is an object, try to extract from it
+            return error.message.errorMessage ||
+                   error.message.message ||
+                   error.message.description ||
+                   JSON.stringify(error.message, null, 2);
+        } else if (error.message && typeof error.message === 'string') {
+            return error.message;
+        } else if (error.description) {
+            return error.description;
+        } else if (error.details && typeof error.details === 'string') {
+            return error.details;
+        } else if (error.error) {
+            // Recursively process nested error
+            return getErrorMessage(error.error);
+        } else if (error.innerError && Array.isArray(error.innerError) && error.innerError.length > 0) {
+            // Handle LHDN innerError arrays
+            return error.innerError.map(innerErr => getErrorMessage(innerErr)).join('; ');
+        } else if (error.errors && Array.isArray(error.errors) && error.errors.length > 0) {
+            // Handle errors arrays
+            return error.errors.map(err => getErrorMessage(err)).join('; ');
+        } else {
+            // Last resort: stringify the object with proper formatting
+            try {
+                const jsonStr = JSON.stringify(error, null, 2);
+                console.log('Error object as JSON:', jsonStr);
+                return 'Document validation failed. Please check the document format and try again.';
+            } catch (e) {
+                console.error('Failed to stringify error object:', e);
+                return 'Complex validation error - please check the document format';
+            }
+        }
+    }
+
+    // Handle string errors
+    if (typeof error === 'string') {
+        // Handle [object Object] case
+        if (error === '[object Object]') {
+            return 'Document validation failed. Please check the document format and try again.';
+        }
+
+        // Remove technical prefixes
+        let errorString = error.replace(/^Step\d+-/, '');
+
+        // Clean up JSON formatting for better readability
+        if (errorString.startsWith('{') && errorString.endsWith('}')) {
+            try {
+                const parsed = JSON.parse(errorString);
+                // Try to extract meaningful message from parsed object
+                const meaningfulMessage = parsed.errorMessage ||
+                                        parsed.message ||
+                                        parsed.description ||
+                                        parsed.details ||
+                                        'Document validation failed - please review the document structure';
+                return meaningfulMessage;
+            } catch (e) {
+                // If parsing fails, keep the original string
+            }
+        }
+
+        return errorString;
+    }
+
+    return String(error) || 'Unknown validation error';
+}
+
+function getErrorType(code) {
+    // Use ValidationTranslations as primary method
+    if (typeof window !== 'undefined' && window.ValidationTranslations && window.ValidationTranslations.getErrorType) {
+        const translatedType = window.ValidationTranslations.getErrorType(code);
+        if (translatedType && translatedType !== code && translatedType !== "Unknown Error") {
+            return translatedType;
+        }
+    }
+
+    // Use the existing lhdnErrorMapper as fallback
+    if (typeof window !== 'undefined' && window.lhdnErrorMapper && window.lhdnErrorMapper.hasErrorCode && window.lhdnErrorMapper.hasErrorCode(code)) {
+        const mapping = window.lhdnErrorMapper.errorCodeMap[code];
+        return mapping.title || mapping.field || code;
+    }
+
+    // Fallback implementation (enhanced with more error codes)
+    const errorCodes = {
+        'CV302': 'Invalid Code Value',
+        'Error04': 'Field Validation Error',
+        'CV303': 'Invalid Format',
+        'CV304': 'Required Field Missing',
+        'CV305': 'Invalid Date Format',
+        'CV306': 'Invalid Number Format',
+        'CV307': 'Invalid Currency Format',
+        'CV308': 'Invalid Tax Code',
+        'CV309': 'Invalid Document Type',
+        'CV310': 'Invalid Reference',
+        'CF402': 'Currency Validation Error',
+        'CF404': 'Missing Required Field',
+        'DC511': 'Currency Target Validation Error',
+        'VALIDATION_ERROR': 'Validation Error'
+    };
+
+    return errorCodes[code] || code || "Unknown Error";
+}
+
 async function openValidationResultsModal(uuid) {
     try {
         // Ensure DOM is ready before attempting to show modal
@@ -5687,7 +5899,11 @@ async function openValidationResultsModal(uuid) {
             console.log('Loading validation results for UUID:', uuid);
         }
 
-        const response = await fetch(`/api/lhdn/documents/${uuid}/validation-results`);
+        // Check if we should force refresh from LHDN API
+        const shouldRefresh = window.forceValidationRefresh || false;
+        const refreshParam = shouldRefresh ? '?refresh=true' : '';
+
+        const response = await fetch(`/api/lhdn/documents/${uuid}/validation-results${refreshParam}`);
         const result = await response.json();
 
         if (!response.ok) {
@@ -5764,32 +5980,52 @@ async function openValidationResultsModal(uuid) {
                 .trim()
                 .replace(/^[\.\-\s]+|[\.\-\s]+$/g, "");
 
-            // Handle LHDN error structure - check for innerError first
-            let allInnerErrors = [];
+            // Get all errors from the step
+            const errors = step.error?.errors || [];
+            console.log(`Step "${cleanedName}" raw errors:`, errors);
 
-            if (step.error?.innerError && Array.isArray(step.error.innerError)) {
-                // Direct innerError array on step.error (LHDN format)
-                allInnerErrors = step.error.innerError;
-                console.log(`Step "${cleanedName}" found innerError array:`, allInnerErrors);
-            } else if (step.error?.errors && Array.isArray(step.error.errors)) {
-                // Alternative errors array format
-                const errors = step.error.errors;
+            // Debug: Log the complete step.error structure
+            if (step.error) {
+                console.log(`Step "${cleanedName}" complete error object:`, step.error);
+                console.log(`Step "${cleanedName}" error type:`, typeof step.error);
+                console.log(`Step "${cleanedName}" error keys:`, Object.keys(step.error));
+
+                // If there are errors, log each one in detail
+                if (errors.length > 0) {
+                    errors.forEach((err, errIndex) => {
+                        console.log(`Step "${cleanedName}" error ${errIndex}:`, err);
+                        console.log(`Step "${cleanedName}" error ${errIndex} type:`, typeof err);
+                        console.log(`Step "${cleanedName}" error ${errIndex} keys:`, Object.keys(err));
+                        if (err.message) {
+                            console.log(`Step "${cleanedName}" error ${errIndex} message:`, err.message);
+                            console.log(`Step "${cleanedName}" error ${errIndex} message type:`, typeof err.message);
+                        }
+                    });
+                }
+            }
+
+            // Handle different error structures
+            let allInnerErrors = [];
+            if (errors.length > 0) {
+                // Check if errors have innerError arrays (LHDN format)
                 allInnerErrors = errors.reduce((acc, err) => {
                     if (err.innerError && Array.isArray(err.innerError)) {
                         acc.push(...err.innerError);
                     } else {
+                        // If no innerError, treat the error itself as the error to display
                         acc.push(err);
                     }
                     return acc;
                 }, []);
-                console.log(`Step "${cleanedName}" processed errors array:`, allInnerErrors);
-            } else if (step.error && typeof step.error === 'object') {
-                // Single error object - treat the error itself as the error to display
+            } else if (step.error?.innerError && Array.isArray(step.error.innerError)) {
+                // Direct innerError array on step.error
+                allInnerErrors = step.error.innerError;
+            } else if (step.error && !step.error.errors) {
+                // Single error object without errors array
                 allInnerErrors = [step.error];
-                console.log(`Step "${cleanedName}" using single error object:`, allInnerErrors);
             }
 
-            console.log(`Step "${cleanedName}" final processed errors:`, allInnerErrors);
+            console.log(`Step "${cleanedName}" processed errors:`, allInnerErrors);
 
             const contentId = `collapse${index}`;
             stepDiv.innerHTML = `
@@ -5808,23 +6044,26 @@ async function openValidationResultsModal(uuid) {
                     ${!isValid && allInnerErrors.length > 0
                     ? `
                                 <div class="lhdn-validation-message">
-                                    ${allInnerErrors.map((err, i) => `
+                                    ${allInnerErrors.map((err, i) => {
+                                        const errorInfo = extractErrorInfo(err);
+                                        return `
                                         ${i > 0 ? '<div class="lhdn-inner-error mt-3">' : ''}
                                      <div class="lhdn-error-location">
                                         <strong class="lhdn-step-error">Field:</strong>
-                                        <span class="lhdn-step-error">${ValidationTranslations.getFieldName(err.propertyPath || err.field || 'Not specified')}</span>
+                                        <span class="lhdn-step-error">${getFieldName(errorInfo.field)}</span>
                                     </div>
                                     <div class="lhdn-error-message">
                                         <strong class="lhdn-step-error">Issue:</strong>
-                                        <span class="lhdn-step-error">${ValidationTranslations.getErrorMessage(err.error || err.message || 'Unknown error')}</span>
+                                        <span class="lhdn-step-error">${getErrorMessage(errorInfo.message)}</span>
                                     </div>
                                     <div class="lhdn-error-code">
                                         <strong class="lhdn-step-error">Error Type:</strong>
-                                        <span class="lhdn-step-error">${ValidationTranslations.getErrorType(err.errorCode || err.code || 'VALIDATION_ERROR')}</span>
+                                        <span class="lhdn-step-error">${getErrorType(errorInfo.code)}</span>
                                     </div>
                                         ${i > 0 ? '</div>' : ''}
 
-                                    `).join('')}
+                                    `;
+                                    }).join('')}
                                     ${allInnerErrors.length > 1 ? `
                                         <div class="error-summary mt-4">
                                             <div class="alert alert-danger">
@@ -5835,7 +6074,9 @@ async function openValidationResultsModal(uuid) {
                                     ` : ''}
                                 </div>
                             `
-                    : (!isValid ? `
+                    : (!isValid ? (() => {
+                                        const errorInfo = extractErrorInfo(step.error);
+                                        return `
                                 <div class="lhdn-validation-message">
                                     <div class="alert alert-danger mb-3">
                                         <i class="bi bi-exclamation-triangle-fill me-2"></i>
@@ -5843,14 +6084,15 @@ async function openValidationResultsModal(uuid) {
                                     </div>
                                     <div class="lhdn-error-message">
                                         <strong>Issue:</strong>
-                                        <span class="text-break lhdn-step-error">${ValidationTranslations.getErrorMessage(step.error?.error || step.error?.message || 'Unknown validation error')}</span>
+                                        <span class="text-break lhdn-step-error">${getErrorMessage(errorInfo.message)}</span>
                                     </div>
                                     <div class="lhdn-error-code">
                                         <strong>Error Type:</strong>
-                                        <span class="lhdn-step-error">${ValidationTranslations.getErrorType(step.error?.errorCode || step.error?.code || 'VALIDATION_ERROR')}</span>
+                                        <span class="lhdn-step-error">${getErrorType(errorInfo.code)}</span>
                                     </div>
                                 </div>
-                            ` : '<div class="lhdn-validation-success"><i class="bi bi-check-circle-fill"></i>No errors found</div>')
+                            `;
+                                    })() : '<div class="lhdn-validation-success"><i class="bi bi-check-circle-fill"></i>No errors found</div>')
                 }
                 </div>
             `;
@@ -5908,6 +6150,35 @@ async function openValidationResultsModal(uuid) {
                     toggle: collapse.classList.contains('show')
                 });
             });
+
+            // Add refresh button event listener
+            const refreshBtn = modalElement.querySelector('#refreshValidationBtn');
+            if (refreshBtn) {
+                refreshBtn.onclick = async function() {
+                    try {
+                        // Set refresh flag and reload validation results
+                        window.forceValidationRefresh = true;
+                        refreshBtn.disabled = true;
+                        refreshBtn.innerHTML = '<i class="bi bi-arrow-clockwise me-1 spin"></i>Refreshing...';
+
+                        // Close current modal
+                        const modal = bootstrap.Modal.getInstance(modalElement);
+                        modal.hide();
+
+                        // Wait for modal to close then reopen with fresh data
+                        setTimeout(async () => {
+                            await openValidationResultsModal(uuid);
+                            window.forceValidationRefresh = false;
+                        }, 500);
+
+                    } catch (error) {
+                        console.error('Error refreshing validation results:', error);
+                        refreshBtn.disabled = false;
+                        refreshBtn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>Refresh from LHDN';
+                        window.forceValidationRefresh = false;
+                    }
+                };
+            }
         });
 
         // Add event listener for modal close
@@ -6382,13 +6653,19 @@ function initializeQuickActions() {
           refreshDataBtn.innerHTML =
             '<i class="bi bi-arrow-clockwise me-2 spin"></i>Refreshing...';
 
+          const table = $("#invoiceTable").DataTable();
           const invoiceManager = InvoiceTableManager.getInstance();
 
-          // Use unified refresh method
-          if (invoiceManager) {
-            await invoiceManager.refreshTable(true);
+          // Check if table has AJAX capability or use refresh method
+          if (table.ajax && table.ajax.reload) {
+            await table.ajax.reload();
+          } else if (invoiceManager && invoiceManager.refresh) {
+            await invoiceManager.refresh();
           } else {
-            console.warn("Invoice manager not available for refresh");
+            // Fallback to refreshing current data source
+            if (invoiceManager && invoiceManager.refreshCurrentDataSource) {
+              await invoiceManager.refreshCurrentDataSource();
+            }
           }
 
           updateCharts(); // Update charts with new data

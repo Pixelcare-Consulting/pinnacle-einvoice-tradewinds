@@ -363,10 +363,22 @@ class DashboardV2 {
     }
 
     setupRealTimeUpdates() {
+        // Clear existing interval if any
+        if (this.updateInterval) {
+            clearInterval(this.updateInterval);
+        }
+
         // Update every 30 seconds
         this.updateInterval = setInterval(() => {
             this.loadDashboardData();
         }, 30000);
+    }
+
+    cleanup() {
+        if (this.updateInterval) {
+            clearInterval(this.updateInterval);
+            this.updateInterval = null;
+        }
     }
 
     setupEventListeners() {
@@ -428,6 +440,13 @@ class DashboardV2 {
 
 // Initialize Dashboard v2
 const dashboardV2 = new DashboardV2();
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+    if (dashboardV2) {
+        dashboardV2.cleanup();
+    }
+});
 
 // Export for global access
 window.DashboardV2 = DashboardV2;

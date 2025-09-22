@@ -272,4 +272,12 @@ function filterLogs(filterType) {
 }
 
 // Refresh logs every 5 minutes
-setInterval(initActivityLogs, 300000); 
+let logsRefreshInterval = setInterval(initActivityLogs, 300000);
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+  if (logsRefreshInterval) {
+    clearInterval(logsRefreshInterval);
+    logsRefreshInterval = null;
+  }
+});

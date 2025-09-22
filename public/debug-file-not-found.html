@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debug File Not Found Issue</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container mt-5">
+        <div class="row">
+            <div class="col-md-8 mx-auto">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">
+                            <i class="bi bi-bug me-2"></i>
+                            Debug File Not Found Issue
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="alert alert-info">
+                            <i class="bi bi-info-circle me-2"></i>
+                            This page helps debug the "File data not found" error in the outbound-manual page.
+                        </div>
+
+                        <div class="mb-4">
+                            <label for="fileId" class="form-label">File ID to Test:</label>
+                            <input type="number" class="form-control" id="fileId" placeholder="Enter file ID">
+                        </div>
+
+                        <div class="d-grid gap-2">
+                            <button class="btn btn-primary" onclick="testFileAccess()">
+                                <i class="bi bi-search me-2"></i>Test File Access
+                            </button>
+                            <button class="btn btn-secondary" onclick="listAllFiles()">
+                                <i class="bi bi-list me-2"></i>List All Files
+                            </button>
+                            <button class="btn btn-warning" onclick="clearCache()">
+                                <i class="bi bi-arrow-clockwise me-2"></i>Clear Cache
+                            </button>
+                        </div>
+
+                        <div id="results" class="mt-4"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        async function testFileAccess() {
+            const fileId = document.getElementById('fileId').value;
+            if (!fileId) {
+                showResult('error', 'Please enter a file ID');
+                return;
+            }
+
+            showResult('info', 'Testing file access...');
+
+            try {
+                // Test 1: Check table data
+                const tableResponse = await fetch('/api/outbound-files-manual/list-fixed-paths');
+                const tableData = await tableResponse.json();
+                
+                let fileInTable = null;
+                if (tableData.success && tableData.files) {
+                    fileInTable = tableData.files.find(f => f.id == fileId);
+                }
+
+                // Test 2: Check direct API access
+                const detailsResponse = await fetch(`/api/outbound-files-manual/uploaded-files/${fileId}/details`);
+                const detailsData = await detailsResponse.json();
+
+                // Display results
+                let html = '<div class="card mt-3"><div class="card-body">';
+                html += `<h6>Test Results for File ID: ${fileId}</h6>`;
+                
+                html += '<div class="row">';
+                html += '<div class="col-md-6">';
+                html += '<h6 class="text-primary">Table Data Test</h6>';
+                if (fileInTable) {
+                    html += '<div class="alert alert-success">✅ File found in table data</div>';
+                    html += `<pre class="small">${JSON.stringify(fileInTable, null, 2)}</pre>`;
+                } else {
+                    html += '<div class="alert alert-warning">⚠️ File NOT found in table data</div>';
+                    html += `<p class="small">Total files in table: ${tableData.files?.length || 0}</p>`;
+                }
+                html += '</div>';
+
+                html += '<div class="col-md-6">';
+                html += '<h6 class="text-primary">Direct API Test</h6>';
+                if (detailsResponse.ok && detailsData.success) {
+                    html += '<div class="alert alert-success">✅ File accessible via API</div>';
+                    html += `<pre class="small">${JSON.stringify(detailsData.data, null, 2)}</pre>`;
+                } else {
+                    html += `<div class="alert alert-danger">❌ API Error: ${detailsResponse.status}</div>`;
+                    html += `<pre class="small">${JSON.stringify(detailsData, null, 2)}</pre>`;
+                }
+                html += '</div>';
+                html += '</div>';
+
+                html += '</div></div>';
+                document.getElementById('results').innerHTML = html;
+
+            } catch (error) {
+                showResult('error', `Error testing file access: ${error.message}`);
+            }
+        }
+
+        async function listAllFiles() {
+            showResult('info', 'Loading all files...');
+
+            try {
+                const response = await fetch('/api/outbound-files-manual/list-fixed-paths');
+                const data = await response.json();
+
+                if (data.success && data.files) {
+                    let html = '<div class="card mt-3"><div class="card-body">';
+                    html += `<h6>All Files (${data.files.length} total)</h6>`;
+                    html += '<div class="table-responsive">';
+                    html += '<table class="table table-sm">';
+                    html += '<thead><tr><th>ID</th><th>Filename</th><th>Status</th><th>Upload Date</th></tr></thead>';
+                    html += '<tbody>';
+                    
+                    data.files.forEach(file => {
+                        html += `<tr>
+                            <td>${file.id}</td>
+                            <td>${file.filename || file.original_filename}</td>
+                            <td><span class="badge bg-secondary">${file.processing_status}</span></td>
+                            <td>${new Date(file.upload_date).toLocaleString()}</td>
+                        </tr>`;
+                    });
+                    
+                    html += '</tbody></table></div></div></div>';
+                    document.getElementById('results').innerHTML = html;
+                } else {
+                    showResult('warning', 'No files found or API error');
+                }
+            } catch (error) {
+                showResult('error', `Error loading files: ${error.message}`);
+            }
+        }
+
+        function clearCache() {
+            // Clear any cached data
+            if (typeof dataCache !== 'undefined') {
+                dataCache.invalidateCache();
+            }
+            localStorage.clear();
+            sessionStorage.clear();
+            showResult('success', 'Cache cleared successfully');
+        }
+
+        function showResult(type, message) {
+            const alertClass = type === 'error' ? 'alert-danger' : 
+                              type === 'warning' ? 'alert-warning' : 
+                              type === 'success' ? 'alert-success' : 'alert-info';
+            
+            document.getElementById('results').innerHTML = `
+                <div class="alert ${alertClass}">
+                    <i class="bi bi-${type === 'error' ? 'exclamation-triangle' : 
+                                      type === 'warning' ? 'exclamation-triangle' : 
+                                      type === 'success' ? 'check-circle' : 'info-circle'} me-2"></i>
+                    ${message}
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>

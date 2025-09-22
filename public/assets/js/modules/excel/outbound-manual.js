@@ -4434,10 +4434,13 @@ class InvoiceTableManager {
 
     // Show detailed LHDN validation results modal
     async showLHDNDetailsModal(fileId) {
+        console.log('🔍 showLHDNDetailsModal called with fileId:', fileId);
         try {
             // Find the file data from the current table data or fetch fresh data
             let tableData = dataCache.getCachedData();
+            console.log('📊 Cache data available:', !!tableData, 'Files count:', tableData?.length || 0);
             let fileData = tableData?.find(file => file.id === fileId);
+            console.log('🔍 File found in cache:', !!fileData, 'Looking for ID:', fileId);
 
             // If not found in cache, try to refresh the table data
             if (!fileData) {
@@ -4466,9 +4469,56 @@ class InvoiceTableManager {
                 }
             }
 
+            // If still not found, try to fetch file details directly from API
+            if (!fileData) {
+                console.log('File not found in table data, attempting direct API fetch...');
+                try {
+                    const response = await fetch(`/api/outbound-files-manual/uploaded-files/${fileId}/details`, {
+                        method: 'GET',
+                        headers: {
+                            'Accept': 'application/json',
+                            'Content-Type': 'application/json'
+                        },
+                        credentials: 'include'
+                    });
+
+                    if (response.ok) {
+                        const result = await response.json();
+                        if (result.success && result.data) {
+                            fileData = result.data;
+                            console.log('File data retrieved directly from API');
+                        }
+                    } else if (response.status === 404) {
+                        console.error('File not found in database for ID:', fileId);
+                        this.showEnhancedErrorModal('File Not Found',
+                            'The requested file could not be found in the database.',
+                            'This file may have been deleted or you may not have permission to access it.',
+                            [
+                                'Refresh the page to update the file list',
+                                'Check if the file was recently deleted',
+                                'Contact support if this issue persists'
+                            ]
+                        );
+                        return;
+                    } else {
+                        console.error('API error fetching file details:', response.status);
+                    }
+                } catch (apiError) {
+                    console.error('Error fetching file details from API:', apiError);
+                }
+            }
+
             if (!fileData) {
                 console.error('File data not found for ID:', fileId);
-                this.showErrorModal('File data not found', 'The requested file could not be found. Please refresh the page and try again.');
+                this.showEnhancedErrorModal('File Data Not Found',
+                    'The requested file could not be found after checking all available sources.',
+                    'This may indicate a synchronization issue between the display and the database.',
+                    [
+                        'Refresh the page to reload the file list',
+                        'Clear your browser cache and try again',
+                        'Contact support if the problem continues'
+                    ]
+                );
                 return;
             }
 
@@ -4997,6 +5047,84 @@ class InvoiceTableManager {
                         </div>
                     </div>
                     <div class="lhdn-details-footer">
+                        <button class="btn btn-secondary" onclick="this.closest('.lhdn-details-modal').remove()">
+                            <i class="bi bi-x-circle me-2"></i>Close
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // Add styles if not already present
+        this.addLHDNDetailsStyles();
+
+        // Add modal to body
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+
+        // Show modal with animation
+        setTimeout(() => {
+            const modal = document.getElementById('invoiceTableErrorModal');
+            if (modal) {
+                modal.classList.add('show');
+            }
+        }, 10);
+    }
+
+    // Enhanced error modal with detailed information and suggestions
+    showEnhancedErrorModal(title, message, details, suggestions = []) {
+        // Remove any existing error modal
+        const existingModal = document.getElementById('invoiceTableErrorModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+
+        const suggestionsHTML = suggestions.length > 0 ? `
+            <div class="alert alert-info mt-3">
+                <h6 class="alert-heading">
+                    <i class="bi bi-lightbulb me-2"></i>
+                    Suggested Actions
+                </h6>
+                <ul class="mb-0">
+                    ${suggestions.map(suggestion => `<li>${suggestion}</li>`).join('')}
+                </ul>
+            </div>
+        ` : '';
+
+        const modalHTML = `
+            <div id="invoiceTableErrorModal" class="lhdn-details-modal">
+                <div class="lhdn-details-overlay" onclick="this.parentElement.remove()"></div>
+                <div class="lhdn-details-content" style="max-width: 600px;">
+                    <div class="lhdn-details-header">
+                        <div class="d-flex align-items-center">
+                            <div class="header-icon-wrapper me-3" style="background: #dc3545;">
+                                <i class="bi bi-exclamation-triangle-fill text-white"></i>
+                            </div>
+                            <div>
+                                <h4 class="mb-1 fw-semibold text-danger">${title}</h4>
+                                <p class="mb-0 small text-muted">Error Information</p>
+                            </div>
+                        </div>
+                        <button class="btn-close-custom" onclick="this.closest('.lhdn-details-modal').remove()">
+                            <i class="bi bi-x"></i>
+                        </button>
+                    </div>
+                    <div class="lhdn-details-body">
+                        <div class="alert alert-danger">
+                            <i class="bi bi-exclamation-circle me-2"></i>
+                            <strong>${message}</strong>
+                        </div>
+                        ${details ? `
+                            <div class="alert alert-warning">
+                                <i class="bi bi-info-circle me-2"></i>
+                                ${details}
+                            </div>
+                        ` : ''}
+                        ${suggestionsHTML}
+                    </div>
+                    <div class="lhdn-details-footer">
+                        <button class="btn btn-primary me-2" onclick="window.location.reload()">
+                            <i class="bi bi-arrow-clockwise me-2"></i>Refresh Page
+                        </button>
                         <button class="btn btn-secondary" onclick="this.closest('.lhdn-details-modal').remove()">
                             <i class="bi bi-x-circle me-2"></i>Close
                         </button>

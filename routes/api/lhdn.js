@@ -8,11 +8,61 @@ const fsPromises = fs.promises;
 const jsrender = require("jsrender");
 const puppeteer = require("puppeteer");
 const QRCode = require("qrcode");
+const pdfGenerationService = require("../../services/pdf-generation.service");
 const { logger, apiLogger, versionLogger } = require("../../utils/logger");
 const { getUnitType } = require("../../utils/UOM");
 const { getInvoiceTypes } = require("../../utils/EInvoiceTypes");
 const axiosRetry = require("axios-retry");
 const moment = require("moment");
+// Import LHDN error mapping utilities
+const { formatLHDNError } = require("../../utils/lhdnErrorHandler");
+
+// Load the existing comprehensive LHDNErrorMapper
+let LHDNErrorMapper;
+try {
+  const lhdnErrorMappingPath = path.join(__dirname, '../public/assets/utils/lhdnErrorMapping.js');
+  const lhdnErrorMappingCode = fs.readFileSync(lhdnErrorMappingPath, 'utf8');
+
+  // Create a minimal environment to execute the mapping code
+  const vm = require('vm');
+  const context = {
+    window: {},
+    module: { exports: {} },
+    console: console
+  };
+  vm.createContext(context);
+  vm.runInContext(lhdnErrorMappingCode, context);
+
+  LHDNErrorMapper = context.module.exports || context.window.LHDNErrorMapper;
+  console.log('Successfully loaded comprehensive LHDNErrorMapper with', Object.keys(new LHDNErrorMapper().errorCodeMap).length, 'error codes');
+} catch (error) {
+  console.error('Failed to load LHDNErrorMapper:', error);
+  // Fallback to a simple error mapper
+  LHDNErrorMapper = class {
+    mapError(code, message) {
+      return {
+        code,
+        userMessage: message || 'Validation error occurred',
+        technicalMessage: message,
+        guidance: ['Please check the document and try again'],
+        severity: 'error'
+      };
+    }
+
+    parseLHDNValidationError(error) {
+      return [{
+        code: 'VALIDATION_ERROR',
+        userMessage: error.message || 'Validation error occurred',
+        technicalMessage: error.message,
+        guidance: ['Please check the document and try again'],
+        severity: 'error'
+      }];
+    }
+  };
+}
+
+// Create instance of the comprehensive LHDN error mapper
+const lhdnErrorMapper = new LHDNErrorMapper();
 // Removed Sequelize import as we're using Prisma
 
 // Initialize cache with 5 minutes standard TTL
@@ -305,12 +355,6 @@ function getPortalUrl(environment) {
 const fetchRecentDocuments = async (req) => {
   console.log("Starting enhanced document fetch process...");
 
-  // MyInvois API Compliance Warning
-  console.warn("⚠️  COMPLIANCE NOTICE: Using 'Get Recent Documents' API");
-  console.warn("   This API is designed for troubleshooting, not bulk reconciliation");
-  console.warn("   Rate limit: 12 RPM. Excessive use may result in throttling");
-  console.warn("   Consider using 'Search Documents' API for regular operations");
-
   try {
     // Get LHDN configuration
     const lhdnConfig = await getLHDNConfig();
@@ -321,25 +365,16 @@ const fetchRecentDocuments = async (req) => {
     });
 
     // Check sync strategy from query parameters
+    const incrementalSync = req.query.incrementalSync !== "false"; // Default to true
     const forceRefresh = req.query.forceRefresh === "true";
-    // Force full sync when refreshing, otherwise allow incremental sync
-    const incrementalSync = forceRefresh ? false : (req.query.incrementalSync !== "false");
-    // Increase pagination limits - configurable via environment or query params
-    const maxIncrementalPages = parseInt(req.query.maxIncrementalPages) ||
-                               parseInt(process.env.MAX_INCREMENTAL_PAGES) || 50; // Increased from 5 to 50
-    const maxFullSyncPages = parseInt(req.query.maxFullSyncPages) ||
-                            parseInt(process.env.MAX_FULL_SYNC_PAGES) || 200; // Allow up to 20,000 records
-
-    console.log(`Sync strategy: ${incrementalSync ? 'incremental' : 'full'}, forceRefresh: ${forceRefresh}`);
-    console.log(`Pagination limits - Incremental: ${maxIncrementalPages} pages, Full: ${maxFullSyncPages} pages`);
+    const maxIncrementalPages = parseInt(req.query.maxIncrementalPages) || 5; // Limit incremental sync pages
 
     // First, check if we have data in the database
-    const dbLimit = parseInt(process.env.DB_DOCUMENT_LIMIT) || 5000; // Increased from 1000 to 5000
     const dbDocuments = await prisma.wP_INBOUND_STATUS.findMany({
       orderBy: {
         dateTimeReceived: "desc",
       },
-      take: dbLimit, // Configurable limit for database records
+      take: 1000, // Limit to latest 1000 records
     });
 
     // Get the most recent document timestamp for incremental sync
@@ -573,11 +608,11 @@ const fetchRecentDocuments = async (req) => {
                   newDocumentsFound++;
                 } else {
                   existingDocumentsFound++;
-                  // Only stop pagination early in incremental sync mode
-                  if (incrementalSync && existingDocumentsFound >= 10) {
-                    // Stop if we find 10 consecutive old documents in incremental mode
+                  // If we're finding old documents, we can stop pagination early
+                  if (existingDocumentsFound >= 10) {
+                    // Stop if we find 10 consecutive old documents
                     console.log(
-                      `Incremental sync: Found ${existingDocumentsFound} existing documents, stopping pagination early`
+                      `Found ${existingDocumentsFound} existing documents, stopping pagination early`
                     );
                     hasMorePages = false;
                     break;
@@ -608,31 +643,20 @@ const fetchRecentDocuments = async (req) => {
               );
             }
 
-            // Apply appropriate page limits based on sync mode
-            const currentPageLimit = incrementalSync ? maxIncrementalPages : maxFullSyncPages;
-            if (pageNo >= currentPageLimit) {
+            // Limit incremental sync to maxIncrementalPages to prevent excessive API calls
+            if (incrementalSync && pageNo >= maxIncrementalPages) {
               console.log(
-                `Reached maximum ${incrementalSync ? 'incremental' : 'full'} pages (${currentPageLimit}), stopping sync`
+                `Reached maximum incremental pages (${maxIncrementalPages}), stopping sync`
               );
               hasMorePages = false;
             }
 
-            // Check if we have more pages based on pagination info (only if not stopped by other logic)
+            // Check if we have more pages based on pagination info (only if not stopped by incremental logic)
             if (hasMorePages) {
-              if (pagination && pagination.totalPages && pagination.totalCount) {
+              if (pagination) {
                 hasMorePages = pageNo < pagination.totalPages;
-                const documentsRetrieved = (pageNo - 1) * pageSize + result.length;
-                console.log(`MyInvois Pagination: page ${pageNo}/${pagination.totalPages}, retrieved ${documentsRetrieved}/${pagination.totalCount}, hasMore: ${hasMorePages}`);
-
-                // MyInvois API limit: maximum 10,000 documents can be returned
-                if (documentsRetrieved >= 10000) {
-                  console.warn("⚠️  Approaching MyInvois API limit of 10,000 documents");
-                  hasMorePages = false;
-                }
               } else {
-                // If no pagination info, check if we got a full page of results
                 hasMorePages = result.length === pageSize;
-                console.log(`No pagination metadata: got ${result.length}/${pageSize} results, hasMore: ${hasMorePages}`);
               }
             }
 
@@ -643,22 +667,19 @@ const fetchRecentDocuments = async (req) => {
 
             // Adaptive delay between requests based on rate limit headers
             if (hasMorePages) {
-              // MyInvois API compliance: 12 RPM for Get Recent Documents
-              // This means minimum 5000ms between requests (60000ms / 12 = 5000ms)
-              const MYINVOIS_MIN_DELAY = 5000; // 5 seconds to comply with 12 RPM limit
-              let adaptiveDelay = MYINVOIS_MIN_DELAY;
+              let adaptiveDelay = 500; // Base delay
 
               // Adjust delay based on remaining rate limit
               if (rateLimitRemaining !== null && rateLimitRemaining >= 0) {
-                if (rateLimitRemaining < 3) {
-                  adaptiveDelay = 10000; // 10 seconds when very close to limit
-                } else if (rateLimitRemaining < 6) {
-                  adaptiveDelay = 7000; // 7 seconds when approaching limit
+                if (rateLimitRemaining < 10) {
+                  adaptiveDelay = 2000; // Slow down when approaching limit
+                } else if (rateLimitRemaining < 50) {
+                  adaptiveDelay = 1000; // Moderate slowdown
                 }
               }
 
               // Add jitter to prevent thundering herd
-              const jitter = Math.random() * 1000; // 0-1000ms jitter
+              const jitter = Math.random() * 200; // 0-200ms jitter
               adaptiveDelay += jitter;
 
               console.log(
@@ -806,7 +827,7 @@ const fetchRecentDocuments = async (req) => {
       }
 
       console.log(
-        `Fetch complete. Total documents retrieved: ${documents.length} using ${incrementalSync ? 'incremental' : 'full'} sync (${pageNo - 1} pages fetched)`
+        `Fetch complete. Total documents retrieved: ${documents.length}`
       );
 
       // Save the fetched documents to database
@@ -2029,10 +2050,6 @@ router.post("/documents/refresh", async (req, res) => {
     const cacheKey = `recentDocuments_${req.session?.user?.TIN || "default"}`;
     cache.del(cacheKey);
 
-    // Force full sync for refresh operations
-    req.query.forceRefresh = "true";
-    req.query.incrementalSync = "false";
-
     // Fetch fresh data from LHDN API
     const fetchResult = await fetchRecentDocuments(req);
 
@@ -2752,270 +2769,605 @@ router.get("/submission/:submissionUid", async (req, res) => {
 });
 
 // Validation results endpoint
-router.get("/documents/:uuid/validation-results", async (req, res) => {
-  try {
-    const { uuid } = req.params;
-    const requestId = req.requestId;
+router.get('/documents/:uuid/validation-results', async (req, res) => {
+    try {
+        const { uuid } = req.params;
+        const requestId = req.requestId;
 
-    console.log(
-      `[${requestId}] Fetching validation results for document: ${uuid}`
-    );
+        console.log(`[${requestId}] Fetching validation results for document: ${uuid}`);
 
-    // Check if user is logged in
-    if (!req.session?.user) {
-      console.log(`[${requestId}] No user session found`);
-      return handleAuthError(req, res);
-    }
+        // Check if user is logged in
+        if (!req.session?.user) {
+            console.log(`[${requestId}] No user session found`);
+            return handleAuthError(req, res);
+        }
 
-    // Get LHDN configuration
-    const lhdnConfig = await getLHDNConfig();
+        // Get LHDN configuration
+        const lhdnConfig = await getLHDNConfig();
 
-    // Log the request
-    await LoggingService.log({
-      description: `Fetching validation results for document: ${uuid}`,
-      username: req.session?.user?.username || "System",
-      userId: req.session?.user?.id,
-      ipAddress: req.ip,
-      logType: LOG_TYPES.INFO,
-      module: MODULES.API,
-      action: ACTIONS.READ,
-      status: STATUS.PENDING,
-    });
+        // Log the request
+        await LoggingService.log({
+            description: `Fetching validation results for document: ${uuid}`,
+            username: req.session?.user?.username || 'System',
+            userId: req.session?.user?.id,
+            ipAddress: req.ip,
+            logType: LOG_TYPES.INFO,
+            module: MODULES.API,
+            action: ACTIONS.READ,
+            status: STATUS.PENDING
+        });
 
-    // First check if we have the validation results in the database
-    const dbDocument = await prisma.wP_INBOUND_STATUS.findUnique({
-      where: { uuid },
-    });
+        // First check if we have the validation results in the database
+        const dbDocument = await prisma.wP_INBOUND_STATUS.findUnique({
+            where: { uuid }
+        });
 
-    if (dbDocument && dbDocument.validationResults) {
-      console.log(
-        `[${requestId}] Found validation results in database for document: ${uuid}`
-      );
+        if (dbDocument && dbDocument.validationResults) {
+            console.log(`[${requestId}] Found validation results in database for document: ${uuid}`);
 
-      try {
-        // Parse validation results
-        const validationResults = JSON.parse(dbDocument.validationResults);
+            try {
+                // Parse validation results
+                const validationResults = JSON.parse(dbDocument.validationResults);
+
+                // Log success
+                await LoggingService.log({
+                    description: `Successfully retrieved validation results from database for document: ${uuid}`,
+                    username: req.session?.user?.username || 'System',
+                    userId: req.session?.user?.id,
+                    ipAddress: req.ip,
+                    logType: LOG_TYPES.INFO,
+                    module: MODULES.API,
+                    action: ACTIONS.READ,
+                    status: STATUS.SUCCESS
+                });
+
+                return res.json({
+                    success: true,
+                    validationResults,
+                    source: 'database'
+                });
+            } catch (parseError) {
+                console.error(`[${requestId}] Error parsing validation results from database:`, parseError);
+                // Continue to fetch from API if parsing fails
+            }
+        }
+
+        // If not in database or parsing failed, fetch from API
+        console.log(`[${requestId}] Fetching validation results from LHDN API for document: ${uuid}`);
+
+        // Get document details from LHDN API
+        const response = await axios.get(`${lhdnConfig.baseUrl}/api/v1.0/documents/${uuid}/details`, {
+            headers: {
+                'Authorization': `Bearer ${req.session.accessToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const detailsData = response.data;
+
+        // Process validation results
+        let processedValidationResults = null;
+        if (detailsData.validationResults) {
+            processedValidationResults = {
+                status: detailsData.status,
+                validationSteps: detailsData.validationResults.validationSteps?.map(step => {
+                    let errors = [];
+                    if (step.error) {
+                        if (Array.isArray(step.error.errors)) {
+                            errors = step.error.errors.map(err => ({
+                                code: err.code || 'VALIDATION_ERROR',
+                                message: err.message || err.toString(),
+                                field: err.field || null,
+                                value: err.value || null,
+                                details: err.details || null
+                            }));
+                        } else if (typeof step.error === 'object') {
+                            errors = [{
+                                code: step.error.code || 'VALIDATION_ERROR',
+                                message: step.error.message || step.error.toString(),
+                                field: step.error.field || null,
+                                value: step.error.value || null,
+                                details: step.error.details || null
+                            }];
+                        } else {
+                            errors = [{
+                                code: 'VALIDATION_ERROR',
+                                message: step.error.toString(),
+                                field: null,
+                                value: null,
+                                details: null
+                            }];
+                        }
+                    }
+
+                    return {
+                        name: step.name || 'Validation Step',
+                        status: step.status || 'Invalid',
+                        error: errors.length > 0 ? { errors } : null,
+                        timestamp: step.timestamp || new Date().toISOString()
+                    };
+                }) || [],
+                summary: {
+                    totalSteps: detailsData.validationResults.validationSteps?.length || 0,
+                    failedSteps: detailsData.validationResults.validationSteps?.filter(step => step.status === 'Invalid' || step.error)?.length || 0,
+                    lastUpdated: new Date().toISOString()
+                }
+            };
+
+            // Save validation results to database
+            try {
+                await prisma.wP_INBOUND_STATUS.update({
+                    where: { uuid },
+                    data: {
+                        validationResults: JSON.stringify(processedValidationResults)
+                    }
+                });
+                console.log(`[${requestId}] Saved validation results to database for document: ${uuid}`);
+            } catch (dbError) {
+                console.error(`[${requestId}] Error saving validation results to database:`, dbError);
+                // Continue even if saving to database fails
+            }
+        }
 
         // Log success
         await LoggingService.log({
-          description: `Successfully retrieved validation results from database for document: ${uuid}`,
-          username: req.session?.user?.username || "System",
-          userId: req.session?.user?.id,
-          ipAddress: req.ip,
-          logType: LOG_TYPES.INFO,
-          module: MODULES.API,
-          action: ACTIONS.READ,
-          status: STATUS.SUCCESS,
+            description: `Successfully retrieved validation results from API for document: ${uuid}`,
+            username: req.session?.user?.username || 'System',
+            userId: req.session?.user?.id,
+            ipAddress: req.ip,
+            logType: LOG_TYPES.INFO,
+            module: MODULES.API,
+            action: ACTIONS.READ,
+            status: STATUS.SUCCESS
         });
 
         return res.json({
-          success: true,
-          validationResults,
-          source: "database",
+            success: true,
+            validationResults: processedValidationResults,
+            source: 'api'
         });
-      } catch (parseError) {
-        console.error(
-          `[${requestId}] Error parsing validation results from database:`,
-          parseError
-        );
-        // Continue to fetch from API if parsing fails
-      }
-    }
+    } catch (error) {
+        console.error('Error fetching validation results:', error);
 
-    // If not in database or parsing failed, fetch from API
-    console.log(
-      `[${requestId}] Fetching validation results from LHDN API for document: ${uuid}`
-    );
+        // Log the error
+        await LoggingService.log({
+            description: `Error fetching validation results: ${error.message}`,
+            username: req.session?.user?.username || 'System',
+            userId: req.session?.user?.id,
+            ipAddress: req.ip,
+            logType: LOG_TYPES.ERROR,
+            module: MODULES.API,
+            action: ACTIONS.READ,
+            status: STATUS.FAILED,
+            details: { error: error.message }
+        });
 
-    // Get document details from LHDN API
-    const response = await axios.get(
-      `${lhdnConfig.baseUrl}/api/v1.0/documents/${uuid}/details`,
-      {
-        headers: {
-          Authorization: `Bearer ${req.session.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+        // Check if it's an authentication error
+        if (error.message === 'Authentication failed. Please log in again.' ||
+            error.response?.status === 401 ||
+            error.response?.status === 403) {
+            return handleAuthError(req, res);
+        }
 
-    const detailsData = response.data;
-
-    // Process validation results
-    let processedValidationResults = null;
-    if (detailsData.validationResults) {
-      console.log('Raw validation results from LHDN:', JSON.stringify(detailsData.validationResults, null, 2));
-
-      processedValidationResults = {
-        status: detailsData.status,
-        validationSteps:
-          detailsData.validationResults.validationSteps?.map((step, index) => {
-            console.log(`Processing validation step ${index}:`, JSON.stringify(step, null, 2));
-            let errors = [];
-            if (step.error) {
-              console.log(`Step ${index} has error:`, JSON.stringify(step.error, null, 2));
-              // Helper function to extract meaningful error message
-              const extractErrorMessage = (errorObj) => {
-                if (typeof errorObj === 'string') {
-                  return errorObj;
-                }
-                if (typeof errorObj === 'object' && errorObj !== null) {
-                  // Try different common error message properties
-                  if (errorObj.message) return errorObj.message;
-                  if (errorObj.description) return errorObj.description;
-                  if (errorObj.detail) return errorObj.detail;
-                  if (errorObj.error) return extractErrorMessage(errorObj.error);
-                  if (errorObj.text) return errorObj.text;
-
-                  // If it's an object with properties, try to create a meaningful message
-                  const keys = Object.keys(errorObj);
-                  if (keys.length > 0) {
-                    // Try to create a readable message from the object properties
-                    const meaningfulProps = keys.filter(key =>
-                      typeof errorObj[key] === 'string' && errorObj[key].length > 0
-                    );
-                    if (meaningfulProps.length > 0) {
-                      return meaningfulProps.map(key => `${key}: ${errorObj[key]}`).join(', ');
-                    }
-                    // Fallback to JSON representation
-                    try {
-                      return JSON.stringify(errorObj);
-                    } catch (e) {
-                      return 'Complex validation error (unable to parse)';
-                    }
-                  }
-                }
-                return 'Unknown validation error';
-              };
-
-              if (Array.isArray(step.error.errors)) {
-                errors = step.error.errors.map((err) => ({
-                  code: err.code || "VALIDATION_ERROR",
-                  message: extractErrorMessage(err),
-                  field: err.field || null,
-                  value: err.value || null,
-                  details: err.details || null,
-                }));
-              } else if (typeof step.error === "object") {
-                errors = [
-                  {
-                    code: step.error.code || "VALIDATION_ERROR",
-                    message: extractErrorMessage(step.error),
-                    field: step.error.field || null,
-                    value: step.error.value || null,
-                    details: step.error.details || null,
-                  },
-                ];
-              } else {
-                errors = [
-                  {
-                    code: "VALIDATION_ERROR",
-                    message: extractErrorMessage(step.error),
-                    field: null,
-                    value: null,
-                    details: null,
-                  },
-                ];
-              }
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to fetch validation results',
+            error: {
+                code: error.code || 'VALIDATION_ERROR',
+                message: error.message || 'An unexpected error occurred',
+                details: error.response?.data?.error || error.stack
             }
-
-            const processedStep = {
-              name: step.name || "Validation Step",
-              status: step.status || "Invalid",
-              error: errors.length > 0 ? { errors } : null,
-              timestamp: step.timestamp || new Date().toISOString(),
-            };
-
-            console.log(`Processed step ${index}:`, JSON.stringify(processedStep, null, 2));
-            return processedStep;
-          }) || [],
-        summary: {
-          totalSteps:
-            detailsData.validationResults.validationSteps?.length || 0,
-          failedSteps:
-            detailsData.validationResults.validationSteps?.filter(
-              (step) => step.status === "Invalid" || step.error
-            )?.length || 0,
-          lastUpdated: new Date().toISOString(),
-        },
-      };
-
-      // Save validation results to database
-      try {
-        await prisma.wP_INBOUND_STATUS.update({
-          where: { uuid },
-          data: {
-            validationResults: JSON.stringify(processedValidationResults),
-            updated_at: new Date().toISOString(),
-          },
         });
-        console.log(
-          `[${requestId}] Saved validation results to database for document: ${uuid}`
-        );
-      } catch (dbError) {
-        console.error(
-          `[${requestId}] Error saving validation results to database:`,
-          dbError
-        );
-        // Continue even if saving to database fails
-      }
     }
-
-    // Log success
-    await LoggingService.log({
-      description: `Successfully retrieved validation results from API for document: ${uuid}`,
-      username: req.session?.user?.username || "System",
-      userId: req.session?.user?.id,
-      ipAddress: req.ip,
-      logType: LOG_TYPES.INFO,
-      module: MODULES.API,
-      action: ACTIONS.READ,
-      status: STATUS.SUCCESS,
-    });
-
-    const finalResult = {
-      success: true,
-      validationResults: processedValidationResults,
-      source: "api",
-    };
-
-    console.log('Final API response:', JSON.stringify(finalResult, null, 2));
-    return res.json(finalResult);
-  } catch (error) {
-    console.error("Error fetching validation results:", error);
-
-    // Log the error
-    await LoggingService.log({
-      description: `Error fetching validation results: ${error.message}`,
-      username: req.session?.user?.username || "System",
-      userId: req.session?.user?.id,
-      ipAddress: req.ip,
-      logType: LOG_TYPES.ERROR,
-      module: MODULES.API,
-      action: ACTIONS.READ,
-      status: STATUS.FAILED,
-      details: { error: error.message },
-    });
-
-    // Check if it's an authentication error
-    if (
-      error.message === "Authentication failed. Please log in again." ||
-      error.response?.status === 401 ||
-      error.response?.status === 403
-    ) {
-      return handleAuthError(req, res);
-    }
-
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch validation results",
-      error: {
-        code: error.code || "VALIDATION_ERROR",
-        message: error.message || "An unexpected error occurred",
-        details: error.response?.data?.error || error.stack,
-      },
-    });
-  }
 });
+
+
+// // Validation results endpoint
+// router.get("/documents/:uuid/validation-results", async (req, res) => {
+//   try {
+//     const { uuid } = req.params;
+//     const { refresh } = req.query; // Add refresh parameter to force API fetch
+//     const requestId = req.requestId;
+
+//     console.log(
+//       `[${requestId}] Fetching validation results for document: ${uuid}`
+//     );
+
+//     // Check if user is logged in
+//     if (!req.session?.user) {
+//       console.log(`[${requestId}] No user session found`);
+//       return handleAuthError(req, res);
+//     }
+
+//     // Get LHDN configuration
+//     const lhdnConfig = await getLHDNConfig();
+
+//     // Log the request
+//     await LoggingService.log({
+//       description: `Fetching validation results for document: ${uuid}`,
+//       username: req.session?.user?.username || "System",
+//       userId: req.session?.user?.id,
+//       ipAddress: req.ip,
+//       logType: LOG_TYPES.INFO,
+//       module: MODULES.API,
+//       action: ACTIONS.READ,
+//       status: STATUS.PENDING,
+//     });
+
+//     // First check if we have the validation results in the database (unless refresh is requested)
+//     const dbDocument = await prisma.wP_INBOUND_STATUS.findUnique({
+//       where: { uuid },
+//     });
+
+//     if (dbDocument && dbDocument.validationResults && !refresh) {
+//       console.log(
+//         `[${requestId}] Found validation results in database for document: ${uuid}`
+//       );
+
+//       try {
+//         // Parse validation results
+//         const validationResults = JSON.parse(dbDocument.validationResults);
+
+//         // Process cached validation results through our error mapper
+//         if (validationResults && validationResults.validationSteps) {
+//           console.log(`[${requestId}] Processing cached validation results through error mapper`);
+
+//           validationResults.validationSteps = validationResults.validationSteps.map((step, index) => {
+//             if (step.error && step.error.errors) {
+//               console.log(`[${requestId}] Processing cached step ${index} errors:`, step.error.errors);
+
+//               step.error.errors = step.error.errors.map((err) => {
+//                 // Check if this error needs processing (has [object Object] message)
+//                 if (err.message === '[object Object]' || (typeof err.message === 'string' && err.message.includes('[object Object]'))) {
+//                   console.log(`[${requestId}] Found [object Object] error in cached data, applying error mapping`);
+
+//                   const errorCode = err.code || "VALIDATION_ERROR";
+//                   const mappedError = lhdnErrorMapper.mapError(errorCode, err.message, step.name);
+
+//                   return {
+//                     ...err,
+//                     message: mappedError.userMessage,
+//                     userMessage: mappedError.userMessage,
+//                     guidance: mappedError.guidance,
+//                     severity: mappedError.severity,
+//                     details: mappedError.guidance ? mappedError.guidance.join('; ') : err.details,
+//                     _technical: {
+//                       originalMessage: err.message,
+//                       technicalMessage: mappedError.technicalMessage,
+//                       processedFromCache: true
+//                     }
+//                   };
+//                 }
+//                 return err;
+//               });
+//             }
+//             return step;
+//           });
+//         }
+
+//         // Log success
+//         await LoggingService.log({
+//           description: `Successfully retrieved validation results from database for document: ${uuid}`,
+//           username: req.session?.user?.username || "System",
+//           userId: req.session?.user?.id,
+//           ipAddress: req.ip,
+//           logType: LOG_TYPES.INFO,
+//           module: MODULES.API,
+//           action: ACTIONS.READ,
+//           status: STATUS.SUCCESS,
+//         });
+
+//         return res.json({
+//           success: true,
+//           validationResults,
+//           source: "database",
+//         });
+//       } catch (parseError) {
+//         console.error(
+//           `[${requestId}] Error parsing validation results from database:`,
+//           parseError
+//         );
+//         // Continue to fetch from API if parsing fails
+//       }
+//     }
+
+//     // If not in database or parsing failed, fetch from API
+//     console.log(
+//       `[${requestId}] Fetching validation results from LHDN API for document: ${uuid}`
+//     );
+
+//     // Get document details from LHDN API
+//     const response = await axios.get(
+//       `${lhdnConfig.baseUrl}/api/v1.0/documents/${uuid}/details`,
+//       {
+//         headers: {
+//           Authorization: `Bearer ${req.session.accessToken}`,
+//           "Content-Type": "application/json",
+//         },
+//       }
+//     );
+
+//     const detailsData = response.data;
+
+//     // Process validation results
+//     let processedValidationResults = null;
+//     if (detailsData.validationResults) {
+//       console.log('Raw validation results from LHDN:', JSON.stringify(detailsData.validationResults, null, 2));
+
+//       // Additional debugging for error structures
+//       if (detailsData.validationResults?.validationSteps) {
+//         detailsData.validationResults.validationSteps.forEach((step, index) => {
+//           if (step.error) {
+//             console.log(`Raw LHDN Step ${index} error structure:`, JSON.stringify(step.error, null, 2));
+//             console.log(`Raw LHDN Step ${index} error type:`, typeof step.error);
+//             console.log(`Raw LHDN Step ${index} error keys:`, Object.keys(step.error));
+
+//             if (step.error.errors && Array.isArray(step.error.errors)) {
+//               step.error.errors.forEach((err, errIndex) => {
+//                 console.log(`Raw LHDN Step ${index} Error ${errIndex}:`, JSON.stringify(err, null, 2));
+//                 console.log(`Raw LHDN Step ${index} Error ${errIndex} type:`, typeof err);
+//                 if (err.message) {
+//                   console.log(`Raw LHDN Step ${index} Error ${errIndex} message:`, err.message);
+//                   console.log(`Raw LHDN Step ${index} Error ${errIndex} message type:`, typeof err.message);
+//                 }
+//               });
+//             }
+//           }
+//         });
+//       }
+
+//       processedValidationResults = {
+//         status: detailsData.status,
+//         validationSteps:
+//           detailsData.validationResults.validationSteps?.map((step, index) => {
+//             console.log(`Processing validation step ${index}:`, JSON.stringify(step, null, 2));
+//             let errors = [];
+//             if (step.error) {
+//               console.log(`Step ${index} has error:`, JSON.stringify(step.error, null, 2));
+//               // Helper function to extract meaningful error message
+//               const extractErrorMessage = (errorObj) => {
+//                 console.log('Extracting error message from:', errorObj, 'Type:', typeof errorObj);
+
+//                 if (typeof errorObj === 'string') {
+//                   // Handle [object Object] case
+//                   if (errorObj === '[object Object]') {
+//                     return 'Document validation failed. Please check the document format and try again.';
+//                   }
+//                   return errorObj;
+//                 }
+
+//                 if (typeof errorObj === 'object' && errorObj !== null) {
+//                   // Log the object structure for debugging
+//                   console.log('Error object keys:', Object.keys(errorObj));
+//                   console.log('Error object values:', Object.values(errorObj));
+
+//                   // Try different common error message properties
+//                   if (errorObj.message && typeof errorObj.message === 'string') {
+//                     return errorObj.message === '[object Object]' ?
+//                       'Document validation failed. Please check the document format and try again.' :
+//                       errorObj.message;
+//                   }
+
+//                   if (errorObj.message && typeof errorObj.message === 'object') {
+//                     // Recursively extract from nested message object
+//                     return extractErrorMessage(errorObj.message);
+//                   }
+
+//                   if (errorObj.description) return errorObj.description;
+//                   if (errorObj.detail) return errorObj.detail;
+//                   if (errorObj.errorMessage) return errorObj.errorMessage;
+//                   if (errorObj.userMessage) return errorObj.userMessage;
+//                   if (errorObj.text) return errorObj.text;
+
+//                   if (errorObj.error) {
+//                     return extractErrorMessage(errorObj.error);
+//                   }
+
+//                   // Check for LHDN specific error structures
+//                   if (errorObj.innerError && Array.isArray(errorObj.innerError)) {
+//                     const innerMessages = errorObj.innerError.map(inner => extractErrorMessage(inner)).filter(msg => msg);
+//                     if (innerMessages.length > 0) {
+//                       return innerMessages.join('; ');
+//                     }
+//                   }
+
+//                   // If it's an object with properties, try to create a meaningful message
+//                   const keys = Object.keys(errorObj);
+//                   if (keys.length > 0) {
+//                     // Try to create a readable message from the object properties
+//                     const meaningfulProps = keys.filter(key =>
+//                       typeof errorObj[key] === 'string' &&
+//                       errorObj[key].length > 0 &&
+//                       errorObj[key] !== '[object Object]'
+//                     );
+
+//                     if (meaningfulProps.length > 0) {
+//                       return meaningfulProps.map(key => `${key}: ${errorObj[key]}`).join(', ');
+//                     }
+
+//                     // Fallback to JSON representation
+//                     try {
+//                       const jsonStr = JSON.stringify(errorObj, null, 2);
+//                       console.log('Error object as JSON:', jsonStr);
+
+//                       // Try to extract meaningful information from the JSON
+//                       if (jsonStr.includes('"message"') || jsonStr.includes('"error"')) {
+//                         return `Validation error: ${jsonStr}`;
+//                       }
+
+//                       return 'Document validation failed. Please check the document format and try again.';
+//                     } catch (e) {
+//                       console.error('Failed to stringify error object:', e);
+//                       return 'Complex validation error (unable to parse)';
+//                     }
+//                   }
+//                 }
+//                 return 'Unknown validation error';
+//               };
+
+//               if (Array.isArray(step.error.errors)) {
+//                 errors = step.error.errors.map((err) => {
+//                   const errorCode = err.code || "VALIDATION_ERROR";
+//                   const rawMessage = extractErrorMessage(err);
+//                   const mappedError = lhdnErrorMapper.mapError(errorCode, rawMessage, step.name);
+
+//                   return {
+//                     code: errorCode,
+//                     message: mappedError.userMessage,
+//                     field: err.field || mappedError.field,
+//                     value: err.value || null,
+//                     details: mappedError.guidance ? mappedError.guidance.join('; ') : null,
+//                     userMessage: mappedError.userMessage,
+//                     guidance: mappedError.guidance,
+//                     severity: mappedError.severity,
+//                     _technical: {
+//                       originalMessage: rawMessage,
+//                       technicalMessage: mappedError.technicalMessage
+//                     }
+//                   };
+//                 });
+//               } else if (typeof step.error === "object") {
+//                 const errorCode = step.error.code || "VALIDATION_ERROR";
+//                 const rawMessage = extractErrorMessage(step.error);
+//                 const mappedError = lhdnErrorMapper.mapError(errorCode, rawMessage, step.name);
+
+//                 errors = [
+//                   {
+//                     code: errorCode,
+//                     message: mappedError.userMessage,
+//                     field: step.error.field || mappedError.field,
+//                     value: step.error.value || null,
+//                     details: mappedError.guidance ? mappedError.guidance.join('; ') : null,
+//                     userMessage: mappedError.userMessage,
+//                     guidance: mappedError.guidance,
+//                     severity: mappedError.severity,
+//                     _technical: {
+//                       originalMessage: rawMessage,
+//                       technicalMessage: mappedError.technicalMessage
+//                     }
+//                   },
+//                 ];
+//               } else {
+//                 const rawMessage = extractErrorMessage(step.error);
+//                 const mappedError = lhdnErrorMapper.mapError("VALIDATION_ERROR", rawMessage, step.name);
+
+//                 errors = [
+//                   {
+//                     code: "VALIDATION_ERROR",
+//                     message: mappedError.userMessage,
+//                     field: null,
+//                     value: null,
+//                     details: mappedError.guidance ? mappedError.guidance.join('; ') : null,
+//                     userMessage: mappedError.userMessage,
+//                     guidance: mappedError.guidance,
+//                     severity: mappedError.severity,
+//                     _technical: {
+//                       originalMessage: rawMessage,
+//                       technicalMessage: mappedError.technicalMessage
+//                     }
+//                   },
+//                 ];
+//               }
+//             }
+
+//             const processedStep = {
+//               name: step.name || "Validation Step",
+//               status: step.status || "Invalid",
+//               error: errors.length > 0 ? { errors } : null,
+//               timestamp: step.timestamp || new Date().toISOString(),
+//             };
+
+//             console.log(`Processed step ${index}:`, JSON.stringify(processedStep, null, 2));
+//             return processedStep;
+//           }) || [],
+//         summary: {
+//           totalSteps:
+//             detailsData.validationResults.validationSteps?.length || 0,
+//           failedSteps:
+//             detailsData.validationResults.validationSteps?.filter(
+//               (step) => step.status === "Invalid" || step.error
+//             )?.length || 0,
+//           lastUpdated: new Date().toISOString(),
+//         },
+//       };
+
+//       // Save validation results to database
+//       try {
+//         await prisma.wP_INBOUND_STATUS.update({
+//           where: { uuid },
+//           data: {
+//             validationResults: JSON.stringify(processedValidationResults),
+//             updated_at: new Date().toISOString(),
+//           },
+//         });
+//         console.log(
+//           `[${requestId}] Saved validation results to database for document: ${uuid}`
+//         );
+//       } catch (dbError) {
+//         console.error(
+//           `[${requestId}] Error saving validation results to database:`,
+//           dbError
+//         );
+//         // Continue even if saving to database fails
+//       }
+//     }
+
+//     // Log success
+//     await LoggingService.log({
+//       description: `Successfully retrieved validation results from API for document: ${uuid}`,
+//       username: req.session?.user?.username || "System",
+//       userId: req.session?.user?.id,
+//       ipAddress: req.ip,
+//       logType: LOG_TYPES.INFO,
+//       module: MODULES.API,
+//       action: ACTIONS.READ,
+//       status: STATUS.SUCCESS,
+//     });
+
+//     const finalResult = {
+//       success: true,
+//       validationResults: processedValidationResults,
+//       source: "api",
+//     };
+
+//     console.log('Final API response:', JSON.stringify(finalResult, null, 2));
+//     return res.json(finalResult);
+//   } catch (error) {
+//     console.error("Error fetching validation results:", error);
+
+//     // Log the error
+//     await LoggingService.log({
+//       description: `Error fetching validation results: ${error.message}`,
+//       username: req.session?.user?.username || "System",
+//       userId: req.session?.user?.id,
+//       ipAddress: req.ip,
+//       logType: LOG_TYPES.ERROR,
+//       module: MODULES.API,
+//       action: ACTIONS.READ,
+//       status: STATUS.FAILED,
+//       details: { error: error.message },
+//     });
+
+//     // Check if it's an authentication error
+//     if (
+//       error.message === "Authentication failed. Please log in again." ||
+//       error.response?.status === 401 ||
+//       error.response?.status === 403
+//     ) {
+//       return handleAuthError(req, res);
+//     }
+
+//     return res.status(500).json({
+//       success: false,
+//       message: "Failed to fetch validation results",
+//       error: {
+//         code: error.code || "VALIDATION_ERROR",
+//         message: error.message || "An unexpected error occurred",
+//         details: error.response?.data?.error || error.stack,
+//       },
+//     });
+//   }
+// });
 
 // Check LHDN API status
 router.get("/status", async (req, res) => {
@@ -3154,7 +3506,7 @@ router.get("/auth-status", async (req, res) => {
     // Check token expiry if available
     const now = Date.now();
     const tokenExpiry = req.session.tokenExpiryTime || 0;
-    const bufferTime = 5 * 60 * 1000; // 5 minutes buffer
+    const bufferTime = 3 * 60 * 1000; // 3 minutes buffer (reduced from 5)
 
     if (tokenExpiry && tokenExpiry < now + bufferTime) {
       console.log("LHDN auth-status: Token expired or about to expire");
@@ -3164,7 +3516,8 @@ router.get("/auth-status", async (req, res) => {
         if (newToken) {
           accessToken = newToken;
           req.session.accessToken = newToken;
-          req.session.tokenExpiryTime = now + 3600 * 1000; // Assume 1 hour validity
+          // Use more conservative expiry time to prevent DC511 errors
+          req.session.tokenExpiryTime = now + 45 * 60 * 1000; // 45 minutes instead of 1 hour
           console.log("LHDN auth-status: Successfully refreshed expired token");
         } else {
           return res.status(200).json({
@@ -3262,9 +3615,8 @@ router.post("/documents/refresh", async (req, res) => {
       details: { requestId },
     });
 
-    // Force fetch from API by setting forceRefresh flag and disabling incremental sync
+    // Force fetch from API by setting forceRefresh flag
     req.query.forceRefresh = "true";
-    req.query.incrementalSync = "false";
     const apiData = await fetchRecentDocuments(req);
 
     // Save to database
@@ -3831,6 +4183,56 @@ async function processDocumentData(documentData, detailsData, uuid) {
       );
     }
 
+    // Process validation results if available
+    let validationResults = null;
+    if (detailsData.validationResults) {
+      validationResults = {
+        status: detailsData.status,
+        validationSteps: detailsData.validationResults.validationSteps?.map(step => {
+          let errors = [];
+          if (step.error) {
+            if (Array.isArray(step.error.errors)) {
+              errors = step.error.errors.map(err => ({
+                code: err.code || 'VALIDATION_ERROR',
+                message: err.message || err.toString(),
+                field: err.field || null,
+                value: err.value || null,
+                details: err.details || null
+              }));
+            } else if (typeof step.error === 'object') {
+              errors = [{
+                code: step.error.code || 'VALIDATION_ERROR',
+                message: step.error.message || step.error.toString(),
+                field: step.error.field || null,
+                value: step.error.value || null,
+                details: step.error.details || null
+              }];
+            } else {
+              errors = [{
+                code: 'VALIDATION_ERROR',
+                message: step.error.toString(),
+                field: null,
+                value: null,
+                details: null
+              }];
+            }
+          }
+
+          return {
+            name: step.name || 'Validation Step',
+            status: step.status || 'Invalid',
+            error: errors.length > 0 ? { errors } : null,
+            timestamp: step.timestamp || new Date().toISOString()
+          };
+        }) || [],
+        summary: {
+          totalSteps: detailsData.validationResults.validationSteps?.length || 0,
+          failedSteps: detailsData.validationResults.validationSteps?.filter(step => step.status === 'Invalid' || step.error)?.length || 0,
+          lastUpdated: new Date().toISOString()
+        }
+      };
+    }
+
     // Final structured response
     return {
       uuid: documentData.uuid || uuid,
@@ -3839,6 +4241,7 @@ async function processDocumentData(documentData, detailsData, uuid) {
       irbmlongId: detailsData.longId || "N/A",
       internalId: detailsData.internalId || "N/A",
       status: detailsData.status || "Unknown",
+      validationResults: validationResults,
       dateTimeIssued:
         detailsData.dateTimeIssued || invoice.IssueDate?.[0] || "N/A",
       dateTimeReceived: detailsData.dateTimeReceived || "N/A",
@@ -5205,7 +5608,7 @@ router.post("/documents/:uuid/pdf", async (req, res) => {
       `[${requestId}] Launching browser with enhanced configuration...`
     );
 
-    // Enhanced Puppeteer configuration with multiple fallback options
+    // Enhanced Puppeteer configuration with Windows-specific fixes
     const launchOptions = {
       headless: "new",
       args: [
@@ -5223,28 +5626,56 @@ router.post("/documents/:uuid/pdf", async (req, res) => {
         "--disable-backgrounding-occluded-windows",
         "--disable-renderer-backgrounding",
         "--disable-ipc-flooding-protection",
+        // Windows-specific args to handle permission issues
+        "--disable-software-rasterizer",
+        "--disable-background-networking",
+        "--disable-default-apps",
+        "--disable-sync",
+        "--metrics-recording-only",
+        "--no-first-run",
+        "--safebrowsing-disable-auto-update",
+        "--disable-component-update",
+        "--disable-domain-reliability"
       ],
-      timeout: 60000,
+      timeout: 90000, // Increased timeout for Windows
+      // Windows-specific options
+      ignoreDefaultArgs: ['--disable-extensions'],
+      dumpio: false, // Disable stdio forwarding to prevent permission issues
     };
 
-    // Try system Chrome first, then fallback to bundled Chrome
+    // Enhanced Chrome detection and permission handling
     let browser = null;
     let usingSystemChrome = false;
     let systemChromeError = null;
 
-    if (process.env.PUPPETEER_CHROMIUM_EXECUTABLE_PATH) {
+    // Windows Chrome paths with permission checking
+    const windowsChromePaths = [
+      process.env.PUPPETEER_CHROMIUM_EXECUTABLE_PATH,
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+      process.env.LOCALAPPDATA + "\\Google\\Chrome\\Application\\chrome.exe",
+      process.env.PROGRAMFILES + "\\Google\\Chrome\\Application\\chrome.exe",
+    ].filter(Boolean);
+
+    // Try system Chrome with permission validation
+    for (const chromePath of windowsChromePaths) {
       try {
-        await fsPromises.access(process.env.PUPPETEER_CHROMIUM_EXECUTABLE_PATH);
-        launchOptions.executablePath =
-          process.env.PUPPETEER_CHROMIUM_EXECUTABLE_PATH;
-        browser = await puppeteer.launch(launchOptions);
+        console.log(`[${requestId}] Checking Chrome at: ${chromePath}`);
+
+        // Check if file exists and is executable
+        await fsPromises.access(chromePath, fsPromises.constants.F_OK | fsPromises.constants.X_OK);
+
+        const chromeOptions = { ...launchOptions, executablePath: chromePath };
+        browser = await puppeteer.launch(chromeOptions);
         usingSystemChrome = true;
-        console.log(
-          `[${requestId}] Using system Chrome: ${process.env.PUPPETEER_CHROMIUM_EXECUTABLE_PATH}`
-        );
+        console.log(`[${requestId}] Successfully launched system Chrome: ${chromePath}`);
+        break;
       } catch (error) {
         systemChromeError = error;
-        console.log(`[${requestId}] System Chrome failed: ${error.message}`);
+        console.log(`[${requestId}] Chrome at ${chromePath} failed: ${error.message}`);
+        if (error.code === 'EACCES') {
+          console.log(`[${requestId}] Permission denied for ${chromePath}`);
+        }
       }
     }
 
@@ -5283,25 +5714,53 @@ router.post("/documents/:uuid/pdf", async (req, res) => {
       }
     }
 
-    const page = await browser.newPage();
-    await page.setViewport({ width: 794, height: 1123, deviceScaleFactor: 2 });
+    // Use enhanced PDF generation service with fallback options
+    console.log(`[${requestId}] Using enhanced PDF generation service...`);
 
-    console.log(`[${requestId}] Setting page content...`);
-    await page.setContent(html, { waitUntil: "networkidle0" });
+    let pdfBuffer;
+    try {
+      // Close browser if it was opened (we'll let the service handle browser management)
+      if (browser) {
+        await browser.close();
+        browser = null;
+      }
 
-    console.log(`[${requestId}] Generating PDF...`);
-    const pdfBuffer = await page.pdf({
-      format: "A4",
-      printBackground: true,
-      margin: { top: "1cm", right: "1cm", bottom: "1cm", left: "1cm" },
-    });
+      // Use the enhanced PDF generation service
+      pdfBuffer = await pdfGenerationService.generatePDF(html, {
+        requestId,
+        uuid,
+        format: "A4",
+        printBackground: true,
+        margin: { top: "1cm", right: "1cm", bottom: "1cm", left: "1cm" },
+      });
 
-    await browser.close();
-    console.log(
-      `[${requestId}] PDF generated successfully using ${
-        usingSystemChrome ? "system" : "bundled"
-      } Chrome`
-    );
+      console.log(`[${requestId}] PDF generated successfully using enhanced service`);
+    } catch (serviceError) {
+      console.error(`[${requestId}] Enhanced PDF service failed, falling back to original method:`, serviceError.message);
+
+      // Fallback to original Puppeteer method if service fails
+      if (!browser) {
+        // Re-launch browser for fallback
+        browser = await puppeteer.launch({
+          headless: "new",
+          args: ["--no-sandbox", "--disable-setuid-sandbox"],
+          timeout: 60000,
+        });
+      }
+
+      const page = await browser.newPage();
+      await page.setViewport({ width: 794, height: 1123, deviceScaleFactor: 2 });
+      await page.setContent(html, { waitUntil: "networkidle0" });
+
+      pdfBuffer = await page.pdf({
+        format: "A4",
+        printBackground: true,
+        margin: { top: "1cm", right: "1cm", bottom: "1cm", left: "1cm" },
+      });
+
+      await browser.close();
+      console.log(`[${requestId}] PDF generated using fallback method`);
+    }
 
     // Save files
     console.log(`[${requestId}] Saving PDF and hash...`);
@@ -5330,7 +5789,10 @@ router.post("/documents/:uuid/pdf", async (req, res) => {
     // Handle specific PDF generation errors
     if (
       error.message.includes("Failed to launch the browser process") ||
-      error.message.includes("chrome-pdf")
+      error.message.includes("chrome-pdf") ||
+      error.message.includes("All Chrome configurations failed") ||
+      error.message.includes("Protocol error") ||
+      error.message.includes("Target closed")
     ) {
       return res.status(500).json({
         success: false,
@@ -5339,6 +5801,7 @@ router.post("/documents/:uuid/pdf", async (req, res) => {
         details:
           "PDF generation service encountered an error. This may be temporary.",
         troubleshooting: "Please contact support if the issue persists.",
+        errorType: "BROWSER_LAUNCH_ERROR"
       });
     }
 
@@ -5604,8 +6067,8 @@ router.post("/documents/refresh", async (req, res) => {
       const pageSize = 100;
       let hasMorePages = true;
 
-      // Fetch up to configurable number of pages for full refresh
-      const maxPages = parseInt(process.env.MAX_FULL_SYNC_PAGES) || 200; // Increased from 5 to 200
+      // Fetch up to 5 pages (500 documents)
+      const maxPages = 5;
 
       while (hasMorePages && pageNo <= maxPages) {
         try {
@@ -5632,12 +6095,11 @@ router.post("/documents/refresh", async (req, res) => {
 
           const pageDocuments = response.data.result || [];
           console.log(
-            `Fetched ${pageDocuments.length} documents from page ${pageNo}/${maxPages}`
+            `Fetched ${pageDocuments.length} documents from page ${pageNo}`
           );
 
           // If we got fewer documents than pageSize, we've reached the end
           if (pageDocuments.length < pageSize) {
-            console.log(`Reached end of data: got ${pageDocuments.length}/${pageSize} documents`);
             hasMorePages = false;
           }
 
@@ -5886,22 +6348,17 @@ router.post("/documents/refresh", async (req, res) => {
 // Sync strategy configuration endpoint
 router.get("/sync/config", async (req, res) => {
   try {
-    // Get current sync configuration - Updated for MyInvois API compliance
+    // Get current sync configuration
     const config = {
       syncStrategy: "incremental", // Default strategy
       incrementalSync: true,
-      maxIncrementalPages: parseInt(process.env.MAX_INCREMENTAL_PAGES) || 50, // Updated from 5
-      maxFullSyncPages: parseInt(process.env.MAX_FULL_SYNC_PAGES) || 200,
+      maxIncrementalPages: 5,
       syncThresholdMinutes: 15,
       rateLimitHandling: {
         enabled: true,
         adaptiveDelay: true,
-        baseDelay: 5000, // Updated to comply with 12 RPM limit
+        baseDelay: 500,
         maxDelay: 60000,
-        myinvoisCompliance: {
-          rpmLimit: 12,
-          minDelayMs: 5000, // 60000ms / 12 RPM = 5000ms minimum
-        }
       },
       paginationControl: {
         smartPagination: true,
@@ -5909,7 +6366,6 @@ router.get("/sync/config", async (req, res) => {
         maxConsecutiveErrors: 3,
         pageSize: 100,
       },
-      apiUsageWarning: "This API is for troubleshooting only, not bulk reconciliation",
     };
 
     res.json({

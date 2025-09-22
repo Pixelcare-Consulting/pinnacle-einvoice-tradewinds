@@ -277,6 +277,13 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
+// Cleanup on page unload
+window.addEventListener('beforeunload', function() {
+    if (window.realTimeQueueMonitor) {
+        window.realTimeQueueMonitor.destroy();
+    }
+});
+
 // Export for use in other modules
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = RealTimeQueueMonitor;

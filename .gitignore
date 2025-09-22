@@ -14,7 +14,6 @@ yarn.lock
 .env*
 !.env.template
 !.env.example
-config/
 ssl/
 certificates/
 *.p12
