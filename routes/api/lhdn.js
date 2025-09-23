@@ -6,7 +6,6 @@ const path = require("path");
 const fs = require("fs");
 const fsPromises = fs.promises;
 const jsrender = require("jsrender");
-const puppeteer = require("puppeteer");
 const QRCode = require("qrcode");
 const pdfGenerationService = require("../../services/pdf-generation.service");
 const { logger, apiLogger, versionLogger } = require("../../utils/logger");
@@ -5577,13 +5576,35 @@ router.post("/documents/:uuid/pdf", async (req, res) => {
         });
 
         if (storedHash === currentHash) {
-          console.log(`[${requestId}] Using cached PDF`);
-          return res.json({
-            success: true,
-            url: `/temp/${uuid}.pdf`,
-            cached: true,
-            message: "Loading existing PDF from cache...",
-          });
+          // Check if the actual PDF file exists before returning cached response
+          const htmlPath = path.join(tempDir, `${uuid}.html`);
+
+          try {
+            await fsPromises.access(pdfPath);
+            console.log(`[${requestId}] Using cached PDF - file exists`);
+            return res.json({
+              success: true,
+              url: `/temp/${uuid}.pdf`,
+              cached: true,
+              message: "Loading existing PDF from cache...",
+            });
+          } catch (pdfError) {
+            // PDF doesn't exist, check for HTML fallback
+            try {
+              await fsPromises.access(htmlPath);
+              console.log(`[${requestId}] Using cached HTML fallback - file exists`);
+              return res.json({
+                success: true,
+                url: `/temp/${uuid}.html`,
+                cached: true,
+                message: "Loading existing HTML fallback from cache...",
+                isEmergencyFallback: true,
+              });
+            } catch (htmlError) {
+              console.log(`[${requestId}] Neither PDF nor HTML cached file exists, regenerating...`);
+              // Neither file exists, continue to regeneration
+            }
+          }
         }
       } catch (error) {
         console.log(`[${requestId}] Cache check failed:`, error.message);
@@ -5605,127 +5626,16 @@ router.post("/documents/:uuid/pdf", async (req, res) => {
     const html = template.render(templateData);
 
     console.log(
-      `[${requestId}] Launching browser with enhanced configuration...`
+      `[${requestId}] Using enhanced PDF generation service directly...`
     );
 
-    // Enhanced Puppeteer configuration with Windows-specific fixes
-    const launchOptions = {
-      headless: "new",
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--disable-web-security",
-        "--disable-features=VizDisplayCompositor",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-default-apps",
-        "--disable-extensions",
-        "--disable-background-timer-throttling",
-        "--disable-backgrounding-occluded-windows",
-        "--disable-renderer-backgrounding",
-        "--disable-ipc-flooding-protection",
-        // Windows-specific args to handle permission issues
-        "--disable-software-rasterizer",
-        "--disable-background-networking",
-        "--disable-default-apps",
-        "--disable-sync",
-        "--metrics-recording-only",
-        "--no-first-run",
-        "--safebrowsing-disable-auto-update",
-        "--disable-component-update",
-        "--disable-domain-reliability"
-      ],
-      timeout: 90000, // Increased timeout for Windows
-      // Windows-specific options
-      ignoreDefaultArgs: ['--disable-extensions'],
-      dumpio: false, // Disable stdio forwarding to prevent permission issues
-    };
-
-    // Enhanced Chrome detection and permission handling
-    let browser = null;
-    let usingSystemChrome = false;
-    let systemChromeError = null;
-
-    // Windows Chrome paths with permission checking
-    const windowsChromePaths = [
-      process.env.PUPPETEER_CHROMIUM_EXECUTABLE_PATH,
-      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-      "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-      process.env.LOCALAPPDATA + "\\Google\\Chrome\\Application\\chrome.exe",
-      process.env.PROGRAMFILES + "\\Google\\Chrome\\Application\\chrome.exe",
-    ].filter(Boolean);
-
-    // Try system Chrome with permission validation
-    for (const chromePath of windowsChromePaths) {
-      try {
-        console.log(`[${requestId}] Checking Chrome at: ${chromePath}`);
-
-        // Check if file exists and is executable
-        await fsPromises.access(chromePath, fsPromises.constants.F_OK | fsPromises.constants.X_OK);
-
-        const chromeOptions = { ...launchOptions, executablePath: chromePath };
-        browser = await puppeteer.launch(chromeOptions);
-        usingSystemChrome = true;
-        console.log(`[${requestId}] Successfully launched system Chrome: ${chromePath}`);
-        break;
-      } catch (error) {
-        systemChromeError = error;
-        console.log(`[${requestId}] Chrome at ${chromePath} failed: ${error.message}`);
-        if (error.code === 'EACCES') {
-          console.log(`[${requestId}] Permission denied for ${chromePath}`);
-        }
-      }
-    }
-
-    // Fallback to bundled Chrome if system Chrome failed
-    if (!browser) {
-      try {
-        delete launchOptions.executablePath;
-        browser = await puppeteer.launch(launchOptions);
-        console.log(`[${requestId}] Using bundled Chrome as fallback`);
-      } catch (bundledChromeError) {
-        console.log(
-          `[${requestId}] Bundled Chrome failed: ${bundledChromeError.message}`
-        );
-
-        // Final fallback with minimal arguments
-        try {
-          console.log(`[${requestId}] Trying minimal Chrome configuration...`);
-          browser = await puppeteer.launch({
-            headless: "new",
-            args: ["--no-sandbox"],
-            timeout: 30000,
-          });
-          console.log(`[${requestId}] Minimal Chrome configuration successful`);
-        } catch (minimalChromeError) {
-          console.log(
-            `[${requestId}] Minimal Chrome failed: ${minimalChromeError.message}`
-          );
-          throw new Error(
-            `All Chrome configurations failed. System: ${
-              systemChromeError?.message || "N/A"
-            }, Bundled: ${bundledChromeError.message}, Minimal: ${
-              minimalChromeError.message
-            }`
-          );
-        }
-      }
-    }
-
-    // Use enhanced PDF generation service with fallback options
-    console.log(`[${requestId}] Using enhanced PDF generation service...`);
+    // Generate PDF using enhanced PDF generation service
+    console.log(`[${requestId}] Generating PDF using enhanced service...`);
 
     let pdfBuffer;
+    let isEmergencyFallback = false;
     try {
-      // Close browser if it was opened (we'll let the service handle browser management)
-      if (browser) {
-        await browser.close();
-        browser = null;
-      }
-
-      // Use the enhanced PDF generation service
+      // Use the enhanced PDF generation service directly
       pdfBuffer = await pdfGenerationService.generatePDF(html, {
         requestId,
         uuid,
@@ -5734,51 +5644,59 @@ router.post("/documents/:uuid/pdf", async (req, res) => {
         margin: { top: "1cm", right: "1cm", bottom: "1cm", left: "1cm" },
       });
 
-      console.log(`[${requestId}] PDF generated successfully using enhanced service`);
-    } catch (serviceError) {
-      console.error(`[${requestId}] Enhanced PDF service failed, falling back to original method:`, serviceError.message);
-
-      // Fallback to original Puppeteer method if service fails
-      if (!browser) {
-        // Re-launch browser for fallback
-        browser = await puppeteer.launch({
-          headless: "new",
-          args: ["--no-sandbox", "--disable-setuid-sandbox"],
-          timeout: 60000,
-        });
+      // Check if this is an emergency HTML fallback
+      const bufferString = pdfBuffer.toString('utf8');
+      if (bufferString.includes('Emergency PDF Fallback')) {
+        isEmergencyFallback = true;
+        console.log(`[${requestId}] Emergency HTML fallback generated due to permission issues`);
+      } else {
+        console.log(`[${requestId}] PDF generated successfully using enhanced service`);
       }
-
-      const page = await browser.newPage();
-      await page.setViewport({ width: 794, height: 1123, deviceScaleFactor: 2 });
-      await page.setContent(html, { waitUntil: "networkidle0" });
-
-      pdfBuffer = await page.pdf({
-        format: "A4",
-        printBackground: true,
-        margin: { top: "1cm", right: "1cm", bottom: "1cm", left: "1cm" },
-      });
-
-      await browser.close();
-      console.log(`[${requestId}] PDF generated using fallback method`);
+    } catch (serviceError) {
+      console.error(`[${requestId}] Enhanced PDF service failed:`, serviceError.message);
+      throw new Error(`PDF generation service error. Please try again.`);
     }
 
-    // Save files
-    console.log(`[${requestId}] Saving PDF and hash...`);
-    await fsPromises.writeFile(pdfPath, pdfBuffer);
-    await fsPromises.writeFile(hashPath, newHash);
+    // Save files - handle both PDF and HTML fallback
+    if (isEmergencyFallback) {
+      // Save as HTML file for emergency fallback
+      const htmlPath = path.join(tempDir, `${uuid}.html`);
+      console.log(`[${requestId}] Saving emergency HTML fallback...`);
+      await fsPromises.writeFile(htmlPath, pdfBuffer);
+      await fsPromises.writeFile(hashPath, newHash);
 
-    console.log(`[${requestId}] PDF generated successfully:`, {
-      path: pdfPath,
-      hash: newHash.substring(0, 8),
-      size: pdfBuffer.length,
-    });
+      console.log(`[${requestId}] Emergency HTML fallback saved:`, {
+        path: htmlPath,
+        hash: newHash.substring(0, 8),
+        size: pdfBuffer.length,
+      });
 
-    return res.json({
-      success: true,
-      url: `/temp/${uuid}.pdf`,
-      cached: false,
-      message: "New PDF generated successfully",
-    });
+      return res.json({
+        success: true,
+        url: `/temp/${uuid}.html`,
+        cached: false,
+        message: "Emergency HTML fallback generated - PDF unavailable due to system permissions",
+        isEmergencyFallback: true,
+      });
+    } else {
+      // Save as normal PDF
+      console.log(`[${requestId}] Saving PDF and hash...`);
+      await fsPromises.writeFile(pdfPath, pdfBuffer);
+      await fsPromises.writeFile(hashPath, newHash);
+
+      console.log(`[${requestId}] PDF generated successfully:`, {
+        path: pdfPath,
+        hash: newHash.substring(0, 8),
+        size: pdfBuffer.length,
+      });
+
+      return res.json({
+        success: true,
+        url: `/temp/${uuid}.pdf`,
+        cached: false,
+        message: "New PDF generated successfully",
+      });
+    }
   } catch (error) {
     console.error(`[${requestId}] PDF Generation Error:`, {
       message: error.message,

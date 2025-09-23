@@ -5,6 +5,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Initialize event listeners
     initializeEventListeners();
+
+    // Initialize tooltips globally
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    tooltipTriggerList.map(function (tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
 });
 
 // Global variables for user management
@@ -186,37 +192,58 @@ function displayUsers(users) {
 
         const tr = document.createElement('tr');
         tr.innerHTML = `
-            <td>${escapeHtml(user.FullName)}</td>
             <td>
-                <div class="user-info">
-                    <div>${escapeHtml(user.Email)}</div>
-                    <small class="text-muted">${escapeHtml(user.Username || '')}</small>
+                <div class="d-flex align-items-center">
+                    <div class="user-avatar me-3">
+                        <i class="fas fa-user text-muted"></i>
+                    </div>
+                    <div>
+                        <div class="fw-bold text-dark">${escapeHtml(user.FullName)}</div>
+                        <small class="text-muted">@${escapeHtml(user.Username || '')}</small>
+                    </div>
                 </div>
             </td>
             <td>
-                <div class="badge-group">
-                    <span class="badge ${user.Admin ? 'badge bg-info' : 'bg-secondary'}">${user.Admin ? 'Administrator' : 'User'}</span>
-                </div>
+                <div class="text-dark">${escapeHtml(user.Email)}</div>
+                ${user.Phone ? `<small class="text-muted d-block">${escapeHtml(user.Phone)}</small>` : ''}
             </td>
             <td>
-                <div class="status-group">
-                    <span class="badge ${user.ValidStatus === '1' ? 'bg-success' : 'bg-danger'}">${user.ValidStatus === '1' ? 'Active' : 'Inactive'}</span>
-                </div>
+                <span class="role-badge ${user.Admin ? 'admin' : 'regular'}">
+                    <i class="fas ${user.Admin ? 'fa-crown' : 'fa-user'} me-1"></i>
+                    ${user.Admin ? 'Administrator' : 'Regular User'}
+                </span>
             </td>
-            <td>${user.LastLoginTime ? new Date(user.LastLoginTime).toLocaleString() : 'Never'}</td>
             <td>
-                <div class="btn-group">
-                    <button class="btn btn-sm btn-primary" onclick="editUser(${user.ID || 0})" title="Edit User">
+                <span class="status-badge ${user.ValidStatus === '1' || user.ValidStatus === 'Active' ? 'active' : 'inactive'}">
+                    <i class="fas ${user.ValidStatus === '1' || user.ValidStatus === 'Active' ? 'fa-check-circle' : 'fa-times-circle'} me-1"></i>
+                    ${user.ValidStatus === '1' || user.ValidStatus === 'Active' ? 'Active' : 'Inactive'}
+                </span>
+            </td>
+            <td>
+                <div class="text-dark">${user.LastLoginTime ? new Date(user.LastLoginTime).toLocaleDateString() : 'Never'}</div>
+                ${user.LastLoginTime ? `<small class="text-muted">${new Date(user.LastLoginTime).toLocaleTimeString()}</small>` : ''}
+            </td>
+            <td>
+                <div class="user-actions">
+                    <button type="button" class="action-btn view" onclick="viewDetails(${user.ID || 0})" title="View Details" data-bs-toggle="tooltip">
+                        <i class="fas fa-eye"></i>
+                    </button>
+                    <button type="button" class="action-btn edit" onclick="editUser(${user.ID || 0})" title="Edit User" data-bs-toggle="tooltip">
                         <i class="fas fa-edit"></i>
                     </button>
-
-                    <button class="btn btn-sm btn-danger" onclick="deleteUser(${user.ID || 0})" title="Delete User">
+                    <button type="button" class="action-btn delete" onclick="deleteUser(${user.ID || 0})" title="Delete User" data-bs-toggle="tooltip">
                         <i class="fas fa-trash"></i>
                     </button>
                 </div>
             </td>
         `;
         tbody.appendChild(tr);
+    });
+
+    // Initialize tooltips for action buttons
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    tooltipTriggerList.map(function (tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl);
     });
 }
 
@@ -535,7 +562,13 @@ async function loadCompanyTINs(selectId, selectedTIN = '') {
 async function editUser(userId) {
     try {
         const response = await fetch(`/api/user/users-list/${userId}`);
-        const userData = await response.json();
+        const apiResponse = await response.json();
+
+        if (!apiResponse || !apiResponse.success || !apiResponse.user) {
+            throw new Error('Failed to fetch user data');
+        }
+
+        const userData = apiResponse.user;
 
         const modalHtml = `
             <div class="modal fade" id="editUserModal" tabindex="-1" aria-labelledby="editUserModalLabel" aria-hidden="true">
@@ -811,26 +844,86 @@ function generateNewPassword(inputId) {
     icon.classList.add('fa-eye-slash');
 }
 
-// Delete user
+// Delete user with enhanced confirmation modal
 async function deleteUser(userId) {
-    if (!confirm('Are you sure you want to delete this user?')) return;
-
     try {
-        const response = await fetch(`/api/user/users-delete/${userId}`, {
-            method: 'DELETE'
+        console.log('Deleting user with ID:', userId);
+
+        // First, get user details for the confirmation modal
+        const userResponse = await fetch(`/api/user/users-list/${userId}`);
+        if (!userResponse.ok) {
+            throw new Error(`Failed to fetch user details: ${userResponse.status}`);
+        }
+
+        const response = await userResponse.json();
+        console.log('User data response for deletion:', response);
+
+        // Check if the response has the expected structure
+        if (!response || !response.success || !response.user) {
+            throw new Error('Invalid user data received');
+        }
+
+        const userData = response.user;
+        console.log('Extracted user data:', userData);
+
+        // Populate the delete confirmation modal
+        const nameElement = document.getElementById('deleteUserName');
+        const emailElement = document.getElementById('deleteUserEmail');
+        const roleElement = document.getElementById('deleteUserRole');
+
+        if (nameElement) nameElement.textContent = userData.FullName || 'Unknown User';
+        if (emailElement) emailElement.textContent = userData.Email || 'No email';
+        if (roleElement) roleElement.textContent = userData.Admin ? 'Administrator' : 'Regular User';
+
+        // Show the delete confirmation modal
+        const deleteModal = new bootstrap.Modal(document.getElementById('deleteUserModal'));
+        deleteModal.show();
+
+        // Handle the confirmation button click
+        const confirmBtn = document.getElementById('confirmDeleteBtn');
+        const newConfirmBtn = confirmBtn.cloneNode(true);
+        confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
+
+        newConfirmBtn.addEventListener('click', async () => {
+            // Show loading state
+            newConfirmBtn.disabled = true;
+            newConfirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Deleting...';
+
+            try {
+                const deleteResponse = await fetch(`/api/user/users-delete/${userId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                });
+
+                if (!deleteResponse.ok) {
+                    throw new Error(`HTTP error! status: ${deleteResponse.status}`);
+                }
+
+                const deleteData = await deleteResponse.json();
+
+                if (deleteData.success) {
+                    deleteModal.hide();
+                    showToast('success', deleteData.message || 'User deleted successfully');
+                    loadUsersList();
+                } else {
+                    throw new Error(deleteData.message || 'Failed to delete user');
+                }
+            } catch (error) {
+                console.error('Error deleting user:', error);
+                showToast('error', error.message || 'Failed to delete user. Please try again.');
+            } finally {
+                // Reset button state
+                newConfirmBtn.disabled = false;
+                newConfirmBtn.innerHTML = '<i class="fas fa-trash me-1"></i> Delete User';
+            }
         });
 
-        const data = await response.json();
-
-        if (data.success) {
-            showToast('success', 'User deleted successfully');
-            loadUsersList();
-        } else {
-            showToast('error', data.message || 'Failed to delete user');
-        }
     } catch (error) {
-        console.error('Error deleting user:', error);
-        showToast('error', 'Failed to delete user');
+        console.error('Error preparing delete confirmation:', error);
+        showToast('error', 'Failed to load user details for deletion');
     }
 }
 
@@ -938,8 +1031,23 @@ function filterUsers(searchTerm) {
 // View user details
 async function viewDetails(userId) {
     try {
+        console.log('Fetching user details for ID:', userId);
         const response = await fetch(`/api/user/users-list/${userId}`);
-        const userData = await response.json();
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const apiResponse = await response.json();
+        console.log('User data response received:', apiResponse);
+
+        // Check if the response has the expected structure
+        if (!apiResponse || !apiResponse.success || !apiResponse.user) {
+            throw new Error('Invalid user data received');
+        }
+
+        const userData = apiResponse.user;
+        console.log('Extracted user data:', userData);
 
         const modal = new bootstrap.Modal(document.getElementById('userDetailsModal'));
         const modalBody = document.querySelector('#userDetailsModal .modal-body');
@@ -954,56 +1062,74 @@ async function viewDetails(userId) {
         modalBody.innerHTML = `
             <div class="user-details-container">
                 <div class="user-profile-section">
-                    <img src="${profilePicUrl}"
-                         alt="Profile Picture" class="profile-picture">
-                    <h4>${escapeHtml(userData.FullName)}</h4>
-                    <p class="text-muted">${escapeHtml(userData.Username)}</p>
+                    <img src="${profilePicUrl}" alt="Profile Picture" class="profile-picture">
+                    <h4 class="mb-0">${escapeHtml(userData.FullName || 'N/A')}</h4>
+                    <p class="text-muted mb-0">${escapeHtml(userData.Username || 'N/A')}</p>
                 </div>
 
                 <div class="details-grid">
                     <div class="detail-item">
-                        <label>Email:</label>
-                        <span>${escapeHtml(userData.Email)}</span>
+                        <label>Email</label>
+                        <span>${escapeHtml(userData.Email || 'N/A')}</span>
                     </div>
                     <div class="detail-item">
-                        <label>Phone:</label>
+                        <label>Phone</label>
                         <span>${escapeHtml(userData.Phone || '-')}</span>
                     </div>
                     <div class="detail-item">
-                        <label>TIN:</label>
+                        <label>TIN</label>
                         <span>${escapeHtml(userData.TIN || '-')}</span>
                     </div>
                     <div class="detail-item">
-                        <label>ID Type:</label>
+                        <label>ID Type</label>
                         <span>${escapeHtml(userData.IDType || '-')}</span>
                     </div>
                     <div class="detail-item">
-                        <label>ID Value:</label>
+                        <label>ID Value</label>
                         <span>${escapeHtml(userData.IDValue || '-')}</span>
                     </div>
                     <div class="detail-item">
-                        <label>User Type:</label>
+                        <label>User Type</label>
                         <span>${escapeHtml(userData.UserType || 'Standard')}</span>
                     </div>
                     <div class="detail-item">
-                        <label>Created:</label>
-                        <span>${new Date(userData.CreateTS).toLocaleString()}</span>
+                        <label>Role</label>
+                        <span>
+                            <span class="badge ${userData.Admin ? 'bg-primary' : 'bg-secondary'}">
+                                <i class="fas ${userData.Admin ? 'fa-user-shield' : 'fa-user'} me-1"></i>
+                                ${userData.Admin ? 'Administrator' : 'Regular User'}
+                            </span>
+                        </span>
                     </div>
                     <div class="detail-item">
-                        <label>Last Login:</label>
+                        <label>Status</label>
+                        <span>
+                            <span class="badge ${userData.ValidStatus === '1' || userData.ValidStatus === 'Active' ? 'bg-success' : 'bg-danger'}">
+                                <i class="fas ${userData.ValidStatus === '1' || userData.ValidStatus === 'Active' ? 'fa-check-circle' : 'fa-times-circle'} me-1"></i>
+                                ${userData.ValidStatus === '1' || userData.ValidStatus === 'Active' ? 'Active' : 'Inactive'}
+                            </span>
+                            ${userData.TwoFactorEnabled ? '<span class="badge bg-warning ms-1"><i class="fas fa-shield-alt me-1"></i>2FA</span>' : ''}
+                        </span>
+                    </div>
+                    <div class="detail-item">
+                        <label>Created</label>
+                        <span>${userData.CreateTS ? new Date(userData.CreateTS).toLocaleString() : 'N/A'}</span>
+                    </div>
+                    <div class="detail-item">
+                        <label>Last Login</label>
                         <span>${userData.LastLoginTime ? new Date(userData.LastLoginTime).toLocaleString() : 'Never'}</span>
                     </div>
                 </div>
 
-                <div class="user-settings-section">
+                <div class="user-settings-section mt-4">
                     <h5>Security Settings</h5>
                     <div class="settings-grid">
                         <div class="setting-item">
-                            <i class="fas ${userData.TwoFactorEnabled ? 'fa-check-circle text-success' : 'fa-times-circle text-danger'}"></i>
+                            <i class="fas ${userData.TwoFactorEnabled ? 'fa-check-circle text-success' : 'fa-times-circle text-danger'} me-2"></i>
                             Two-Factor Authentication
                         </div>
                         <div class="setting-item">
-                            <i class="fas ${userData.NotificationsEnabled ? 'fa-check-circle text-success' : 'fa-times-circle text-danger'}"></i>
+                            <i class="fas ${userData.NotificationsEnabled ? 'fa-check-circle text-success' : 'fa-times-circle text-danger'} me-2"></i>
                             Notifications
                         </div>
                     </div>
@@ -1011,10 +1137,16 @@ async function viewDetails(userId) {
             </div>
         `;
 
+        // Update the modal footer edit button to have the correct user ID
+        const editButton = document.querySelector('#userDetailsModal .modal-footer .btn-primary');
+        if (editButton) {
+            editButton.onclick = () => editUser(userData.ID);
+        }
+
         modal.show();
     } catch (error) {
         console.error('Error fetching user details:', error);
-        showToast('error', 'Failed to load user details');
+        showToast('error', `Failed to load user details: ${error.message}`);
     }
 }
 

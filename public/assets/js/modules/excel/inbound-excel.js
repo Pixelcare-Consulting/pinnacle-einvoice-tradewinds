@@ -5475,7 +5475,7 @@ async function loadPDF(uuid, documentData) {
     // Short delay to show the final status message
     await new Promise((resolve) => setTimeout(resolve, 800));
 
-    // Create iframe for PDF with loading handler
+    // Create iframe for PDF with loading handler (works for both PDF and HTML)
     const iframeHtml = `
       <iframe id="pdfViewer"
               class="w-100 h-100"
@@ -5516,17 +5516,23 @@ async function loadPDF(uuid, documentData) {
       `;
     } else if (
       error.message.includes("Failed to launch") ||
-      error.message.includes("chrome-pdf")
+      error.message.includes("chrome-pdf") ||
+      error.message.includes("EACCES") ||
+      error.message.includes("permission")
     ) {
       errorMessage =
-        "PDF generation service is temporarily unavailable. Please try again later.";
+        "PDF generation service is temporarily unavailable due to system permissions. Please contact your administrator.";
       retryButton = `
-        <button class="btn btn-outline-danger btn-sm ms-3"
+        <button class="btn btn-outline-warning btn-sm ms-3"
                 onclick="loadPDF('${uuid}', ${JSON.stringify(
         documentData
       ).replace(/"/g, "&quot;")})">
           <i class="bi bi-arrow-clockwise me-1"></i>Retry
         </button>
+        <small class="d-block mt-2 text-muted">
+          <i class="bi bi-info-circle me-1"></i>
+          If this persists, the system may generate HTML documents instead of PDFs.
+        </small>
       `;
     } else {
       retryButton = `

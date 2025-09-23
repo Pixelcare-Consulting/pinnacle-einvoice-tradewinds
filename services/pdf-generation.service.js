@@ -10,9 +10,10 @@ const { getJsReport } = require('./jsreport.service');
 
 class PDFGenerationService {
   constructor() {
-    this.methods = ['puppeteer', 'jsreport', 'html-pdf'];
+    // Re-enable all PDF generation methods with proper Windows support
+    this.methods = ['puppeteer', 'jsreport', 'html-pdf']; // Try all methods in order
     this.currentMethod = 'puppeteer';
-    this.failedMethods = new Set();
+    this.failedMethods = new Set(); // Clear failed methods to allow retry
   }
 
   /**
@@ -45,7 +46,9 @@ class PDFGenerationService {
       }
     }
 
-    throw new Error('All PDF generation methods failed');
+    // All PDF methods failed - return emergency HTML fallback
+    console.log(`[${requestId}] All PDF generation methods failed, generating emergency HTML fallback`);
+    return this._generateEmergencyHtmlFallback(html, options);
   }
 
   /**
@@ -95,44 +98,77 @@ class PDFGenerationService {
       ignoreDefaultArgs: ['--disable-extensions'],
     };
 
-    // Try different Chrome executables
+    // Try different Chrome executables - prioritize system Chrome
     const chromeExecutables = [
       process.env.PUPPETEER_CHROMIUM_EXECUTABLE_PATH,
       'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
       'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+      process.env.LOCALAPPDATA ? process.env.LOCALAPPDATA + '\\Google\\Chrome\\Application\\chrome.exe' : null,
+      process.env.PROGRAMFILES ? process.env.PROGRAMFILES + '\\Google\\Chrome\\Application\\chrome.exe' : null,
+      process.env.USERPROFILE ? process.env.USERPROFILE + '\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe' : null,
+      // Additional Windows paths
+      'C:\\Users\\' + process.env.USERNAME + '\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     ].filter(Boolean);
 
     let browser = null;
     let lastError = null;
 
-    // Try bundled Chrome first (usually has better permissions)
-    try {
-      console.log(`[${requestId}] Trying bundled Chrome...`);
-      browser = await puppeteer.launch(launchOptions);
-      console.log(`[${requestId}] Bundled Chrome launched successfully`);
-    } catch (error) {
-      console.log(`[${requestId}] Bundled Chrome failed: ${error.message}`);
-      lastError = error;
+    // Try system Chrome installations first (more reliable on Windows)
+    for (const executable of chromeExecutables) {
+      try {
+        console.log(`[${requestId}] Trying Chrome at: ${executable}`);
 
-      // Try system Chrome installations
-      for (const executable of chromeExecutables) {
+        // Check if file exists and is executable
         try {
-          console.log(`[${requestId}] Trying Chrome at: ${executable}`);
-          await fs.access(executable, fs.constants.F_OK | fs.constants.X_OK);
-          
-          const options = { ...launchOptions, executablePath: executable };
-          browser = await puppeteer.launch(options);
-          console.log(`[${requestId}] System Chrome launched: ${executable}`);
-          break;
-        } catch (execError) {
-          console.log(`[${requestId}] Chrome at ${executable} failed: ${execError.message}`);
-          lastError = execError;
+          await fs.access(executable, fs.constants.F_OK);
+          console.log(`[${requestId}] Chrome executable found: ${executable}`);
+        } catch (accessError) {
+          console.log(`[${requestId}] Chrome not found at: ${executable}`);
+          continue;
+        }
+
+        const options = { ...launchOptions, executablePath: executable };
+        browser = await puppeteer.launch(options);
+        console.log(`[${requestId}] System Chrome launched successfully: ${executable}`);
+        break;
+      } catch (execError) {
+        console.log(`[${requestId}] Chrome launch failed for ${executable}: ${execError.message}`);
+        if (execError.code === 'EACCES') {
+          console.log(`[${requestId}] Permission denied for ${executable}`);
+        }
+        lastError = execError;
+      }
+    }
+
+    // Fallback to bundled Chrome if system Chrome failed
+    if (!browser) {
+      try {
+        console.log(`[${requestId}] Trying bundled Chrome as fallback...`);
+        delete launchOptions.executablePath;
+        browser = await puppeteer.launch(launchOptions);
+        console.log(`[${requestId}] Bundled Chrome launched successfully`);
+      } catch (bundledChromeError) {
+        console.log(`[${requestId}] Bundled Chrome failed: ${bundledChromeError.message}`);
+
+        // Final fallback with minimal arguments
+        try {
+          console.log(`[${requestId}] Trying minimal Chrome configuration...`);
+          browser = await puppeteer.launch({
+            headless: 'new',
+            args: ['--no-sandbox'],
+            timeout: 30000,
+          });
+          console.log(`[${requestId}] Minimal Chrome configuration successful`);
+        } catch (minimalChromeError) {
+          console.log(`[${requestId}] Minimal Chrome failed: ${minimalChromeError.message}`);
+          lastError = minimalChromeError;
         }
       }
     }
 
     if (!browser) {
-      throw new Error(`Failed to launch any Chrome browser. Last error: ${lastError?.message}`);
+      throw new Error(`All Chrome configurations failed. Last error: ${lastError?.message}`);
     }
 
     try {
@@ -197,11 +233,59 @@ class PDFGenerationService {
     const { requestId = 'unknown' } = options;
     
     try {
-      // This would require installing html-pdf package
-      // For now, throw an error indicating it's not implemented
-      throw new Error('HTML-PDF method not implemented. Install html-pdf package if needed.');
+      console.log(`[${requestId}] Creating emergency HTML fallback...`);
+
+      // Create a clean HTML document that looks like the original invoice
+      const emergencyHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Invoice Document</title>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: white;
+        }
+        .document-container {
+            width: 100%;
+            max-width: none;
+            margin: 0;
+            padding: 0;
+        }
+        @media print {
+            body {
+                background: white;
+                margin: 0;
+                padding: 0;
+            }
+            .document-container {
+                margin: 0;
+                padding: 0;
+            }
+        }
+        /* Hidden marker for emergency fallback detection */
+        .emergency-marker {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="emergency-marker">Emergency PDF Fallback</div>
+    <div class="document-container">
+        ${html}
+    </div>
+</body>
+</html>`;
+
+      const buffer = Buffer.from(emergencyHtml, 'utf8');
+      console.log(`[${requestId}] Emergency HTML fallback created (${buffer.length} bytes)`);
+      return buffer;
+
     } catch (error) {
-      console.error(`[${requestId}] HTML-PDF generation failed:`, error.message);
+      console.error(`[${requestId}] Emergency fallback failed:`, error.message);
       throw error;
     }
   }

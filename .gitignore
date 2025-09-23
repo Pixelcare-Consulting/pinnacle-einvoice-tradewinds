@@ -128,3 +128,5 @@ coverage/
 *.lcov
 security-report.json
 vulnerability-report.json
+fix-windows-permissions.bat
+test-pdf-generation.js

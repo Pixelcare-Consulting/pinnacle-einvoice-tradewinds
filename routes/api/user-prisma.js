@@ -386,6 +386,99 @@ router.put('/users-update/:id', auth.isAdmin, async (req, res) => {
     }
 });
 
+// Delete user (admin only)
+router.delete('/users-delete/:id', auth.isAdmin, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+
+        // Validate ID
+        if (!id || isNaN(id)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid user ID'
+            });
+        }
+
+        // Check if user exists
+        const user = await prisma.wP_USER_REGISTRATION.findUnique({
+            where: { ID: id },
+            select: {
+                ID: true,
+                Username: true,
+                Email: true,
+                FullName: true
+            }
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        // Prevent admin from deleting themselves
+        if (req.session.user.id === id) {
+            return res.status(400).json({
+                success: false,
+                message: 'You cannot delete your own account'
+            });
+        }
+
+        // Delete the user
+        await prisma.wP_USER_REGISTRATION.delete({
+            where: { ID: id }
+        });
+
+        // Log the action
+        await prisma.wP_LOGS.create({
+            data: {
+                Description: `User ${req.session.user.username} deleted user: ${user.Username} (${user.Email})`,
+                CreateTS: new Date().toISOString(),
+                LoggedUser: req.session.user.username,
+                Action: ACTIONS.DELETE_USER,
+                IPAddress: req.ip,
+                LogType: LOG_TYPES.INFO,
+                Module: MODULES.USER,
+                Status: STATUS.SUCCESS,
+                UserID: req.session.user.id
+            }
+        });
+
+        res.json({
+            success: true,
+            message: `User "${user.FullName}" has been deleted successfully`
+        });
+    } catch (error) {
+        console.error('Error deleting user:', error);
+
+        // Log the error
+        try {
+            await prisma.wP_LOGS.create({
+                data: {
+                    Description: `Failed to delete user ID ${req.params.id}: ${error.message}`,
+                    CreateTS: new Date().toISOString(),
+                    LoggedUser: req.session.user.username,
+                    Action: ACTIONS.DELETE_USER,
+                    IPAddress: req.ip,
+                    LogType: LOG_TYPES.ERROR,
+                    Module: MODULES.USER,
+                    Status: STATUS.FAILED,
+                    UserID: req.session.user.id
+                }
+            });
+        } catch (logError) {
+            console.error('Error logging delete failure:', logError);
+        }
+
+        res.status(500).json({
+            success: false,
+            message: 'Failed to delete user',
+            error: error.message
+        });
+    }
+});
+
 // Profile endpoint for session checking
 router.get('/profile', auth.isApiAuthenticated, async (req, res) => {
     try {
