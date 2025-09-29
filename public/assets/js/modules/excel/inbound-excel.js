@@ -1493,8 +1493,8 @@ class InvoiceTableManager {
       const currentData = this.table.data().toArray();
       const currentUUIDs = new Set(currentData.map(row => row.uuid));
 
-      // Fetch fresh data from API
-      const response = await fetch("/api/lhdn/documents/recent?incremental=true", {
+      // Fetch fresh data from API with database priority for incremental refresh
+      const response = await fetch("/api/lhdn/documents/recent?incremental=true&useDatabase=true", {
         method: "GET",
         headers: {
           "Accept": "application/json",

@@ -956,12 +956,12 @@ async function getCachedDocuments(req) {
 
   if (!data || incremental) {
     try {
-      // If useDatabase is true and we're not forcing refresh, try to get from database first
-      if (useDatabase && !forceRefresh) {
+      // If useDatabase is true OR incremental is true, and we're not forcing refresh, try to get from database first
+      if ((useDatabase || incremental) && !forceRefresh) {
         try {
-          // console.log(
-          //   "Using database as primary data source due to useDatabase parameter"
-          // );
+          console.log(
+            `📊 Using database as primary data source - useDatabase: ${useDatabase}, incremental: ${incremental}, forceRefresh: ${forceRefresh}`
+          );
           // Get documents from database
           const dbDocuments = await prisma.wP_INBOUND_STATUS.findMany({
             orderBy: {
@@ -971,7 +971,7 @@ async function getCachedDocuments(req) {
           });
 
           if (dbDocuments && dbDocuments.length > 0) {
-            // console.log(`Found ${dbDocuments.length} documents in database`);
+            console.log(`✅ Found ${dbDocuments.length} documents in WP_INBOUND_STATUS database`);
             data = {
               result: dbDocuments,
               cached: false,
@@ -1913,6 +1913,7 @@ router.get("/documents/recent", async (req, res) => {
     const useDatabase = req.query.useDatabase === "true";
     const fallbackOnly = req.query.fallbackOnly === "true";
     const useCache = req.query.useCache === "true";
+    const incremental = req.query.incremental === "true";
 
     // If fallbackOnly is true, skip token check and API call
     if (fallbackOnly) {
@@ -1995,8 +1996,8 @@ router.get("/documents/recent", async (req, res) => {
     if (!accessToken) {
       console.log("No access token found after all attempts");
 
-      // If useDatabase is true, try to get documents from database instead of returning error
-      if (useDatabase) {
+      // If useDatabase is true OR incremental is true, try to get documents from database instead of returning error
+      if (useDatabase || incremental) {
         try {
           // Get documents from database
           const dbDocuments = await prisma.wP_INBOUND_STATUS.findMany({
