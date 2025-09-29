@@ -2466,7 +2466,7 @@ class InvoiceTableManager {
       processing: false,
       serverSide: false,
       ajax: {
-        url: "/api/lhdn/documents/recent", // Database-first data source
+        url: "/api/lhdn/documents/recent?useDatabase=true", // Database-first data source (DB-only by default)
         method: "GET",
         data: function (d) {
           console.log("[Inbound] Making AJAX request to:", "/api/lhdn/documents/recent");
