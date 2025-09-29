@@ -131,8 +131,8 @@ model WP_INBOUND_STATUS {
   last_sync_date        String?  @db.VarChar(100)
   sync_status           String?  @db.VarChar(50)
   documentDetails       String?  @db.Text
-  created_at            String   @default("getdate()", map: "DF__WP_INBOUN__creat__49C3F6B7") @db.VarChar(100)
-  updated_at            String   @default("getdate()", map: "DF__WP_INBOUN__updat__4AB81AF0") @db.VarChar(100)
+  created_at            String?  @db.VarChar(100)
+  updated_at            String?  @db.VarChar(100)
   document              String?  @db.Text
   validationResults     String?  @db.Text
 

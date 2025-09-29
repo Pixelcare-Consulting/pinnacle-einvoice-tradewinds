@@ -485,13 +485,25 @@ class FileUploadManager {
                     return;
                 }
 
+                // Check for duplicate warnings
+                if (result.duplicateCheck && result.duplicateCheck.warnings && result.duplicateCheck.warnings.length > 0) {
+                    console.log('🔍 [DUPLICATE CHECK] Warnings found:', result.duplicateCheck.warnings);
+                    this.hideEnhancedLoadingModal();
+                    this.showDuplicateWarningsModal(result.duplicateCheck);
+                    return;
+                }
+
                 // Update progress to completion
                 this.updateRealProgress(100, 'complete');
 
                 // Complete the progress after a short delay
                 setTimeout(() => {
                     this.completeProgress();
-                    this.showSuccess('File uploaded successfully');
+                    let successMessage = 'File uploaded successfully';
+                    if (result.duplicateCheck && result.duplicateCheck.summary) {
+                        successMessage += ` (${result.duplicateCheck.summary.totalInvoices} invoices processed)`;
+                    }
+                    this.showSuccess(successMessage);
                     this.resetUI();
                     // Refresh the table
                     this.refreshTable();
@@ -501,6 +513,12 @@ class FileUploadManager {
                     }, 500);
                 }, 1000);
             } else {
+                // Check if this is a duplicate error
+                if (result.duplicateType) {
+                    this.hideEnhancedLoadingModal();
+                    this.showDuplicateDetectionModal(result);
+                    return;
+                }
                 throw new Error(result.error || 'Upload failed');
             }
 
@@ -967,6 +985,402 @@ class FileUploadManager {
         const sizes = ['Bytes', 'KB', 'MB', 'GB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    // Duplicate Detection Modal Methods
+    showDuplicateDetectionModal(duplicateInfo) {
+        const modalHTML = `
+            <div id="duplicateDetectionModal" class="custom-modal">
+                <div class="modal-overlay" onclick="window.fileUploadManager.closeDuplicateDetectionModal()"></div>
+                <div class="modal-content duplicate-modal">
+                    <div class="modal-header">
+                        <div class="d-flex align-items-center">
+                            <div class="header-icon-wrapper me-3">
+                                <i class="bi bi-exclamation-triangle text-warning"></i>
+                            </div>
+                            <div>
+                                <h4 class="mb-1 fw-semibold text-warning">Duplicate Content Detected</h4>
+                                <p class="mb-0 small">This file contains data that has already been processed</p>
+                            </div>
+                        </div>
+                        <button class="btn-close-custom" onclick="window.fileUploadManager.closeDuplicateDetectionModal()">
+                            <i class="bi bi-x"></i>
+                        </button>
+                    </div>
+
+                    <div class="modal-body">
+                        <div class="alert alert-warning">
+                            <strong>Duplicate Type:</strong> ${this.getDuplicateTypeDescription(duplicateInfo.duplicateType)}
+                        </div>
+                        <p class="duplicate-message">${duplicateInfo.error}</p>
+
+                        ${duplicateInfo.existingFile ? `
+                            <div class="existing-file-info">
+                                <h6><i class="bi bi-file-earmark-excel me-2"></i>Existing File Details:</h6>
+                                <div class="info-card">
+                                    <div class="info-row">
+                                        <span class="info-label">Filename:</span>
+                                        <span class="info-value">${duplicateInfo.existingFile.filename}</span>
+                                    </div>
+                                    <div class="info-row">
+                                        <span class="info-label">Uploaded:</span>
+                                        <span class="info-value">${new Date(duplicateInfo.existingFile.uploadDate).toLocaleString()}</span>
+                                    </div>
+                                    <div class="info-row">
+                                        <span class="info-label">Uploaded by:</span>
+                                        <span class="info-value">${duplicateInfo.existingFile.uploadedBy}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        ` : ''}
+
+                        ${duplicateInfo.duplicates && duplicateInfo.duplicates.length > 0 ? `
+                            <div class="duplicate-invoices">
+                                <h6><i class="bi bi-list-ul me-2"></i>Duplicate Invoices (${duplicateInfo.duplicates.length}):</h6>
+                                <div class="duplicate-list">
+                                    ${duplicateInfo.duplicates.slice(0, 5).map(dup => `
+                                        <div class="duplicate-item">
+                                            <span class="invoice-no">${dup.invoiceNo}</span>
+                                            <span class="duplicate-type badge bg-${this.getDuplicateSeverityColor(dup.severity)}">${dup.duplicateType}</span>
+                                        </div>
+                                    `).join('')}
+                                    ${duplicateInfo.duplicates.length > 5 ? `
+                                        <div class="duplicate-item more-items">
+                                            <span class="text-muted">... and ${duplicateInfo.duplicates.length - 5} more</span>
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" onclick="window.fileUploadManager.closeDuplicateDetectionModal()">
+                            <i class="bi bi-x-circle me-2"></i>Cancel Upload
+                        </button>
+                        <button class="btn btn-primary" onclick="window.fileUploadManager.viewExistingSubmissions()">
+                            <i class="bi bi-eye me-2"></i>View Existing Files
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+        this.addDuplicateModalStyles();
+
+        // Show modal with animation
+        setTimeout(() => {
+            const modal = document.getElementById('duplicateDetectionModal');
+            if (modal) {
+                modal.classList.add('show');
+            }
+        }, 10);
+    }
+
+    showDuplicateWarningsModal(duplicateCheck) {
+        const warnings = duplicateCheck.warnings || [];
+        const summary = duplicateCheck.summary || {};
+
+        const modalHTML = `
+            <div id="duplicateWarningsModal" class="custom-modal">
+                <div class="modal-overlay" onclick="window.fileUploadManager.closeDuplicateWarningsModal()"></div>
+                <div class="modal-content warning-modal">
+                    <div class="modal-header">
+                        <div class="d-flex align-items-center">
+                            <div class="header-icon-wrapper me-3">
+                                <i class="bi bi-info-circle text-info"></i>
+                            </div>
+                            <div>
+                                <h4 class="mb-1 fw-semibold text-info">Duplicate Warnings</h4>
+                                <p class="mb-0 small">Some potential duplicates were found but upload can proceed</p>
+                            </div>
+                        </div>
+                        <button class="btn-close-custom" onclick="window.fileUploadManager.closeDuplicateWarningsModal()">
+                            <i class="bi bi-x"></i>
+                        </button>
+                    </div>
+
+                    <div class="modal-body">
+                        <div class="alert alert-info">
+                            <strong>Upload Status:</strong> File processed successfully with ${summary.totalInvoices} invoices, but ${warnings.length} potential duplicates were detected.
+                        </div>
+
+                        <div class="warnings-list">
+                            <h6><i class="bi bi-exclamation-triangle me-2"></i>Warnings:</h6>
+                            ${warnings.map(warning => `
+                                <div class="warning-item">
+                                    <div class="warning-header">
+                                        <span class="invoice-no">${warning.invoiceNo}</span>
+                                        <span class="warning-type badge bg-warning">${warning.duplicateType}</span>
+                                    </div>
+                                    <div class="warning-message">${warning.message}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" onclick="window.fileUploadManager.closeDuplicateWarningsModal()">
+                            <i class="bi bi-check-circle me-2"></i>Acknowledge
+                        </button>
+                        <button class="btn btn-primary" onclick="window.fileUploadManager.viewExistingSubmissions()">
+                            <i class="bi bi-eye me-2"></i>Review Existing Files
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+        this.addDuplicateModalStyles();
+
+        // Show modal with animation
+        setTimeout(() => {
+            const modal = document.getElementById('duplicateWarningsModal');
+            if (modal) {
+                modal.classList.add('show');
+            }
+        }, 10);
+    }
+
+    closeDuplicateDetectionModal() {
+        const modal = document.getElementById('duplicateDetectionModal');
+        if (modal) {
+            modal.classList.remove('show');
+            setTimeout(() => {
+                modal.remove();
+            }, 300);
+        }
+    }
+
+    closeDuplicateWarningsModal() {
+        const modal = document.getElementById('duplicateWarningsModal');
+        if (modal) {
+            modal.classList.remove('show');
+            setTimeout(() => {
+                modal.remove();
+                // Continue with normal success flow
+                this.showSuccess('File uploaded successfully with warnings');
+                this.resetUI();
+                this.refreshTable();
+            }, 300);
+        }
+    }
+
+    viewExistingSubmissions() {
+        // Navigate to submission history or open in new tab
+        window.open('/outbound-excel', '_blank');
+    }
+
+    getDuplicateTypeDescription(type) {
+        const descriptions = {
+            'CONTENT_DUPLICATE': 'Identical file content',
+            'INVOICE_DUPLICATE': 'Invoice already exists',
+            'ALREADY_SUBMITTED': 'Already submitted to LHDN',
+            'LHDN_RECORD': 'Found in LHDN records',
+            'RECENT_UPLOAD': 'Recently uploaded',
+            'SIMILAR_INVOICE': 'Similar invoice found'
+        };
+        return descriptions[type] || type;
+    }
+
+    getDuplicateSeverityColor(severity) {
+        const colors = {
+            'CRITICAL': 'danger',
+            'HIGH': 'warning',
+            'MEDIUM': 'info',
+            'LOW': 'secondary'
+        };
+        return colors[severity] || 'secondary';
+    }
+
+    addDuplicateModalStyles() {
+        // Check if styles already exist
+        if (document.getElementById('duplicateModalStyles')) {
+            return;
+        }
+
+        const styles = `
+            <style id="duplicateModalStyles">
+                .custom-modal {
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    z-index: 9999;
+                    opacity: 0;
+                    visibility: hidden;
+                    transition: opacity 0.3s ease, visibility 0.3s ease;
+                }
+
+                .custom-modal.show {
+                    opacity: 1;
+                    visibility: visible;
+                }
+
+                .modal-overlay {
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    background: rgba(0, 0, 0, 0.5);
+                    backdrop-filter: blur(2px);
+                }
+
+                .duplicate-modal .modal-content,
+                .warning-modal .modal-content {
+                    position: absolute;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    background: white;
+                    border-radius: 12px;
+                    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+                    max-width: 600px;
+                    width: 90%;
+                    max-height: 80vh;
+                    overflow-y: auto;
+                }
+
+                .duplicate-modal .modal-header,
+                .warning-modal .modal-header {
+                    background: #405189;
+                    color: white;
+                    padding: 20px 24px;
+                    border-radius: 12px 12px 0 0;
+                    position: relative;
+                }
+
+                .header-icon-wrapper {
+                    width: 48px;
+                    height: 48px;
+                    background: rgba(255, 255, 255, 0.2);
+                    border-radius: 12px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 20px;
+                }
+
+                .btn-close-custom {
+                    position: absolute;
+                    top: 50%;
+                    right: 20px;
+                    transform: translateY(-50%);
+                    background: rgba(255, 255, 255, 0.2);
+                    border: none;
+                    color: white;
+                    width: 36px;
+                    height: 36px;
+                    border-radius: 8px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    cursor: pointer;
+                    transition: background 0.2s;
+                }
+
+                .btn-close-custom:hover {
+                    background: rgba(255, 255, 255, 0.3);
+                }
+
+                .duplicate-modal .modal-body,
+                .warning-modal .modal-body {
+                    padding: 24px;
+                }
+
+                .info-card {
+                    background: #f8f9fa;
+                    border: 1px solid #e9ecef;
+                    border-radius: 8px;
+                    padding: 16px;
+                    margin-top: 12px;
+                }
+
+                .info-row {
+                    display: flex;
+                    justify-content: space-between;
+                    margin-bottom: 8px;
+                }
+
+                .info-row:last-child {
+                    margin-bottom: 0;
+                }
+
+                .info-label {
+                    font-weight: 600;
+                    color: #6c757d;
+                }
+
+                .info-value {
+                    color: #212529;
+                }
+
+                .duplicate-list {
+                    max-height: 200px;
+                    overflow-y: auto;
+                    border: 1px solid #e9ecef;
+                    border-radius: 8px;
+                    padding: 12px;
+                    margin-top: 12px;
+                }
+
+                .duplicate-item {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    padding: 8px 0;
+                    border-bottom: 1px solid #f1f3f4;
+                }
+
+                .duplicate-item:last-child {
+                    border-bottom: none;
+                }
+
+                .invoice-no {
+                    font-weight: 600;
+                    color: #405189;
+                }
+
+                .warnings-list {
+                    margin-top: 16px;
+                }
+
+                .warning-item {
+                    background: #fff3cd;
+                    border: 1px solid #ffeaa7;
+                    border-radius: 8px;
+                    padding: 12px;
+                    margin-bottom: 12px;
+                }
+
+                .warning-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    margin-bottom: 8px;
+                }
+
+                .warning-message {
+                    font-size: 14px;
+                    color: #856404;
+                }
+
+                .duplicate-modal .modal-footer,
+                .warning-modal .modal-footer {
+                    padding: 20px 24px;
+                    border-top: 1px solid #e9ecef;
+                    display: flex;
+                    justify-content: flex-end;
+                    gap: 12px;
+                }
+            </style>
+        `;
+
+        document.head.insertAdjacentHTML('beforeend', styles);
     }
 
     async handlePreviewFile() {

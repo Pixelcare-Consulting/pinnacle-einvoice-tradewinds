@@ -575,6 +575,9 @@ class InvoiceTableManager {
     // Set up auto-refresh mechanism for new submissions
     this.setupAutoRefresh();
 
+    // Set up real-time status monitoring
+    this.setupRealTimeStatusMonitoring();
+
     InvoiceTableManager.instance = this;
   }
 
@@ -719,6 +722,25 @@ class InvoiceTableManager {
           .refresh-enhanced.error {
             background: linear-gradient(45deg, #dc3545, #c82333);
             color: white;
+          }
+
+          .row-updated {
+            background: linear-gradient(90deg, rgba(40, 167, 69, 0.1), transparent) !important;
+            animation: row-highlight 3s ease-out;
+          }
+
+          @keyframes row-highlight {
+            0% { background: rgba(40, 167, 69, 0.3); }
+            100% { background: transparent; }
+          }
+
+          .incremental-loading {
+            animation: incremental-pulse 2s infinite;
+          }
+
+          @keyframes incremental-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
           }
         </style>
 
@@ -916,6 +938,191 @@ class InvoiceTableManager {
     console.log('📋 Auto-refresh disabled - manual refresh only');
   }
 
+  // Real-time status monitoring for LHDN validation updates
+  setupRealTimeStatusMonitoring() {
+    console.log('🔍 Setting up real-time status monitoring...');
+
+    // Monitor for status changes every 30 seconds (optimized interval)
+    this.statusMonitorInterval = setInterval(async () => {
+      try {
+        await this.checkForStatusChanges();
+      } catch (error) {
+        console.error('❌ Status monitoring error:', error);
+      }
+    }, 30000); // 30 seconds
+
+    // Monitor for new submissions every 15 seconds
+    this.submissionMonitorInterval = setInterval(async () => {
+      try {
+        await this.checkForNewSubmissions();
+      } catch (error) {
+        console.error('❌ Submission monitoring error:', error);
+      }
+    }, 15000); // 15 seconds
+
+    // Clean up intervals when page unloads
+    window.addEventListener('beforeunload', () => {
+      if (this.statusMonitorInterval) {
+        clearInterval(this.statusMonitorInterval);
+      }
+      if (this.submissionMonitorInterval) {
+        clearInterval(this.submissionMonitorInterval);
+      }
+    });
+
+    console.log('✅ Real-time status monitoring active');
+  }
+
+  // Check for status changes in submitted documents
+  async checkForStatusChanges() {
+    try {
+      // Only check if we have a table and it's not currently refreshing
+      if (!this.table || this.isRefreshing) {
+        return;
+      }
+
+      // Get current table data to compare
+      const currentData = this.table.data().toArray();
+      const submittedDocs = currentData.filter(row =>
+        ['Submitted', 'Processing', 'Pending'].includes(row.status)
+      );
+
+      if (submittedDocs.length === 0) {
+        return; // No documents to monitor
+      }
+
+      // Check for status updates from the server
+      const response = await fetch('/api/lhdn/status-check', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          uuids: submittedDocs.map(doc => doc.uuid)
+        })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+
+        if (result.success && result.changes && result.changes.length > 0) {
+          console.log(`📊 Detected ${result.changes.length} status changes`);
+
+          // Show status indicator
+          this.showStatusUpdateIndicator(result.changes.length);
+
+          // Trigger incremental refresh to get updated data
+          await this.refreshCurrentDataSource({ incremental: true, force: true });
+
+          // Show detailed notification about status changes
+          this.showStatusChangeNotification(result.changes);
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error checking for status changes:', error);
+    }
+  }
+
+  // Show status update indicator
+  showStatusUpdateIndicator(changeCount) {
+    const indicator = $('.refresh-status-indicator');
+    if (indicator.length) {
+      indicator.show();
+      indicator.find('.status-text').text(`${changeCount} status update(s) detected`);
+
+      // Hide after 5 seconds
+      setTimeout(() => {
+        indicator.hide();
+      }, 5000);
+    }
+  }
+
+  // Show detailed status change notification
+  showStatusChangeNotification(changes) {
+    if (!changes || changes.length === 0) return;
+
+    // Group changes by status
+    const statusGroups = changes.reduce((groups, change) => {
+      const status = change.newStatus || 'Unknown';
+      if (!groups[status]) groups[status] = [];
+      groups[status].push(change);
+      return groups;
+    }, {});
+
+    // Create notification content
+    const statusSummary = Object.entries(statusGroups)
+      .map(([status, items]) => `${items.length} → ${status}`)
+      .join(', ');
+
+    // Show toast notification
+    ToastManager.show(
+      `Document status updated: ${statusSummary}`,
+      'success',
+      5000
+    );
+
+    // Show detailed modal for multiple changes
+    if (changes.length > 3) {
+      CustomModal.fire({
+        title: 'Document Status Updates',
+        html: this.createStatusChangeModalContent(statusGroups),
+        icon: 'success',
+        confirmButtonText: 'OK',
+        showCancelButton: false
+      });
+    }
+  }
+
+  // Create content for status change modal
+  createStatusChangeModalContent(statusGroups) {
+    let content = '<div class="status-change-summary">';
+    content += '<p class="mb-3">The following documents have been updated:</p>';
+
+    for (const [status, changes] of Object.entries(statusGroups)) {
+      const statusClass = this.getStatusClass(status);
+      content += `
+        <div class="status-group mb-3">
+          <h6 class="fw-semibold">
+            <span class="badge ${statusClass}">${status}</span>
+            <small class="text-muted ms-2">(${changes.length} document${changes.length > 1 ? 's' : ''})</small>
+          </h6>
+          <div class="document-list">
+      `;
+
+      changes.slice(0, 5).forEach(change => {
+        content += `
+          <div class="document-item small text-muted">
+            <i class="bi bi-file-text me-1"></i>
+            ${change.uuid ? change.uuid.substring(0, 8) + '...' : 'Unknown'}
+            ${change.timestamp ? `<small class="ms-2">${new Date(change.timestamp).toLocaleTimeString()}</small>` : ''}
+          </div>
+        `;
+      });
+
+      if (changes.length > 5) {
+        content += `<div class="small text-muted">... and ${changes.length - 5} more</div>`;
+      }
+
+      content += '</div></div>';
+    }
+
+    content += '</div>';
+    return content;
+  }
+
+  // Get CSS class for status badge
+  getStatusClass(status) {
+    switch (status?.toLowerCase()) {
+      case 'valid': return 'bg-success';
+      case 'invalid': return 'bg-danger';
+      case 'submitted': return 'bg-primary';
+      case 'processing': return 'bg-warning';
+      case 'cancelled': return 'bg-secondary';
+      default: return 'bg-info';
+    }
+  }
+
   // Handle new submission notification
   async handleNewSubmission() {
     try {
@@ -926,8 +1133,8 @@ class InvoiceTableManager {
       // Show notification to user
       ToastManager.show('New submission detected. Refreshing data...', 'info', 3000);
 
-      // Refresh current data source
-      await this.refreshCurrentDataSource();
+      // Use incremental refresh for new submissions
+      await this.refreshCurrentDataSource({ incremental: true });
 
       // Clear the notification flag
       localStorage.removeItem('newSubmissionNotification');
@@ -968,7 +1175,7 @@ class InvoiceTableManager {
       const originalTimeout = this.cacheTimeout;
       this.cacheTimeout = 5000;
 
-      await this.refreshCurrentDataSource();
+      await this.refreshCurrentDataSource({ incremental: true, force: true });
 
       // Restore original timeout
       this.cacheTimeout = originalTimeout;
@@ -1081,8 +1288,9 @@ class InvoiceTableManager {
       }
     });
 
-    // Handle refresh button with spam protection
-    $("#refreshDataSource").on("click", async function () {
+    // Handle refresh button with enhanced functionality
+    $("#refreshDataSource").on("click", async function (e) {
+      e.preventDefault();
       const button = $(this);
 
       // Prevent spam clicking
@@ -1091,18 +1299,30 @@ class InvoiceTableManager {
         return;
       }
 
+      // Check if Ctrl/Cmd key is held for full refresh
+      const forceFullRefresh = e.ctrlKey || e.metaKey;
+      const refreshType = forceFullRefresh ? "full" : "incremental";
+
       // Disable button and show loading state
       button.prop("disabled", true);
       const originalHtml = button.html();
-      button.html(
-        '<i class="bi bi-arrow-clockwise me-1 spin"></i>Refreshing...'
-      );
+      const loadingText = forceFullRefresh
+        ? '<i class="bi bi-arrow-clockwise me-1 spin"></i>Full Refresh...'
+        : '<i class="bi bi-arrow-clockwise me-1 spin"></i>Quick Refresh...';
+      button.html(loadingText);
 
       try {
-        await self.refreshCurrentDataSource();
+        // Use incremental refresh by default, full refresh if forced
+        await self.refreshCurrentDataSource({
+          incremental: !forceFullRefresh,
+          force: forceFullRefresh
+        });
 
-        // Show success feedback
-        ToastManager.show("Data refreshed successfully", "success");
+        // Show success feedback with refresh type
+        const successMessage = forceFullRefresh
+          ? "Full data refresh completed"
+          : "Quick refresh completed";
+        ToastManager.show(successMessage, "success");
       } catch (error) {
         console.error("Error refreshing data:", error);
         ToastManager.show("Failed to refresh data. Please try again.", "error");
@@ -1180,18 +1400,18 @@ class InvoiceTableManager {
   // Archive and outbound data sources have been removed for simplicity
   // Only live LHDN data is now supported
 
-  // Refresh current data source with enhanced throttling
-  async refreshCurrentDataSource() {
+  // Enhanced incremental refresh with state preservation
+  async refreshCurrentDataSource(options = {}) {
     // Prevent concurrent refreshes
     if (this.isRefreshing) {
       console.log("Refresh already in progress, ignoring request");
       return;
     }
 
-    // Check cooldown period
+    // Check cooldown period unless forced
     const now = Date.now();
     const timeSinceLastRefresh = now - this.lastRefreshTime;
-    if (timeSinceLastRefresh < this.refreshCooldown) {
+    if (!options.force && timeSinceLastRefresh < this.refreshCooldown) {
       const remainingTime = Math.ceil(
         (this.refreshCooldown - timeSinceLastRefresh) / 1000
       );
@@ -1224,9 +1444,14 @@ class InvoiceTableManager {
           await new Promise((resolve) => setTimeout(resolve, waitTime));
         }
 
-        // Force refresh live data with rate limiting
-        window.forceRefreshLHDN = true;
-        await this.switchToLiveData();
+        // Use incremental refresh instead of full reload
+        if (options.incremental && this.table) {
+          await this.performIncrementalRefresh();
+        } else {
+          // Force refresh live data with rate limiting
+          window.forceRefreshLHDN = true;
+          await this.switchToLiveData();
+        }
       }
 
       // Update last refresh time on success
@@ -1254,6 +1479,175 @@ class InvoiceTableManager {
     } finally {
       this.isRefreshing = false;
     }
+  }
+
+  // New incremental refresh method that preserves table state
+  async performIncrementalRefresh() {
+    try {
+      console.log("🔄 Performing incremental refresh...");
+
+      // Show subtle loading indicator without blocking UI
+      this.showIncrementalLoadingIndicator();
+
+      // Get current table data for comparison
+      const currentData = this.table.data().toArray();
+      const currentUUIDs = new Set(currentData.map(row => row.uuid));
+
+      // Fetch fresh data from API
+      const response = await fetch("/api/lhdn/documents/recent?incremental=true", {
+        method: "GET",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json"
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const newData = data.result || [];
+
+      // Track changes
+      let addedCount = 0;
+      let updatedCount = 0;
+      const updatedRows = [];
+
+      // Process new/updated records
+      for (const newRow of newData) {
+        const existingRowIndex = currentData.findIndex(row => row.uuid === newRow.uuid);
+
+        if (existingRowIndex === -1) {
+          // New record - add to table
+          this.table.row.add(newRow);
+          addedCount++;
+        } else {
+          // Existing record - check if status changed
+          const existingRow = currentData[existingRowIndex];
+          if (this.hasStatusChanged(existingRow, newRow)) {
+            // Update the row data
+            this.table.row(existingRowIndex).data(newRow);
+            updatedRows.push(newRow);
+            updatedCount++;
+          }
+        }
+      }
+
+      // Redraw table if changes were made
+      if (addedCount > 0 || updatedCount > 0) {
+        this.table.draw(false); // false = don't reset paging
+
+        // Highlight updated rows briefly
+        if (updatedRows.length > 0) {
+          this.highlightUpdatedRows(updatedRows);
+        }
+
+        // Show summary of changes
+        const changeMessage = [];
+        if (addedCount > 0) changeMessage.push(`${addedCount} new`);
+        if (updatedCount > 0) changeMessage.push(`${updatedCount} updated`);
+
+        ToastManager.show(
+          `Refresh complete: ${changeMessage.join(', ')} records`,
+          "success",
+          3000
+        );
+      } else {
+        ToastManager.show("No changes detected", "info", 2000);
+      }
+
+      // Update totals and charts
+      this.updateCardTotals();
+      if (typeof updateCharts === 'function') {
+        updateCharts();
+      }
+
+      console.log(`✅ Incremental refresh complete: +${addedCount} new, ~${updatedCount} updated`);
+
+    } catch (error) {
+      console.error("❌ Incremental refresh failed:", error);
+      ToastManager.show("Incremental refresh failed, performing full refresh...", "warning");
+
+      // Fallback to full refresh
+      window.forceRefreshLHDN = true;
+      await this.switchToLiveData();
+    } finally {
+      this.hideIncrementalLoadingIndicator();
+    }
+  }
+
+  // Check if a row's status has changed
+  hasStatusChanged(oldRow, newRow) {
+    return (
+      oldRow.status !== newRow.status ||
+      oldRow.dateTimeValidated !== newRow.dateTimeValidated ||
+      oldRow.documentStatusReason !== newRow.documentStatusReason
+    );
+  }
+
+  // Show subtle loading indicator for incremental refresh
+  showIncrementalLoadingIndicator() {
+    const refreshBtn = $("#refreshLHDNData");
+    if (refreshBtn.length) {
+      refreshBtn.addClass("btn-loading");
+      refreshBtn.find(".btn-text").text("Checking for updates...");
+    }
+
+    // Add subtle overlay to table
+    const tableContainer = $("#invoiceTable").closest(".table-body-container");
+    if (tableContainer.length && !tableContainer.find(".incremental-loading").length) {
+      tableContainer.append(`
+        <div class="incremental-loading" style="
+          position: absolute;
+          top: 0;
+          right: 0;
+          background: rgba(13, 110, 253, 0.1);
+          color: #0d6efd;
+          padding: 8px 16px;
+          border-radius: 0 0 0 8px;
+          font-size: 0.875rem;
+          z-index: 10;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        ">
+          <div class="spinner-border spinner-border-sm" role="status"></div>
+          Checking for updates...
+        </div>
+      `);
+    }
+  }
+
+  // Hide incremental loading indicator
+  hideIncrementalLoadingIndicator() {
+    const refreshBtn = $("#refreshLHDNData");
+    if (refreshBtn.length) {
+      refreshBtn.removeClass("btn-loading");
+      refreshBtn.find(".btn-text").text("Refresh LHDN Data");
+    }
+
+    // Remove table overlay
+    $(".incremental-loading").remove();
+  }
+
+  // Highlight updated rows briefly
+  highlightUpdatedRows(updatedRows) {
+    const uuids = updatedRows.map(row => row.uuid);
+
+    // Find and highlight rows
+    this.table.rows().every(function() {
+      const rowData = this.data();
+      if (uuids.includes(rowData.uuid)) {
+        const rowNode = this.node();
+        $(rowNode).addClass('row-updated');
+
+        // Remove highlight after 3 seconds
+        setTimeout(() => {
+          $(rowNode).removeClass('row-updated');
+        }, 3000);
+      }
+    });
   }
 
   // New method with retry logic
@@ -1762,19 +2156,29 @@ class InvoiceTableManager {
     this.addExportButton();
     this.initializeTooltipsAndCopy();
 
-    // Add refresh button with enhanced styling and responsiveness
+    // Add enhanced refresh button with status indicator
     const refreshButton = $(`
             <button id="refreshLHDNData" class="btn btn-primary btn-sm ms-2 refresh-enhanced"
                     data-bs-toggle="tooltip"
                     data-bs-placement="top"
-                    title="Refresh data from LHDN server">
-                <i class="bi bi-arrow-clockwise me-1"></i>
-                <span class="btn-text">Refresh LHDN Data</span>
+                    title="Full refresh from LHDN server - fetches latest data and updates database">
+                <i class="bi bi-cloud-download me-1"></i>
+                <span class="btn-text">Full LHDN Refresh</span>
                 <small class="text-light ms-1 refresh-timer" style="display: none;"></small>
             </button>
         `);
 
-    $(".dataTables_length").append(refreshButton);
+    // Add status indicator for refresh operations
+    const statusIndicator = $(`
+            <div class="refresh-status-indicator ms-2" style="display: none;">
+                <small class="text-muted d-flex align-items-center">
+                    <div class="spinner-border spinner-border-sm me-1" role="status" style="width: 12px; height: 12px;"></div>
+                    <span class="status-text">Checking for updates...</span>
+                </small>
+            </div>
+        `);
+
+    $(".dataTables_length").append(refreshButton).append(statusIndicator);
     // Initialize tooltip for the refresh button with proper container
     new bootstrap.Tooltip(refreshButton[0], {
       container: 'body',
@@ -1891,9 +2295,11 @@ class InvoiceTableManager {
           // Clear the cache timestamp to force a fresh fetch
           localStorage.removeItem("lastDataUpdate");
 
-          // Reload the table data - this won't work for local data tables
-          // So we need to refresh the current data source instead
-          await this.refreshCurrentDataSource();
+          // Use incremental refresh for better UX, unless forced
+          await this.refreshCurrentDataSource({
+            incremental: !window.forceRefreshLHDN,
+            force: window.forceRefreshLHDN
+          });
 
           progressBar.style.width = "100%";
           statusText.textContent = "Success! Your data is now up to date.";

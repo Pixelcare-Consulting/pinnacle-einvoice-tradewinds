@@ -19,7 +19,7 @@ const { formatLHDNError } = require("../../utils/lhdnErrorHandler");
 // Load the existing comprehensive LHDNErrorMapper
 let LHDNErrorMapper;
 try {
-  const lhdnErrorMappingPath = path.join(__dirname, '../public/assets/utils/lhdnErrorMapping.js');
+  const lhdnErrorMappingPath = path.join(__dirname, '../../public/assets/utils/lhdnErrorMapping.js');
   const lhdnErrorMappingCode = fs.readFileSync(lhdnErrorMappingPath, 'utf8');
 
   // Create a minimal environment to execute the mapping code
@@ -33,7 +33,7 @@ try {
   vm.runInContext(lhdnErrorMappingCode, context);
 
   LHDNErrorMapper = context.module.exports || context.window.LHDNErrorMapper;
-  console.log('Successfully loaded comprehensive LHDNErrorMapper with', Object.keys(new LHDNErrorMapper().errorCodeMap).length, 'error codes');
+  // console.log('Successfully loaded comprehensive LHDNErrorMapper with', Object.keys(new LHDNErrorMapper().errorCodeMap).length, 'error codes');
 } catch (error) {
   console.error('Failed to load LHDNErrorMapper:', error);
   // Fallback to a simple error mapper
@@ -76,6 +76,14 @@ const {
   ACTIONS,
   STATUS,
 } = require("../../services/logging-prisma.service");
+
+// Development logging helper - use this for debug logs in future development
+const isDevelopment = process.env.NODE_ENV === 'development';
+const debugLog = (...args) => {
+  if (isDevelopment) {
+    console.log(...args);
+  }
+};
 
 // Helper function for delays
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -188,7 +196,7 @@ class LHDNCache {
     });
     this.cacheExpiry.set(key, expiryTime);
 
-    console.log(`[Cache] Stored ${type} for ${uuid} (TTL: ${ttl/1000}s)`);
+    // console.log(`[Cache] Stored ${type} for ${uuid} (TTL: ${ttl/1000}s)`);
   }
 
   get(type, uuid, userId = null) {
@@ -204,7 +212,7 @@ class LHDNCache {
 
     const cached = this.cache.get(key);
     if (cached) {
-      console.log(`[Cache] Hit for ${type}:${uuid} (age: ${(Date.now() - cached.timestamp)/1000}s)`);
+      // console.log(`[Cache] Hit for ${type}:${uuid} (age: ${(Date.now() - cached.timestamp)/1000}s)`);
       return JSON.parse(JSON.stringify(cached.data)); // Return deep clone
     }
 
@@ -221,7 +229,7 @@ class LHDNCache {
     const key = this.generateKey(type, uuid, userId);
     this.cache.delete(key);
     this.cacheExpiry.delete(key);
-    console.log(`[Cache] Invalidated ${type} for ${uuid}`);
+    // console.log(`[Cache] Invalidated ${type} for ${uuid}`);
   }
 
   cleanup() {
@@ -237,7 +245,7 @@ class LHDNCache {
     }
 
     if (cleanedCount > 0) {
-      console.log(`[Cache] Cleaned up ${cleanedCount} expired entries`);
+      // console.log(`[Cache] Cleaned up ${cleanedCount} expired entries`);
     }
   }
 
@@ -352,16 +360,16 @@ function getPortalUrl(environment) {
 
 // Enhanced document fetching function with smart caching and incremental sync
 const fetchRecentDocuments = async (req) => {
-  console.log("Starting enhanced document fetch process...");
+  // console.log("Starting enhanced document fetch process...");
 
   try {
     // Get LHDN configuration
     const lhdnConfig = await getLHDNConfig();
-    console.log("Using LHDN configuration:", {
-      environment: lhdnConfig.environment,
-      baseUrl: lhdnConfig.baseUrl,
-      timeout: lhdnConfig.timeout,
-    });
+    // console.log("Using LHDN configuration:", {
+    //   environment: lhdnConfig.environment,
+    //   baseUrl: lhdnConfig.baseUrl,
+    //   timeout: lhdnConfig.timeout,
+    // });
 
     // Check sync strategy from query parameters
     const incrementalSync = req.query.incrementalSync !== "false"; // Default to true
@@ -393,15 +401,15 @@ const fetchRecentDocuments = async (req) => {
         // Use the most recent validation or received timestamp
         lastSyncTimestamp =
           mostRecentDoc.dateTimeValidated || mostRecentDoc.dateTimeReceived;
-        console.log(
-          `Incremental sync enabled. Last document timestamp: ${lastSyncTimestamp}`
-        );
+        // console.log(
+        //   `Incremental sync enabled. Last document timestamp: ${lastSyncTimestamp}`
+        // );
       }
     }
 
     // If we have database records, use them as the initial data source
     if (dbDocuments && dbDocuments.length > 0) {
-      console.log(`Found ${dbDocuments.length} documents in database`);
+      // console.log(`Found ${dbDocuments.length} documents in database`);
 
       // Check if we need to refresh from API
       const lastSyncedDocument = await prisma.wP_INBOUND_STATUS.findFirst({
@@ -425,11 +433,11 @@ const fetchRecentDocuments = async (req) => {
         const timeSinceLastSync =
           currentTime - new Date(lastSyncedDocument.last_sync_date);
         if (timeSinceLastSync < syncThreshold) {
-          console.log(
-            "Using database records - last sync was",
-            Math.round(timeSinceLastSync / 1000 / 60),
-            "minutes ago"
-          );
+          // console.log(
+          //   "Using database records - last sync was",
+          //   Math.round(timeSinceLastSync / 1000 / 60),
+          //   "minutes ago"
+          // );
           return {
             result: dbDocuments,
             cached: true,
@@ -440,19 +448,19 @@ const fetchRecentDocuments = async (req) => {
 
       // If we're here, we need to refresh from API but still have DB records as fallback
       if (incrementalSync && lastSyncTimestamp) {
-        console.log(
-          "Database records exist, performing incremental sync from API"
-        );
+        // console.log(
+        //   "Database records exist, performing incremental sync from API"
+        // );
       } else {
-        console.log("Database records exist but need full refresh from API");
+        // console.log("Database records exist but need full refresh from API");
       }
     } else {
-      console.log("No documents found in database, will fetch from API");
+      // console.log("No documents found in database, will fetch from API");
     }
 
     // Attempt to fetch from API
     try {
-      console.log("Fetching fresh data from LHDN API...");
+      // console.log("Fetching fresh data from LHDN API...");
       const documents = [];
       let pageNo = 1;
       const pageSize = 100; // MyInvois recommended page size
@@ -475,6 +483,7 @@ const fetchRecentDocuments = async (req) => {
               const waitTime =
                 new Date(rateLimitReset).getTime() - Date.now() + 1000; // Add 1s buffer
               if (waitTime > 0) {
+                // Rate limit logging - keep for monitoring
                 console.log(
                   `Rate limit reached. Waiting ${Math.round(
                     waitTime / 1000
@@ -489,9 +498,9 @@ const fetchRecentDocuments = async (req) => {
 
             // If no token in session, try to get directly from file
             if (!token) {
-              console.log(
-                "No token in session, trying to get from file directly"
-              );
+              // console.log(
+              //   "No token in session, trying to get from file directly"
+              // );
               token = await readTokenFromFile();
             }
 
@@ -501,7 +510,7 @@ const fetchRecentDocuments = async (req) => {
               throw new Error("No valid access token found");
             }
 
-            console.log("Using token for LHDN API request");
+            // console.log("Using token for LHDN API request");
 
             const response = await axios.get(
               `${lhdnConfig.baseUrl}/api/v1.0/documents/recent`,
@@ -531,7 +540,7 @@ const fetchRecentDocuments = async (req) => {
             const { result, pagination } = response.data;
 
             if (!result || result.length === 0) {
-              console.log(`No more documents found after page ${pageNo - 1}`);
+              // console.log(`No more documents found after page ${pageNo - 1}`);
               hasMorePages = false;
               break;
             }
@@ -583,9 +592,9 @@ const fetchRecentDocuments = async (req) => {
               totalPayableAmount: doc.totalPayableAmount || doc.total || 0,
             }));
 
-            console.log(
-              `Mapped ${mappedDocuments.length} documents from API response`
-            );
+            // console.log(
+            //   `Mapped ${mappedDocuments.length} documents from API response`
+            // );
 
             // Smart pagination control for incremental sync
             let newDocumentsFound = 0;
@@ -610,9 +619,9 @@ const fetchRecentDocuments = async (req) => {
                   // If we're finding old documents, we can stop pagination early
                   if (existingDocumentsFound >= 10) {
                     // Stop if we find 10 consecutive old documents
-                    console.log(
-                      `Found ${existingDocumentsFound} existing documents, stopping pagination early`
-                    );
+                    // console.log(
+                    //   `Found ${existingDocumentsFound} existing documents, stopping pagination early`
+                    // );
                     hasMorePages = false;
                     break;
                   }
@@ -620,33 +629,33 @@ const fetchRecentDocuments = async (req) => {
               }
 
               documents.push(...newDocuments);
-              console.log(
-                `Incremental sync: ${newDocumentsFound} new documents, ${existingDocumentsFound} existing documents from page ${pageNo}`
-              );
+              // console.log(
+              //   `Incremental sync: ${newDocumentsFound} new documents, ${existingDocumentsFound} existing documents from page ${pageNo}`
+              // );
 
               // If we found mostly existing documents, stop pagination
               if (
                 existingDocumentsFound > newDocumentsFound &&
                 existingDocumentsFound >= 5
               ) {
-                console.log(
-                  "Mostly existing documents found, stopping incremental sync"
-                );
+                // console.log(
+                //   "Mostly existing documents found, stopping incremental sync"
+                // );
                 hasMorePages = false;
               }
             } else {
               // Full sync - add all documents
               documents.push(...mappedDocuments);
-              console.log(
-                `Full sync: Added ${mappedDocuments.length} documents from page ${pageNo}`
-              );
+              // console.log(
+              //   `Full sync: Added ${mappedDocuments.length} documents from page ${pageNo}`
+              // );
             }
 
             // Limit incremental sync to maxIncrementalPages to prevent excessive API calls
             if (incrementalSync && pageNo >= maxIncrementalPages) {
-              console.log(
-                `Reached maximum incremental pages (${maxIncrementalPages}), stopping sync`
-              );
+              // console.log(
+              //   `Reached maximum incremental pages (${maxIncrementalPages}), stopping sync`
+              // );
               hasMorePages = false;
             }
 
@@ -681,11 +690,11 @@ const fetchRecentDocuments = async (req) => {
               const jitter = Math.random() * 200; // 0-200ms jitter
               adaptiveDelay += jitter;
 
-              console.log(
-                `Adaptive delay: ${Math.round(
-                  adaptiveDelay
-                )}ms (remaining: ${rateLimitRemaining})`
-              );
+              // console.log(
+              //   `Adaptive delay: ${Math.round(
+              //     adaptiveDelay
+              //   )}ms (remaining: ${rateLimitRemaining})`
+              // );
               await delay(adaptiveDelay);
             }
           } catch (error) {
@@ -701,7 +710,7 @@ const fetchRecentDocuments = async (req) => {
 
               // Try to refresh token first
               try {
-                console.log("Attempting to refresh token...");
+                // console.log("Attempting to refresh token...");
 
                 // Try to get token from file using our enhanced function
                 const fileToken = await readTokenFromFile();
@@ -709,7 +718,7 @@ const fetchRecentDocuments = async (req) => {
                 if (fileToken) {
                   // If file token is different from session token, try using it
                   if (fileToken !== req.session.accessToken) {
-                    console.log("Found different token in file, trying it...");
+                    // console.log("Found different token in file, trying it...");
                     req.session.accessToken = fileToken;
                     retryCount--; // Don't count this as a retry
                     continue;
@@ -718,14 +727,14 @@ const fetchRecentDocuments = async (req) => {
 
                 // If file token didn't work, try to get a fresh token
                 try {
-                  console.log("Attempting to get a fresh token...");
+                  // console.log("Attempting to get a fresh token...");
                   const {
                     getTokenSession,
                   } = require("../../services/token-prisma.service");
                   const freshToken = await getTokenSession();
 
                   if (freshToken) {
-                    console.log("Successfully obtained fresh token");
+                    // console.log("Successfully obtained fresh token");
                     req.session.accessToken = freshToken;
                     retryCount--; // Don't count this as a retry
                     continue;
@@ -795,9 +804,9 @@ const fetchRecentDocuments = async (req) => {
                 hasMorePages = false;
                 break;
               }
-              console.log(
-                `Moving to next page after max retries for page ${pageNo}`
-              );
+              // console.log(
+              //   `Moving to next page after max retries for page ${pageNo}`
+              // );
               pageNo++;
               break;
             }
@@ -807,11 +816,11 @@ const fetchRecentDocuments = async (req) => {
               lhdnConfig.maxRetryDelay,
               lhdnConfig.retryDelay * Math.pow(2, retryCount)
             );
-            console.log(
-              `Retrying page ${pageNo} after ${
-                backoffDelay / 1000
-              }s delay (attempt ${retryCount + 1}/${lhdnConfig.maxRetries})...`
-            );
+            // console.log(
+            //   `Retrying page ${pageNo} after ${
+            //     backoffDelay / 1000
+            //   }s delay (attempt ${retryCount + 1}/${lhdnConfig.maxRetries})...`
+            // );
             await delay(backoffDelay);
           }
         }
@@ -825,9 +834,9 @@ const fetchRecentDocuments = async (req) => {
         throw new Error("No documents could be fetched from the API");
       }
 
-      console.log(
-        `Fetch complete. Total documents retrieved: ${documents.length}`
-      );
+      // console.log(
+      //   `Fetch complete. Total documents retrieved: ${documents.length}`
+      // );
 
       // Save the fetched documents to database
       await saveInboundStatus({ result: documents }, req);
@@ -837,14 +846,14 @@ const fetchRecentDocuments = async (req) => {
         ...new Set(documents.map((doc) => doc.submissionuid).filter(Boolean)),
       ];
        if (uniquesubmissionuids.length > 0) {
-         console.log(
-           `found ${uniquesubmissionuids.length} unique submission uids to poll`
-         );
+         // console.log(
+         //   `found ${uniquesubmissionuids.length} unique submission uids to poll`
+         // );
 
          // poll each submission in sequence to avoid rate limiting
          for (const submissionuid of uniquesubmissionuids) {
            try {
-             console.log(`polling submission status for: ${submissionuid}`);
+             // console.log(`polling submission status for: ${submissionuid}`);
              await pollSubmissionStatus(submissionuid, 5); // limit to 5 attempts for background polling
            } catch (pollerror) {
              console.error(
@@ -895,7 +904,7 @@ const fetchRecentDocuments = async (req) => {
 
       // If we have database records, use them as fallback
       if (dbDocuments && dbDocuments.length > 0) {
-        console.log(`Using ${dbDocuments.length} database records as fallback`);
+        // console.log(`Using ${dbDocuments.length} database records as fallback`);
         return {
           result: dbDocuments,
           cached: true,
@@ -922,18 +931,37 @@ async function getCachedDocuments(req) {
   const cacheKey = `recentDocuments_${req.session?.user?.TIN || "default"}`;
   const forceRefresh = req.query.forceRefresh === "true";
   const useDatabase = req.query.useDatabase === "true";
+  const incremental = req.query.incremental === "true";
 
   // Get from cache if not forcing refresh
   let data = forceRefresh ? null : cache.get(cacheKey);
 
-  if (!data) {
+  // For incremental refresh, use shorter cache timeout and prioritize recent changes
+  if (incremental && !forceRefresh) {
+    // console.log("Performing incremental refresh with optimized caching");
+    const incrementalCacheKey = `${cacheKey}_incremental`;
+    const incrementalData = cache.get(incrementalCacheKey);
+
+    // Use incremental cache if available and less than 2 minutes old
+    if (incrementalData && (Date.now() - new Date(incrementalData.timestamp).getTime()) < 120000) {
+      // console.log("Returning incremental cached documents");
+      return incrementalData;
+    }
+  }
+
+  if (data && !forceRefresh && !incremental) {
+    // console.log("Returning cached documents");
+    return data;
+  }
+
+  if (!data || incremental) {
     try {
       // If useDatabase is true and we're not forcing refresh, try to get from database first
       if (useDatabase && !forceRefresh) {
         try {
-          console.log(
-            "Using database as primary data source due to useDatabase parameter"
-          );
+          // console.log(
+          //   "Using database as primary data source due to useDatabase parameter"
+          // );
           // Get documents from database
           const dbDocuments = await prisma.wP_INBOUND_STATUS.findMany({
             orderBy: {
@@ -943,7 +971,7 @@ async function getCachedDocuments(req) {
           });
 
           if (dbDocuments && dbDocuments.length > 0) {
-            console.log(`Found ${dbDocuments.length} documents in database`);
+            // console.log(`Found ${dbDocuments.length} documents in database`);
             data = {
               result: dbDocuments,
               cached: false,
@@ -954,11 +982,11 @@ async function getCachedDocuments(req) {
 
             // Store in cache with shorter TTL for database data
             cache.set(cacheKey, data, 300); // 5 minutes
-            console.log("Cached database documents for 5 minutes");
+            // console.log("Cached database documents for 5 minutes");
 
             // Try to fetch from API in the background to update the database
             try {
-              console.log("Fetching from API in background to update database");
+              // console.log("Fetching from API in background to update database");
               fetchRecentDocuments(req).catch((apiError) => {
                 console.warn("Background API fetch failed:", apiError.message);
               });
@@ -982,11 +1010,19 @@ async function getCachedDocuments(req) {
         // Store in cache with appropriate TTL based on source
         const cacheTTL = data.fromApi ? 900 : 300; // 15 minutes for API data, 5 minutes for DB data
         cache.set(cacheKey, data, cacheTTL);
-        console.log(
-          `${
-            forceRefresh ? "Force refreshed" : "Fetched"
-          } documents and cached for ${cacheTTL} seconds`
-        );
+
+        // For incremental refresh, also store in incremental cache with shorter TTL
+        if (incremental) {
+          const incrementalCacheKey = `${cacheKey}_incremental`;
+          cache.set(incrementalCacheKey, data, 120); // 2 minutes for incremental cache
+          // console.log("Stored incremental cache for 2 minutes");
+        }
+
+        // console.log(
+        //   `${
+        //     forceRefresh ? "Force refreshed" : "Fetched"
+        //   } documents and cached for ${cacheTTL} seconds`
+        // );
       }
     } catch (error) {
       console.error("Error in getCachedDocuments:", error);
@@ -1015,14 +1051,14 @@ async function getCachedDocuments(req) {
             // Update session with token from file
             if (req.session) {
               req.session.accessToken = fileToken;
-              console.log("Updated session with token from file");
+              // console.log("Updated session with token from file");
 
               // Try fetching again with new token
               try {
                 data = await fetchRecentDocuments(req);
                 if (data && data.result && data.result.length > 0) {
                   cache.set(cacheKey, data, 900); // 15 minutes
-                  console.log("Successfully fetched data with refreshed token");
+                  // console.log("Successfully fetched data with refreshed token");
                 }
               } catch (retryError) {
                 console.error("Retry with refreshed token failed:", retryError);
@@ -1031,7 +1067,7 @@ async function getCachedDocuments(req) {
           } else {
             // If no token in file, try to get a fresh one
             try {
-              console.log("No token in file, attempting to get a fresh token");
+              // console.log("No token in file, attempting to get a fresh token");
               const {
                 getTokenSession,
               } = require("../../services/token-prisma.service");
@@ -1039,14 +1075,14 @@ async function getCachedDocuments(req) {
 
               if (freshToken && req.session) {
                 req.session.accessToken = freshToken;
-                console.log("Updated session with fresh token");
+                // console.log("Updated session with fresh token");
 
                 // Try fetching again with fresh token
                 try {
                   data = await fetchRecentDocuments(req);
                   if (data && data.result && data.result.length > 0) {
                     cache.set(cacheKey, data, 900); // 15 minutes
-                    console.log("Successfully fetched data with fresh token");
+                    // console.log("Successfully fetched data with fresh token");
                   }
                 } catch (retryError) {
                   console.error("Retry with fresh token failed:", retryError);
@@ -1064,7 +1100,7 @@ async function getCachedDocuments(req) {
       // If we still don't have data, try database fallback
       if (!data || !data.result || data.result.length === 0) {
         try {
-          console.log("Attempting final fallback to database...");
+          // console.log("Attempting final fallback to database...");
           const fallbackDocuments = await prisma.wP_INBOUND_STATUS.findMany({
             orderBy: {
               dateTimeReceived: "desc",
@@ -1073,9 +1109,9 @@ async function getCachedDocuments(req) {
           });
 
           if (fallbackDocuments && fallbackDocuments.length > 0) {
-            console.log(
-              `Using ${fallbackDocuments.length} database records as final fallback`
-            );
+            // console.log(
+            //   `Using ${fallbackDocuments.length} database records as final fallback`
+            // );
             data = {
               result: fallbackDocuments,
               cached: false,
@@ -1096,7 +1132,7 @@ async function getCachedDocuments(req) {
       }
     }
   } else {
-    console.log(`Using cached data (${data.result?.length || 0} documents)`);
+    // console.log(`Using cached data (${data.result?.length || 0} documents)`);
   }
 
   return data;
@@ -1127,353 +1163,6 @@ const generateTemplateHash = (templateData) => {
   });
   return crypto.createHash("md5").update(keyData).digest("hex");
 };
-
-// // Helper function to generate JSON response file
-// const generateResponseFile = async (item, req = null) => {
-//   try {
-//     // Get username from session if available
-//     const username = req?.session?.user?.username || "System";
-//     // Only generate for valid documents with required fields
-//     if (
-//       !item.uuid ||
-//       !item.submissionUid ||
-//       !item.longId ||
-//       item.status !== "Valid"
-//     ) {
-//       console.log(
-//         `Skipping response file generation for ${item.uuid}: missing required fields or invalid status`
-//       );
-//       return {
-//         success: false,
-//         message: "Skipped: Missing required fields or invalid status",
-//       };
-//     }
-
-//     // Get LHDN configuration
-//     const lhdnConfig = await getLHDNConfig();
-
-//     // Get outgoing path configuration using Prisma
-//     const outgoingConfig = await prisma.wP_CONFIGURATION.findFirst({
-//       where: {
-//         Type: "OUTGOING",
-//         IsActive: true,
-//       },
-//       orderBy: {
-//         CreateTS: "desc",
-//       },
-//     });
-
-//     if (!outgoingConfig || !outgoingConfig.Settings) {
-//       console.log(
-//         `No outgoing path configuration found, skipping response file generation for ${item.uuid}`
-//       );
-//       return {
-//         success: false,
-//         message: "No outgoing path configuration found",
-//       };
-//     }
-
-//     let settings =
-//       typeof outgoingConfig.Settings === "string"
-//         ? JSON.parse(outgoingConfig.Settings)
-//         : outgoingConfig.Settings;
-
-//     if (!settings.networkPath) {
-//       console.log(
-//         `No network path configured in outgoing settings for ${item.uuid}`
-//       );
-//       return { success: false, message: "No network path configured" };
-//     }
-
-//     // Try to get user registration details
-//     const userRegistration = await prisma.wP_USER_REGISTRATION.findFirst({
-//       where: { ValidStatus: "1" }, // ValidStatus is a CHAR(1) field, not a boolean
-//       orderBy: {
-//         CreateTS: "desc",
-//       },
-//     });
-
-//     if (!userRegistration || !userRegistration.TIN) {
-//       console.log(`No active user registration found with TIN`);
-//       return { success: false, message: "No active user registration found" };
-//     }
-
-//     // Try to get company settings based on user's TIN
-//     let companySettings = await prisma.wP_COMPANY_SETTINGS.findFirst({
-//       where: { TIN: userRegistration.TIN },
-//     });
-
-//     // If no company settings found with user's TIN, try with document TINs
-//     if (!companySettings) {
-//       console.log(
-//         `No company settings found for user TIN: ${userRegistration.TIN}, trying document TINs`
-//       );
-
-//       // Check if the document's issuerTin or receiverId matches any company settings
-//       if (
-//         item.issuerTin === userRegistration.TIN ||
-//         item.receiverId === userRegistration.TIN
-//       ) {
-//         companySettings = await prisma.wP_COMPANY_SETTINGS.findFirst({
-//           where: {
-//             TIN: {
-//               in: [item.issuerTin, item.receiverId].filter(Boolean),
-//             },
-//           },
-//         });
-//       }
-//     }
-
-//     if (!companySettings) {
-//       console.log(
-//         `No matching company settings found for TINs: User(${userRegistration.TIN}), Issuer(${item.issuerTin}), Receiver(${item.receiverId})`
-//       );
-//       return { success: false, message: "No matching company settings found" };
-//     }
-
-//     // Set company name from settings
-//     const companyName = companySettings.CompanyName;
-
-//     // Get document details from outbound status using Prisma
-//     // Note: UUID is not a unique field, so we need to use findFirst instead of findUnique
-//     const outboundDoc = await prisma.wP_OUTBOUND_STATUS.findFirst({
-//       where: { UUID: item.uuid },
-//     });
-
-//     let type, company, date;
-//     let invoiceTypeCode = "01"; // Default invoice type code
-//     let invoiceNo = item.internalId || "";
-
-//     // Define sanitization function early so we can use it for all path components and IDs
-//     const sanitizePath = (str) => {
-//       if (!str) return "";
-//       // Replace all characters that are problematic in file paths
-//       return String(str).replace(/[<>:"/\\|?*]/g, "_");
-//     };
-
-//     // Sanitize the invoiceNo immediately
-//     invoiceNo = sanitizePath(invoiceNo);
-
-//     // Always try to get inbound data first using Prisma
-//     const inboundDoc = await prisma.wP_INBOUND_STATUS.findUnique({
-//       where: { uuid: item.uuid },
-//     });
-
-//     if (inboundDoc) {
-//       // Use the helper function to get invoice type code from typeName
-//       invoiceTypeCode = getInvoiceTypeCode(inboundDoc.typeName);
-//       // Get and sanitize the internal ID
-//       invoiceNo = sanitizePath(inboundDoc.internalId || item.internalId || "");
-//     }
-
-//     // Try to use outbound data if available
-//     if (outboundDoc && outboundDoc.filePath) {
-//       try {
-//         // Extract type, company, and date from filePath
-//         const pathParts = outboundDoc.filePath.split(path.sep);
-//         if (pathParts.length >= 4) {
-//           const dateIndex = pathParts.length - 2;
-//           // const companyIndex = pathParts.length - 3; // Not used but kept for reference
-//           const typeIndex = pathParts.length - 4;
-
-//           type = pathParts[typeIndex] || "LHDN";
-//           company = companyName; // Use company name from settings
-//           date = pathParts[dateIndex] || moment().format("YYYY-MM-DD");
-
-//           // Only update invoice number if we got it from outbound
-//           if (outboundDoc.internalId) {
-//             invoiceNo = sanitizePath(outboundDoc.internalId);
-//           }
-
-//           // Try to get invoice type code from typeName if available
-//           if (outboundDoc.typeName) {
-//             const typeMatch = outboundDoc.typeName.match(/^(\d{2})/);
-//             if (typeMatch) {
-//               invoiceTypeCode = typeMatch[1];
-//             }
-//           }
-//         } else {
-//           console.log(
-//             `Invalid path structure in outbound doc for UUID: ${item.uuid}, using default values`
-//           );
-//           throw new Error("Invalid path structure");
-//         }
-//       } catch (pathError) {
-//         console.log(
-//           `Using default values due to path error for UUID: ${item.uuid}`
-//         );
-//         type = "LHDN";
-//         company = companyName;
-//         date = moment().format("YYYY-MM-DD");
-//       }
-//     } else {
-//       // Use default values if no outbound document
-//       console.log(
-//         `No outbound document or path for UUID: ${item.uuid}, using default values`
-//       );
-//       type = "LHDN";
-//       company = companyName;
-//       date = moment().format("YYYY-MM-DD");
-//     }
-
-//     // Ensure all path components are strings and valid
-//     type = String(type || "LHDN");
-//     company = String(company || companyName);
-//     date = String(date || moment().format("YYYY-MM-DD"));
-
-//     // Sanitize path components
-//     type = sanitizePath(type);
-//     company = sanitizePath(company);
-//     date = sanitizePath(date);
-
-//     // Ensure invoiceNo is sanitized again (in case it was updated after initial sanitization)
-//     invoiceNo = sanitizePath(invoiceNo);
-
-//     // Generate filename with new format: {invoiceTypeCode}_{invoiceNo}_{uuid}.json
-//     const fileName = `${invoiceTypeCode}_${invoiceNo}_${item.uuid}.json`;
-
-//     // Construct paths for outgoing files using configured network path
-//     const outgoingBasePath = path.join(settings.networkPath, type, company);
-
-//     // CHANGE: Previously tried to use a specific path from outboundDoc which might not exist
-//     // Now use a simpler path structure for all documents
-//     const outgoingJSONPath = outgoingBasePath;
-
-//     // Create directory structure recursively
-//     await fsPromises.mkdir(outgoingBasePath, { recursive: true });
-
-//     const jsonFilePath = path.join(outgoingJSONPath, fileName);
-
-//     // Check if JSON response file already exists
-//     try {
-//       await fsPromises.access(jsonFilePath);
-//       console.log(
-//         `Response file already exists for ${item.uuid}, skipping generation`
-//       );
-//       return {
-//         success: true,
-//         message: "Response file already exists",
-//         path: jsonFilePath,
-//         fileName: fileName,
-//         company: company,
-//       };
-//     } catch (err) {
-//       // File doesn't exist, continue with creation
-//     }
-
-//     const portalUrl = getPortalUrl(lhdnConfig.environment);
-//     const LHDNUrl = `https://${portalUrl}/${item.uuid}/share/${item.longId}`;
-
-//     // Create JSON content
-//     const jsonContent = {
-//       issueDate: moment(date).format("YYYY-MM-DD"),
-//       issueTime: new Date().toISOString().split("T")[1].split(".")[0] + "Z",
-//       invoiceTypeCode: invoiceTypeCode,
-//       invoiceNo: invoiceNo,
-//       uuid: item.uuid,
-//       submissionUid: item.submissionUid,
-//       longId: item.longId,
-//       status: item.status,
-//       lhdnUrl: LHDNUrl,
-//     };
-
-//     try {
-//       // Make sure the directory exists (extra check)
-//       const dirPath = path.dirname(jsonFilePath);
-//       await fsPromises.mkdir(dirPath, { recursive: true });
-
-//       // Write JSON file
-//       await fsPromises.writeFile(
-//         jsonFilePath,
-//         JSON.stringify(jsonContent, null, 2)
-//       );
-//       console.log(`Generated response file: ${jsonFilePath}`);
-
-//       // // Update the outbound status record with the username
-//       // try {
-//       //   // Find the outbound record first
-//       //   const outboundRecord = await prisma.wP_OUTBOUND_STATUS.findFirst({
-//       //     where: { UUID: item.uuid },
-//       //   });
-
-//       //   if (outboundRecord) {
-//       //     // Update the record with the username
-//       //     await prisma.wP_OUTBOUND_STATUS.update({
-//       //       where: { id: outboundRecord.id },
-//       //       data: {
-//       //         submitted_by: username,
-//       //         updated_at: new Date(),
-//       //       },
-//       //     });
-//       //     console.log(
-//       //       `Updated outbound record with username: ${username} for UUID: ${item.uuid}`
-//       //     );
-//       //   }
-//       // } catch (updateError) {
-//       //   console.error(
-//       //     `Error updating outbound record with username for ${item.uuid}:`,
-//       //     updateError
-//       //   );
-//       //   // Continue even if this fails
-//       // }
-
-//       return {
-//         success: true,
-//         message: "Response file generated successfully",
-//         path: jsonFilePath,
-//         fileName: fileName,
-//         company: company,
-//       };
-//     } catch (writeError) {
-//       console.error(
-//         `Error writing response file for ${item.uuid}:`,
-//         writeError
-//       );
-
-//       // If original path fails, try a fallback path - simplify the path further
-//       try {
-//         // Create a simpler fallback path without any potential problematic components
-//         const fallbackDirName = `LHDN_Fallback_${moment().format("YYYYMMDD")}`;
-//         const fallbackPath = path.join(settings.networkPath, fallbackDirName);
-//         await fsPromises.mkdir(fallbackPath, { recursive: true });
-
-//         // Use a very simple filename pattern that removes all special characters
-//         const simplifiedUuid = item.uuid.replace(/[^a-zA-Z0-9]/g, "");
-//         const fallbackFileName = `document_${simplifiedUuid}.json`;
-//         const fallbackFilePath = path.join(fallbackPath, fallbackFileName);
-
-//         await fsPromises.writeFile(
-//           fallbackFilePath,
-//           JSON.stringify(jsonContent, null, 2)
-//         );
-//         console.log(
-//           `Generated response file at fallback location: ${fallbackFilePath}`
-//         );
-
-//         return {
-//           success: true,
-//           message: "Response file generated at fallback location",
-//           path: fallbackFilePath,
-//           fileName: fallbackFileName,
-//           company: company,
-//         };
-//       } catch (fallbackError) {
-//         console.error(
-//           `Fallback path also failed for ${item.uuid}:`,
-//           fallbackError
-//         );
-//         throw writeError; // throw the original error
-//       }
-//     }
-//   } catch (error) {
-//     console.error(`Error generating response file for ${item.uuid}:`, error);
-//     return {
-//       success: false,
-//       message: `Error generating response file: ${error.message}`,
-//       error: error,
-//     };
-//   }
-// };
 
 // --- Concurrency-safe DB helpers (retries for deadlocks/write conflicts) ---
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1562,9 +1251,9 @@ const saveInboundStatus = async (data, req = null) => {
     batches.push(data.result.slice(i, i + batchSize));
   }
 
-  console.log(
-    `Processing ${batches.length} batches of ${batchSize} documents each`
-  );
+  // console.log(
+  //   `Processing ${batches.length} batches of ${batchSize} documents each`
+  // );
 
   // Log the start of batch processing
   await LoggingService.log({
@@ -1596,6 +1285,24 @@ const saveInboundStatus = async (data, req = null) => {
             // Ensure issuerName is set from supplierName if missing
             const issuerName = item.issuerName || item.supplierName || null;
 
+            // Check for existing record to track status changes
+            const existingRecord = await prisma.wP_INBOUND_STATUS.findUnique({
+              where: { uuid: item.uuid },
+              select: {
+                status: true,
+                dateTimeValidated: true,
+                documentStatusReason: true,
+                updated_at: true
+              }
+            });
+
+            // Determine if this is a status change
+            const isStatusChange = existingRecord && (
+              existingRecord.status !== item.status ||
+              existingRecord.dateTimeValidated !== formatDate(item.dateTimeValidated) ||
+              existingRecord.documentStatusReason !== item.documentStatusReason
+            );
+
             // Use transaction wrapper for WP_INBOUND_STATUS upsert
             await withTransaction(async (tx) => {
               return await tx.wP_INBOUND_STATUS.upsert({
@@ -1616,6 +1323,9 @@ const saveInboundStatus = async (data, req = null) => {
                   status: item.status,
                   documentStatusReason: item.documentStatusReason,
                   updated_at: new Date().toISOString(),
+                  // Add status change tracking
+                  statusChangeDetected: isStatusChange,
+                  lastStatusChange: isStatusChange ? new Date().toISOString() : existingRecord?.lastStatusChange,
                   totalSales:
                     item.totalSales || item.total || item.netAmount || 0,
                   totalExcludingTax: item.totalExcludingTax || 0,
@@ -1671,9 +1381,9 @@ const saveInboundStatus = async (data, req = null) => {
 
             // Log if we fixed a missing issuerName
             if (!item.issuerName && item.supplierName) {
-              console.log(
-                `Fixed missing issuerName using supplierName for UUID: ${item.uuid}`
-              );
+              // console.log(
+              //   `Fixed missing issuerName using supplierName for UUID: ${item.uuid}`
+              // );
             }
 
             // // Generate response file only for valid documents
@@ -1728,8 +1438,33 @@ const saveInboundStatus = async (data, req = null) => {
             //     }));
             // }
 
+            // Log status changes for monitoring
+            if (isStatusChange) {
+              console.log(`📊 Status change detected for ${item.uuid}: ${existingRecord?.status} → ${item.status}`);
+
+              // Log status change for analytics
+              await LoggingService.log({
+                description: `Document status changed: ${existingRecord?.status} → ${item.status}`,
+                username: req?.session?.user?.username || "System",
+                userId: req?.session?.user?.id,
+                ipAddress: req?.ip,
+                logType: LOG_TYPES.INFO,
+                module: MODULES.API,
+                action: ACTIONS.UPDATE,
+                status: STATUS.SUCCESS,
+                details: {
+                  uuid: item.uuid,
+                  oldStatus: existingRecord?.status,
+                  newStatus: item.status,
+                  oldValidated: existingRecord?.dateTimeValidated,
+                  newValidated: formatDate(item.dateTimeValidated),
+                  statusReason: item.documentStatusReason
+                }
+              });
+            }
+
             successCount++;
-            return { success: true, item };
+            return { success: true, item, statusChanged: isStatusChange };
           } catch (error) {
             console.error(`Error processing document ${item.uuid}:`, error);
             errorCount++;
@@ -1739,30 +1474,30 @@ const saveInboundStatus = async (data, req = null) => {
       );
 
       // Log results for this chunk
-      const chunkSuccesses = results.filter((r) => r.success).length;
-      const chunkErrors = results.filter((r) => !r.success).length;
-      console.log(
-        `Chunk processed: ${chunkSuccesses} successes, ${chunkErrors} errors`
-      );
+      // const chunkSuccesses = results.filter((r) => r.success).length;
+      // const chunkErrors = results.filter((r) => !r.success).length;
+      // console.log(
+      //   `Chunk processed: ${chunkSuccesses} successes, ${chunkErrors} errors`
+      // );
     }
   }
 
   // Summarize response file generation results
   const successfulResponses = responseFileResults.filter((r) => r.success);
   if (successfulResponses.length > 0) {
-    console.log(
-      `Successfully generated ${successfulResponses.length} response files`
-    );
-    successfulResponses.forEach((result) => {
-      console.log(
-        `Generated: ${result.fileName} for company ${result.company}`
-      );
-    });
+    // console.log(
+    //   `Successfully generated ${successfulResponses.length} response files`
+    // );
+    // successfulResponses.forEach((result) => {
+    //   console.log(
+    //     `Generated: ${result.fileName} for company ${result.company}`
+    //   );
+    // });
   }
 
-  console.log(
-    `Save operation completed. Success: ${successCount}, Errors: ${errorCount}`
-  );
+  // console.log(
+  //   `Save operation completed. Success: ${successCount}, Errors: ${errorCount}`
+  // );
 
   return {
     successCount,
@@ -1777,13 +1512,13 @@ const saveInboundStatus = async (data, req = null) => {
 
 const requestLogger = async (req, _res, next) => {
   const requestId = Math.random().toString(36).substring(7);
-  console.log(`[${requestId}] New request:`, {
-    method: req.method,
-    path: req.path,
-    params: req.params,
-    query: req.query,
-    user: req.session?.user?.id || "anonymous",
-  });
+  // console.log(`[${requestId}] New request:`, {
+  //   method: req.method,
+  //   path: req.path,
+  //   params: req.params,
+  //   query: req.query,
+  //   user: req.session?.user?.id || "anonymous",
+  // });
   req.requestId = requestId;
   next();
 };
@@ -1795,7 +1530,7 @@ const pollSubmissionStatus = async (submissionUid, maxAttempts = 10) => {
       throw new Error("Submission UID is required for polling");
     }
 
-    console.log(`Starting to poll submission status for: ${submissionUid}`);
+    // console.log(`Starting to poll submission status for: ${submissionUid}`);
 
     // Get LHDN configuration
     const lhdnConfig = await getLHDNConfig();
@@ -1821,9 +1556,9 @@ const pollSubmissionStatus = async (submissionUid, maxAttempts = 10) => {
         const tokenMatch = tokenData.match(pattern);
         if (tokenMatch && tokenMatch[1]) {
           token = tokenMatch[1].trim();
-          console.log(
-            `Found token in AuthorizeToken.ini using pattern: ${pattern}`
-          );
+          // console.log(
+          //   `Found token in AuthorizeToken.ini using pattern: ${pattern}`
+          // );
           break;
         }
       }
@@ -1844,7 +1579,7 @@ const pollSubmissionStatus = async (submissionUid, maxAttempts = 10) => {
           }
 
           if (token) {
-            console.log("Found token in AuthorizeToken.ini using INI parsing");
+            // console.log("Found token in AuthorizeToken.ini using INI parsing");
           }
         } catch (iniError) {
           console.error("Error parsing AuthorizeToken.ini:", iniError);
@@ -1855,16 +1590,16 @@ const pollSubmissionStatus = async (submissionUid, maxAttempts = 10) => {
     // If still no token, try to get it from the token service
     if (!token) {
       try {
-        console.log(
-          "No token found in file, trying to get from token service..."
-        );
+        // console.log(
+        //   "No token found in file, trying to get from token service..."
+        // );
         const {
           getTokenSession,
         } = require("../../services/token-prisma.service");
         token = await getTokenSession();
 
         if (token) {
-          console.log("Successfully retrieved token from token service");
+          // console.log("Successfully retrieved token from token service");
         }
       } catch (tokenServiceError) {
         console.error("Error getting token from service:", tokenServiceError);
@@ -1908,18 +1643,18 @@ const pollSubmissionStatus = async (submissionUid, maxAttempts = 10) => {
           submissionStatus.overallStatus.toLowerCase() !== "in progress"
         ) {
           inProgress = false;
-          console.log(
-            `Submission ${submissionUid} completed with status: ${submissionStatus.overallStatus}`
-          );
+          // console.log(
+          //   `Submission ${submissionUid} completed with status: ${submissionStatus.overallStatus}`
+          // );
 
           // Process documents in the submission
           if (
             submissionStatus.documentSummary &&
             Array.isArray(submissionStatus.documentSummary)
           ) {
-            console.log(
-              `Processing ${submissionStatus.documentSummary.length} documents from submission`
-            );
+            // console.log(
+            //   `Processing ${submissionStatus.documentSummary.length} documents from submission`
+            // );
 
             // Save documents to database
             await saveInboundStatus({
@@ -1957,9 +1692,9 @@ const pollSubmissionStatus = async (submissionUid, maxAttempts = 10) => {
           };
         }
 
-        console.log(
-          `Submission ${submissionUid} still in progress (attempt ${attempts}/${maxAttempts}), waiting...`
-        );
+        // console.log(
+        //   `Submission ${submissionUid} still in progress (attempt ${attempts}/${maxAttempts}), waiting...`
+        // );
 
         // Wait for 5 seconds between polling attempts (as recommended by LHDN)
         await delay(5000);
@@ -1987,7 +1722,7 @@ const pollSubmissionStatus = async (submissionUid, maxAttempts = 10) => {
 
     // If we've reached max attempts and still in progress
     if (inProgress) {
-      console.log(
+     console.log(
         `Reached maximum polling attempts (${maxAttempts}) for submission ${submissionUid}`
       );
       return {
@@ -2025,11 +1760,11 @@ router.use(tokenRefreshMiddleware);
 // Document refresh endpoint
 router.post("/documents/refresh", async (req, res) => {
   try {
-    console.log("LHDN documents/refresh endpoint hit");
+    //console.log("LHDN documents/refresh endpoint hit");
 
     // Check if user is logged in
     if (!req.session?.user) {
-      console.log("No user session found");
+      //console.log("No user session found");
       return handleAuthError(req, res);
     }
 
@@ -2117,8 +1852,6 @@ router.post("/documents/refresh", async (req, res) => {
   }
 });
 
-// Authentication status endpoint - REMOVED DUPLICATE
-
 // Helper function to read token from file
 async function readTokenFromFile() {
   try {
@@ -2136,10 +1869,10 @@ async function readTokenFromFile() {
         tokenData.match(/token=(.+)/i);
 
       if (tokenMatch && tokenMatch[1]) {
-        console.log("Found token in AuthorizeToken.ini file");
+        //console.log("Found token in AuthorizeToken.ini file");
         return tokenMatch[1].trim();
       } else {
-        console.log("Token pattern not found in AuthorizeToken.ini file");
+        //console.log("Token pattern not found in AuthorizeToken.ini file");
         // Try to parse as JSON if no match found
         try {
           const jsonData = JSON.parse(tokenData);
@@ -2844,37 +2577,83 @@ router.get('/documents/:uuid/validation-results', async (req, res) => {
 
         const detailsData = response.data;
 
-        // Process validation results
+        // Process validation results with enhanced error mapping
         let processedValidationResults = null;
         if (detailsData.validationResults) {
+            // Load LHDN error mapper for better error messages
+            let lhdnErrorMapper = null;
+            try {
+                lhdnErrorMapper = require('../../services/lhdn/lhdnErrorMapper');
+            } catch (error) {
+                console.error('Failed to load LHDNErrorMapper:', error);
+            }
+
             processedValidationResults = {
                 status: detailsData.status,
                 validationSteps: detailsData.validationResults.validationSteps?.map(step => {
                     let errors = [];
                     if (step.error) {
                         if (Array.isArray(step.error.errors)) {
-                            errors = step.error.errors.map(err => ({
-                                code: err.code || 'VALIDATION_ERROR',
-                                message: err.message || err.toString(),
-                                field: err.field || null,
-                                value: err.value || null,
-                                details: err.details || null
-                            }));
+                            errors = step.error.errors.map(err => {
+                                // Enhanced error processing with LHDN error mapping
+                                const errorCode = err.code || 'VALIDATION_ERROR';
+                                const originalMessage = err.message || err.toString();
+
+                                // Apply error mapping if available
+                                let mappedError = null;
+                                if (lhdnErrorMapper && (originalMessage === '[object Object]' || originalMessage.includes('[object Object]'))) {
+                                    mappedError = lhdnErrorMapper.mapError(errorCode, originalMessage, step.name);
+                                }
+
+                                return {
+                                    code: errorCode,
+                                    message: mappedError ? mappedError.userMessage : originalMessage,
+                                    userMessage: mappedError ? mappedError.userMessage : originalMessage,
+                                    guidance: mappedError ? mappedError.guidance : null,
+                                    severity: mappedError ? mappedError.severity : 'error',
+                                    field: err.field || 'Not specified',
+                                    value: err.value || null,
+                                    details: mappedError ? mappedError.guidance?.join('; ') : (err.details || 'Document validation failed. Please check the document format and required fields.'),
+                                    _technical: mappedError ? {
+                                        originalMessage: originalMessage,
+                                        technicalMessage: mappedError.technicalMessage,
+                                        processedFromAPI: true
+                                    } : null
+                                };
+                            });
                         } else if (typeof step.error === 'object') {
+                            const errorCode = step.error.code || 'VALIDATION_ERROR';
+                            const originalMessage = step.error.message || step.error.toString();
+
+                            let mappedError = null;
+                            if (lhdnErrorMapper && (originalMessage === '[object Object]' || originalMessage.includes('[object Object]'))) {
+                                mappedError = lhdnErrorMapper.mapError(errorCode, originalMessage, step.name);
+                            }
+
                             errors = [{
-                                code: step.error.code || 'VALIDATION_ERROR',
-                                message: step.error.message || step.error.toString(),
-                                field: step.error.field || null,
+                                code: errorCode,
+                                message: mappedError ? mappedError.userMessage : originalMessage,
+                                userMessage: mappedError ? mappedError.userMessage : originalMessage,
+                                guidance: mappedError ? mappedError.guidance : null,
+                                severity: mappedError ? mappedError.severity : 'error',
+                                field: step.error.field || 'Not specified',
                                 value: step.error.value || null,
-                                details: step.error.details || null
+                                details: mappedError ? mappedError.guidance?.join('; ') : (step.error.details || 'Document validation failed. Please check the document format and required fields.'),
+                                _technical: mappedError ? {
+                                    originalMessage: originalMessage,
+                                    technicalMessage: mappedError.technicalMessage,
+                                    processedFromAPI: true
+                                } : null
                             }];
                         } else {
                             errors = [{
                                 code: 'VALIDATION_ERROR',
-                                message: step.error.toString(),
-                                field: null,
+                                message: 'Document validation failed. Please check the document format and required fields.',
+                                userMessage: 'Document validation failed. Please check the document format and required fields.',
+                                field: 'Not specified',
                                 value: null,
-                                details: null
+                                details: 'Document validation failed. Please check the document format and required fields.',
+                                severity: 'error'
                             }];
                         }
                     }
@@ -3786,6 +3565,69 @@ router.get("/documents/:uuid/display-details", async (req, res) => {
     lhdnCache.set("document-raw", uuid, documentData, userId);
     lhdnCache.set("document-details", uuid, detailsData, userId);
     console.log(`[Cache] Stored fresh data for document ${uuid}`);
+
+    // Update status in WP_INBOUND_STATUS when viewing details
+    try {
+      const currentTime = new Date().toISOString();
+
+      // Check if document exists in our database
+      const existingDoc = await prisma.wP_INBOUND_STATUS.findUnique({
+        where: { uuid },
+        select: {
+          status: true,
+          dateTimeValidated: true,
+          documentStatusReason: true,
+          updated_at: true
+        }
+      });
+
+      if (existingDoc) {
+        // Update the document with latest status from LHDN API
+        const updateData = {
+          updated_at: currentTime
+        };
+
+        // If we have fresh status information from the details API, update it
+        if (detailsData.status && detailsData.status !== existingDoc.status) {
+          updateData.status = detailsData.status;
+          updateData.documentStatusReason = detailsData.documentStatusReason || null;
+
+          console.log(`📊 Status updated on view details for ${uuid}: ${existingDoc.status} → ${detailsData.status}`);
+
+          // Log status change for monitoring
+          await LoggingService.log({
+            description: `Document status updated on view details: ${existingDoc.status} → ${detailsData.status}`,
+            username: req?.session?.user?.username || "System",
+            userId: req?.session?.user?.id,
+            ipAddress: req?.ip,
+            logType: LOG_TYPES.INFO,
+            module: MODULES.API,
+            action: ACTIONS.UPDATE,
+            status: STATUS.SUCCESS,
+            details: {
+              uuid: uuid,
+              oldStatus: existingDoc.status,
+              newStatus: detailsData.status,
+              viewedBy: req?.session?.user?.username || "System",
+              timestamp: currentTime
+            }
+          });
+        }
+
+        // Update the record
+        await prisma.wP_INBOUND_STATUS.update({
+          where: { uuid },
+          data: updateData
+        });
+
+        console.log(`✅ Updated WP_INBOUND_STATUS for document ${uuid} on view details`);
+      } else {
+        console.log(`⚠️ Document ${uuid} not found in WP_INBOUND_STATUS table`);
+      }
+    } catch (statusUpdateError) {
+      console.error(`❌ Error updating status for document ${uuid}:`, statusUpdateError);
+      // Continue processing even if status update fails
+    }
 
     // Process the data
     const processedData = await processDocumentData(
@@ -4987,19 +4829,19 @@ async function getTemplateData(uuid, accessToken, user) {
   const customerParty = invoice.AccountingCustomerParty[0].Party[0];
 
   // Generate QR code
-  console.log("Generating QR code...");
+  // console.log("Generating QR code...");
   const longId = rawData.longId || rawData.longID;
   const lhdnUuid = rawData.uuid;
   const portalUrl = getPortalUrl(lhdnConfig.environment);
   const qrCodeUrl = `https://${portalUrl}/${lhdnUuid}/share/${longId}`;
-  console.log("QR Code URL:", qrCodeUrl);
+  // console.log("QR Code URL:", qrCodeUrl);
 
   const qrCodeDataUrl = await QRCode.toDataURL(qrCodeUrl, {
     width: 200,
     margin: 2,
     color: { dark: "#000000", light: "#ffffff" },
   });
-  console.log("✓ QR code generated successfully");
+  // console.log("✓ QR code generated successfully");
 
   // Get tax information from UBL structure
   const taxTotal = invoice.TaxTotal?.[0];
@@ -5088,7 +4930,7 @@ async function getTemplateData(uuid, accessToken, user) {
     });
   }
 
-  console.log(`Standard tax rate determined from invoice: ${standardTaxRate}%`);
+  // console.log(`Standard tax rate determined from invoice: ${standardTaxRate}%`);
 
   // Process tax information for each line item
   const taxSummary = {};
@@ -5470,7 +5312,7 @@ router.get("/documents/:uuid/check-pdf", async (req, res) => {
   const requestId = req.requestId;
 
   try {
-    console.log(`[${requestId}] Checking PDF existence for ${uuid}`);
+    // console.log(`[${requestId}] Checking PDF existence for ${uuid}`);
     const tempDir = path.join(__dirname, "../../public/temp");
     const pdfPath = path.join(tempDir, `${uuid}.pdf`);
     const hashPath = path.join(tempDir, `${uuid}.hash`);
@@ -5942,21 +5784,21 @@ router.get("/taxpayer/validate/:tin", limiter, async (req, res) => {
 
 // Refresh endpoint
 router.post("/documents/refresh", async (req, res) => {
-  console.log("LHDN documents refresh endpoint hit");
+  // console.log("LHDN documents refresh endpoint hit");
   try {
     if (!req.session?.user) {
-      console.log("No user session found");
+      // console.log("No user session found");
       return handleAuthError(req, res);
     }
 
-    console.log("User from session:", req.session.user);
+    // console.log("User from session:", req.session.user);
 
     try {
       // Get LHDN configuration
       const lhdnConfig = await getLHDNConfig();
 
       // Fetch documents with multiple pages
-      console.log("Fetching fresh data from LHDN API with pagination...");
+      // console.log("Fetching fresh data from LHDN API with pagination...");
 
       // First, check for records with missing issuerName using Prisma
       const docsWithMissingData = await prisma.wP_INBOUND_STATUS.findMany({
@@ -5974,9 +5816,9 @@ router.post("/documents/refresh", async (req, res) => {
       });
 
       if (docsWithMissingData.length > 0) {
-        console.log(
-          `Found ${docsWithMissingData.length} documents with missing issuerName to update`
-        );
+        // console.log(
+        //   `Found ${docsWithMissingData.length} documents with missing issuerName to update`
+        // );
       }
 
       // Create array to hold all documents
@@ -6468,6 +6310,82 @@ router.post("/sync/background", async (req, res) => {
         message: error.message,
       },
       timestamp: new Date().toISOString(),
+    });
+  }
+});
+
+// Status check endpoint for real-time monitoring
+router.post("/status-check", async (req, res) => {
+  try {
+    const { uuids } = req.body;
+
+    if (!uuids || !Array.isArray(uuids) || uuids.length === 0) {
+      return res.json({ success: false, message: "No UUIDs provided" });
+    }
+
+    console.log(`[Status Check] Checking status for ${uuids.length} documents`);
+
+    // Get current status from database
+    const currentStatuses = await prisma.wP_INBOUND_STATUS.findMany({
+      where: {
+        uuid: { in: uuids }
+      },
+      select: {
+        uuid: true,
+        status: true,
+        dateTimeValidated: true,
+        documentStatusReason: true,
+        updated_at: true
+      }
+    });
+
+    // Check if any documents have been updated in the last 2 minutes
+    const recentlyUpdated = currentStatuses.filter(doc => {
+      if (!doc.updated_at) return false;
+      const updateTime = new Date(doc.updated_at).getTime();
+      const twoMinutesAgo = Date.now() - (2 * 60 * 1000);
+      return updateTime > twoMinutesAgo;
+    });
+
+    // If we have recently updated documents, fetch fresh data from LHDN
+    let changes = [];
+    if (recentlyUpdated.length > 0) {
+      console.log(`[Status Check] Found ${recentlyUpdated.length} recently updated documents`);
+
+      // Trigger a background refresh to get latest data
+      try {
+        const freshData = await fetchRecentDocuments(req);
+        if (freshData && freshData.result) {
+          // Save the fresh data to database
+          await saveInboundStatus(freshData);
+
+          // Identify actual changes
+          changes = recentlyUpdated.map(doc => ({
+            uuid: doc.uuid,
+            oldStatus: doc.status,
+            newStatus: doc.status, // Will be updated after save
+            timestamp: doc.updated_at
+          }));
+        }
+      } catch (error) {
+        console.error("[Status Check] Error fetching fresh data:", error);
+      }
+    }
+
+    res.json({
+      success: true,
+      changes: changes,
+      checkedCount: uuids.length,
+      recentlyUpdatedCount: recentlyUpdated.length,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error("[Status Check] Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error checking document status",
+      error: error.message
     });
   }
 });

@@ -12,6 +12,9 @@ const { validateExcelFilename } = require('../../services/helpers/filenameValida
 const { consumeExcelFile, previewExcelFile } = require('../../services/excel/excelConsumer');
 const LHDNSubmitter = require('../../services/lhdn/lhdnSubmitter');
 const { mapToLHDNFormat } = require('../../services/lhdn/lhdnMapper');
+// Duplicate Detection Services
+const ContentHasher = require('../../services/duplicateDetection/contentHasher');
+const InvoiceDuplicateChecker = require('../../services/duplicateDetection/invoiceDuplicateChecker');
 // Using LHDNSubmitter for submissions; token management is handled in token.service
 // const { getTokenAsTaxPayer, submitDocument } = require('../../services/lhdn/einvoice-sdk');
 
@@ -1368,14 +1371,119 @@ router.post('/upload-excel-template', [auth.isApiAuthenticated, excelUpload.sing
             dataTypes: processedData.map(item => typeof item).slice(0, 3)
         });
 
-        // Update database with processing results
+        // DUPLICATE DETECTION - Generate content hash and check for duplicates
+        console.log(`🔍 [DUPLICATE CHECK] Starting duplicate detection for ${processedData.length} invoices`);
+
+        // Generate content hash for the entire file
+        const contentHash = ContentHasher.generateInvoiceDataHash(processedData);
+        console.log(`🔍 [DUPLICATE CHECK] Generated content hash: ${contentHash}`);
+
+        // Check for content-based duplicates (same data in different files)
+        if (contentHash) {
+            const existingFileWithHash = await prisma.wP_UPLOADED_EXCEL_FILES.findFirst({
+                where: {
+                    metadata: {
+                        path: ['contentHash'],
+                        equals: contentHash
+                    },
+                    processing_status: { not: 'error' },
+                    id: { not: uploadedFile.id } // Exclude current file
+                }
+            });
+
+            if (existingFileWithHash) {
+                console.log(`🔍 [DUPLICATE CHECK] Content duplicate found: File ID ${existingFileWithHash.id}`);
+
+                // Clean up uploaded file
+                if (fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath);
+                }
+
+                // Delete the database record we just created
+                await prisma.wP_UPLOADED_EXCEL_FILES.delete({
+                    where: { id: uploadedFile.id }
+                });
+
+                return res.status(409).json({
+                    success: false,
+                    error: 'Duplicate content detected: This file contains the same invoice data as a previously uploaded file.',
+                    duplicateType: 'CONTENT_DUPLICATE',
+                    existingFile: {
+                        id: existingFileWithHash.id,
+                        filename: existingFileWithHash.filename,
+                        uploadDate: existingFileWithHash.upload_date,
+                        uploadedBy: existingFileWithHash.uploaded_by_name
+                    }
+                });
+            }
+        }
+
+        // Check for invoice-level duplicates
+        const duplicateCheck = await InvoiceDuplicateChecker.checkInvoiceDuplicates(
+            processedData,
+            req.user.id,
+            uploadedFile.id
+        );
+
+        console.log(`🔍 [DUPLICATE CHECK] Duplicate check results:`, duplicateCheck.summary);
+
+        // Block upload if critical duplicates are found
+        if (duplicateCheck.summary.hasBlockingDuplicates) {
+            const criticalDuplicates = duplicateCheck.duplicates.filter(d =>
+                ['CRITICAL', 'HIGH'].includes(d.severity)
+            );
+
+            console.log(`🔍 [DUPLICATE CHECK] Blocking upload due to ${criticalDuplicates.length} critical duplicates`);
+
+            // Clean up uploaded file
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+
+            // Delete the database record we just created
+            await prisma.wP_UPLOADED_EXCEL_FILES.delete({
+                where: { id: uploadedFile.id }
+            });
+
+            return res.status(409).json({
+                success: false,
+                error: 'Critical duplicates detected: Some invoices have already been processed or submitted to LHDN.',
+                duplicateType: 'INVOICE_DUPLICATE',
+                duplicates: criticalDuplicates,
+                warnings: duplicateCheck.warnings,
+                summary: duplicateCheck.summary
+            });
+        }
+
+        // Generate individual invoice hashes for metadata
+        const invoiceHashes = {};
+        processedData.forEach(invoice => {
+            const invoiceNo = invoice.header?.invoiceNo;
+            if (invoiceNo) {
+                invoiceHashes[invoiceNo] = ContentHasher.generateInvoiceHash(invoice);
+            }
+        });
+
+        // Update database with processing results and duplicate check data
         await prisma.wP_UPLOADED_EXCEL_FILES.update({
             where: { id: uploadedFile.id },
             data: {
                 invoice_count: processedData.length,
                 processing_status: 'processed',
                 processed_date: new Date(),
-                processing_logs: JSON.stringify(processingResult.logs)
+                processing_logs: JSON.stringify(processingResult.logs),
+                metadata: JSON.stringify({
+                    originalPath: filePath,
+                    filenameValidation: filenameValidation,
+                    contentHash: contentHash,
+                    invoiceHashes: invoiceHashes,
+                    duplicateCheck: {
+                        duplicates: duplicateCheck.duplicates,
+                        warnings: duplicateCheck.warnings,
+                        summary: duplicateCheck.summary,
+                        checkedAt: new Date().toISOString()
+                    }
+                })
             }
         });
 
@@ -1408,7 +1516,12 @@ router.post('/upload-excel-template', [auth.isApiAuthenticated, excelUpload.sing
             fileId: uploadedFile.id,
             sessionId: sessionId,
             filenameValidation: filenameValidation,
-            logs: processingResult.logs
+            logs: processingResult.logs,
+            duplicateCheck: {
+                summary: duplicateCheck.summary,
+                warnings: duplicateCheck.warnings.length > 0 ? duplicateCheck.warnings : undefined,
+                contentHash: contentHash
+            }
         });
 
     } catch (error) {
