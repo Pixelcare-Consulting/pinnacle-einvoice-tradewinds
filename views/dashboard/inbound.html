@@ -684,7 +684,7 @@
                     <button class="btn outbound-action-btn submit btn-sm" id="refreshDataSource"
                             data-bs-toggle="tooltip"
                             data-bs-placement="top"
-                            title="Quick refresh - checks for status updates (Ctrl+Click for full refresh)">
+                            title="Quick refresh - updates from database (Ctrl+Click for full LHDN refresh)">
                         <i class="bi bi-arrow-clockwise me-1"></i>Quick Refresh
                     </button>
 
@@ -700,6 +700,13 @@
                 </div>
                 <div class="modern-search">
                     <!-- Search control will be inserted by DataTables -->
+                </div>
+                <!-- Data Source Indicator -->
+                <div class="data-source-indicator">
+                    <small class="text-muted d-flex align-items-center">
+                        <i class="bi bi-database me-1"></i>
+                        <span id="dataSourceText">Database View</span>
+                    </small>
                 </div>
             </div>
         </div>

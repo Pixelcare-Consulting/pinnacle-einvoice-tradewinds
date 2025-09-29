@@ -1382,9 +1382,9 @@ router.post('/upload-excel-template', [auth.isApiAuthenticated, excelUpload.sing
         if (contentHash) {
             const existingFileWithHash = await prisma.wP_UPLOADED_EXCEL_FILES.findFirst({
                 where: {
+                    // SQL Server stores JSON as NVARCHAR, so use a substring match on the serialized JSON
                     metadata: {
-                        path: ['contentHash'],
-                        equals: contentHash
+                        contains: `"contentHash":"${contentHash}"`
                     },
                     processing_status: { not: 'error' },
                     id: { not: uploadedFile.id } // Exclude current file

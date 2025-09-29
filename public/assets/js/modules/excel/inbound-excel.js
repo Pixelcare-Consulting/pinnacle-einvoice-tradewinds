@@ -2466,7 +2466,7 @@ class InvoiceTableManager {
       processing: false,
       serverSide: false,
       ajax: {
-        url: "/api/lhdn/documents/recent", // Use live LHDN data as the only data source
+        url: "/api/lhdn/documents/recent", // Database-first data source
         method: "GET",
         data: function (d) {
           console.log("[Inbound] Making AJAX request to:", "/api/lhdn/documents/recent");
@@ -2487,17 +2487,18 @@ class InvoiceTableManager {
             }
           }
 
-          // Always include forceRefresh parameter
+          // Default to database-only mode for initial load (no live API calls)
           d.forceRefresh = window.forceRefreshLHDN || false;
-          // Add useDatabase parameter to ensure we get data even if API fails
           d.useDatabase = true;
+          d.fallbackOnly = !window.forceRefreshLHDN; // Use database-only unless explicitly refreshing
 
-          console.log("[Inbound] Request parameters:", d);
+          console.log("[Inbound] Request parameters (Database-first mode):", d);
           return d;
         },
         dataSrc: function (json) {
           console.log("[Inbound] Received response:", json);
           let result = [];
+          let dataSource = "unknown";
 
           // Check if we should use cached data
           if (json && json.useCache) {
@@ -2505,24 +2506,43 @@ class InvoiceTableManager {
             if (cachedData) {
               try {
                 result = JSON.parse(cachedData);
+                dataSource = "localStorage";
                 console.log(
                   "[Inbound] Using cached inbound data:",
                   result.length,
                   "records"
                 );
+                self.updateDataSourceIndicator("localStorage", result.length);
               } catch (e) {
                 console.warn(
-                  "[Inbound] Failed to parse cached data, fetching fresh data"
+                  "[Inbound] Failed to parse cached data, using API response"
                 );
                 result = json && json.result ? json.result : [];
+                dataSource = json?.metadata?.fromDatabase ? "database" : "api";
               }
             } else {
               result = json && json.result ? json.result : [];
+              dataSource = json?.metadata?.fromDatabase ? "database" : "api";
             }
           } else {
             result = json && json.result ? json.result : [];
 
-            // Save fresh data to cache
+            // Determine data source from response metadata
+            if (json?.metadata?.fromDatabase) {
+              dataSource = "database";
+              console.log(`✅ [Inbound] Loaded ${result.length} records from WP_INBOUND_STATUS database`);
+              self.updateDataSourceIndicator("database", result.length);
+            } else if (json?.metadata?.fromApi) {
+              dataSource = "api";
+              console.log(`🌐 [Inbound] Loaded ${result.length} records from LHDN API`);
+              self.updateDataSourceIndicator("api", result.length);
+            } else {
+              dataSource = "fallback";
+              console.log(`📦 [Inbound] Loaded ${result.length} records from fallback source`);
+              self.updateDataSourceIndicator("fallback", result.length);
+            }
+
+            // Save data to cache (regardless of source)
             if (result && result.length > 0) {
               try {
                 localStorage.setItem(
@@ -2531,9 +2551,7 @@ class InvoiceTableManager {
                 );
                 localStorage.setItem("lastDataUpdate", new Date().getTime());
                 console.log(
-                  "[Inbound] Cached fresh inbound data:",
-                  result.length,
-                  "records"
+                  `[Inbound] Cached ${result.length} records from ${dataSource}`
                 );
               } catch (e) {
                 console.warn("[Inbound] Failed to cache data:", e);
@@ -3358,6 +3376,32 @@ class InvoiceTableManager {
   initializeTableStyles() {
     $(".dataTables_filter input").addClass("form-control form-control-sm");
     $(".dataTables_length select").addClass("form-select form-select-sm");
+  }
+
+  // Update data source indicator
+  updateDataSourceIndicator(source, recordCount) {
+    const indicator = $("#dataSourceText");
+    const icon = indicator.siblings("i");
+
+    if (indicator.length) {
+      switch (source) {
+        case "database":
+          indicator.text(`Database View (${recordCount} records)`);
+          icon.removeClass().addClass("bi bi-database me-1 text-success");
+          break;
+        case "api":
+          indicator.text(`Live LHDN Data (${recordCount} records)`);
+          icon.removeClass().addClass("bi bi-cloud-check me-1 text-primary");
+          break;
+        case "localStorage":
+          indicator.text(`Cached Data (${recordCount} records)`);
+          icon.removeClass().addClass("bi bi-archive me-1 text-info");
+          break;
+        default:
+          indicator.text(`System Data (${recordCount} records)`);
+          icon.removeClass().addClass("bi bi-server me-1 text-muted");
+      }
+    }
   }
 
   initializeEventListeners() {

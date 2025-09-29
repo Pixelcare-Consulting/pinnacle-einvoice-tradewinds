@@ -995,6 +995,18 @@ async function getCachedDocuments(req) {
             }
 
             return data;
+          } else if (useDatabase) {
+            // Honor strict database mode: do not call API, return empty dataset
+            console.log("ℹ️ No documents in WP_INBOUND_STATUS; honoring useDatabase=true with empty result");
+            data = {
+              result: [],
+              cached: false,
+              fromDatabase: true,
+              fromApi: false,
+              timestamp: new Date().toISOString(),
+            };
+            cache.set(cacheKey, data, 120); // cache empty for a short time to avoid thrash
+            return data;
           }
         } catch (dbError) {
           console.error("Error getting documents from database:", dbError);
@@ -1945,12 +1957,16 @@ router.get("/documents/recent", async (req, res) => {
             },
           });
         } else {
-          return res.status(404).json({
-            success: false,
-            message: "No documents found in database",
-            error: {
-              code: "NO_DATA",
-              message: "No documents found in database",
+          // Honor fallback-only mode: return empty result with success to avoid client error flows
+          return res.json({
+            success: true,
+            result: [],
+            metadata: {
+              total: 0,
+              fromDatabase: true,
+              fromApi: false,
+              fallback: true,
+              timestamp: new Date().toISOString(),
             },
           });
         }
