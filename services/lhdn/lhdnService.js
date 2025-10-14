@@ -796,8 +796,9 @@ async function searchDocuments(params, token, attempt = 0) {
     const baseUrl = settings.environment === 'production' ? settings.middlewareUrl : settings.middlewareUrl;
 
     // Add searchDocuments to rate limits if not already defined
+    // LHDN API throttling: 1 Request every 5 Seconds per taxpayer
     if (!RATE_LIMITS.searchDocuments) {
-      RATE_LIMITS.searchDocuments = { rpm: 100, minIntervalMs: Math.ceil(60000 / 100) }; // 600ms
+      RATE_LIMITS.searchDocuments = { rpm: 12, minIntervalMs: 5000 }; // 5 seconds per request
     }
 
     // Respect searchDocuments rate limit
@@ -839,9 +840,15 @@ async function searchDocuments(params, token, attempt = 0) {
   } catch (err) {
     // Handle rate limiting (429)
     if (err.response?.status === 429) {
+      // Limit retry attempts to prevent infinite loops
+      if (attempt >= 3) {
+        console.error(`[RateLimit] SearchDocuments max retry attempts (${attempt}) reached. Aborting.`);
+        throw new Error('Rate limit exceeded after multiple retries. Please wait before trying again.');
+      }
+      
       const retryAfter = err.response.headers['retry-after'] || err.response.headers['x-rate-limit-reset'];
-      const baseDelay = parseRetryAfter(retryAfter) || RATE_LIMITS.searchDocuments?.minIntervalMs || 600;
-      console.warn(`[RateLimit] SearchDocuments 429. Retry-After: ${retryAfter || 'n/a'}. Base delay ~${baseDelay}ms`);
+      const baseDelay = parseRetryAfter(retryAfter) || 5000; // Default 5 seconds
+      console.warn(`[RateLimit] SearchDocuments 429. Retry-After: ${retryAfter || 'n/a'}. Waiting ${baseDelay}ms before retry ${attempt + 1}/3`);
       await backoffWait(baseDelay, attempt);
       return await searchDocuments(params, token, attempt + 1);
     }

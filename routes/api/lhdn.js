@@ -2084,6 +2084,10 @@ router.get("/documents/recent", async (req, res) => {
 });
 
 // New Search Documents endpoint - Uses LHDN Search API
+// NOTE: Per LHDN best practices, this API is designed for manual auditing and troubleshooting.
+// It should NOT be used for continuous ERP reconciliation due to strict rate limits.
+// Throttling: 1 Request every 5 Seconds | Rate Limit: 12 RPM
+// Reference: https://sdk.myinvois.hasil.gov.my/einvoicingapi/09-search-documents/
 router.get("/documents/search", async (req, res) => {
   console.log("LHDN documents/search endpoint hit");
   try {
@@ -2136,14 +2140,16 @@ router.get("/documents/search", async (req, res) => {
     const allDocuments = [];
     const directions = ['Sent', 'Received'];
 
+    const MAX_PAGES_PER_DIRECTION = 20; // Limit to prevent excessive API calls (2000 documents max per direction)
+    
     for (const direction of directions) {
       let pageNo = 1;
       let hasMorePages = true;
       const pageSize = 100; // Max per page
 
-      while (hasMorePages && allDocuments.length < 10000) {
+      while (hasMorePages && allDocuments.length < 10000 && pageNo <= MAX_PAGES_PER_DIRECTION) {
         try {
-          console.log(`[LHDN Search] Fetching ${direction} documents - page ${pageNo}`);
+          console.log(`[LHDN Search] Fetching ${direction} documents - page ${pageNo}/${MAX_PAGES_PER_DIRECTION}`);
           
           const searchResult = await searchDocuments({
             submissionDateFrom,
@@ -2157,11 +2163,12 @@ router.get("/documents/search", async (req, res) => {
             const documents = searchResult.data.result;
             allDocuments.push(...documents);
             
-            console.log(`[LHDN Search] ${direction} page ${pageNo}: ${documents.length} documents`);
+            console.log(`[LHDN Search] ${direction} page ${pageNo}: ${documents.length} documents (Total: ${allDocuments.length})`);
 
             // Check if there are more pages
             if (documents.length < pageSize) {
               hasMorePages = false;
+              console.log(`[LHDN Search] No more ${direction} documents (last page had ${documents.length} items)`);
             } else {
               pageNo++;
             }
@@ -2170,8 +2177,17 @@ router.get("/documents/search", async (req, res) => {
           }
         } catch (searchError) {
           console.error(`[LHDN Search] Error fetching ${direction} page ${pageNo}:`, searchError.message);
+          
+          // If it's a rate limit error after retries, stop gracefully
+          if (searchError.message.includes('Rate limit exceeded')) {
+            console.log(`[LHDN Search] Stopping ${direction} fetch due to rate limiting. Collected ${allDocuments.length} documents so far.`);
+          }
           hasMorePages = false;
         }
+      }
+      
+      if (pageNo > MAX_PAGES_PER_DIRECTION) {
+        console.log(`[LHDN Search] Reached maximum page limit (${MAX_PAGES_PER_DIRECTION}) for ${direction} documents`);
       }
     }
 
