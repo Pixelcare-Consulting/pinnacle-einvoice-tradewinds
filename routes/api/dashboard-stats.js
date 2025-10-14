@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../../src/lib/prisma');
+const { cacheResponse } = require('../../middleware/response-cache.middleware');
 
 // Test endpoint to verify API is working
 router.get('/test', async (req, res) => {
@@ -21,8 +22,8 @@ router.get('/test', async (req, res) => {
     }
 });
 
-// Dashboard Statistics
-router.get('/stats', async (req, res) => {
+// Dashboard Statistics (cached for 5 minutes)
+router.get('/stats', cacheResponse('medium'), async (req, res) => {
     try {
         // Default values in case of errors
         let outboundCount = 0;

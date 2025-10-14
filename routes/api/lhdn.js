@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const axios = require("axios");
-const NodeCache = require("node-cache"); // Change to NodeCache
+const NodeCache = require("node-cache");
 const path = require("path");
 const fs = require("fs");
 const fsPromises = fs.promises;
@@ -62,10 +62,34 @@ try {
 
 // Create instance of the comprehensive LHDN error mapper
 const lhdnErrorMapper = new LHDNErrorMapper();
-// Removed Sequelize import as we're using Prisma
 
-// Initialize cache with 5 minutes standard TTL
-const cache = new NodeCache({ stdTTL: 300 }); // 5 minutes in seconds
+// Initialize LHDN cache with custom configuration
+const lhdnCache = {
+  storage: new NodeCache({ 
+    stdTTL: 900, // 15 minutes default TTL
+    checkperiod: 120, // Check for expired keys every 2 minutes
+    useClones: false // For better performance
+  }),
+  
+  get(type, key, userId) {
+    const cacheKey = `${type}:${key}:${userId || 'global'}`;
+    return this.storage.get(cacheKey);
+  },
+  
+  set(type, key, value, userId, ttl = 900) {
+    const cacheKey = `${type}:${key}:${userId || 'global'}`;
+    return this.storage.set(cacheKey, value, ttl);
+  },
+  
+  del(type, key, userId) {
+    const cacheKey = `${type}:${key}:${userId || 'global'}`;
+    return this.storage.del(cacheKey);
+  },
+  
+  flush() {
+    return this.storage.flushAll();
+  }
+};
 
 // Database models
 const prisma = require("../../src/lib/prisma");
@@ -155,122 +179,7 @@ const limiter = rateLimit({
   },
 });
 
-// Enhanced caching system for LHDN API responses
-class LHDNCache {
-  constructor() {
-    this.cache = new Map();
-    this.cacheExpiry = new Map();
-    this.defaultTTL = 15 * 60 * 1000; // 15 minutes default TTL
-    this.maxCacheSize = 1000; // Maximum cache entries
-
-    // Different TTL for different types of data
-    this.ttlConfig = {
-      'document-details': 30 * 60 * 1000, // 30 minutes for document details
-      'document-raw': 30 * 60 * 1000, // 30 minutes for raw document data
-      'pdf-template': 60 * 60 * 1000, // 1 hour for PDF template data
-      'validation-results': 10 * 60 * 1000, // 10 minutes for validation results
-    };
-
-    // Start cleanup interval
-    this.startCleanup();
-  }
-
-  generateKey(type, uuid, userId = null) {
-    return `${type}:${uuid}${userId ? `:${userId}` : ''}`;
-  }
-
-  set(type, uuid, data, userId = null) {
-    const key = this.generateKey(type, uuid, userId);
-    const ttl = this.ttlConfig[type] || this.defaultTTL;
-    const expiryTime = Date.now() + ttl;
-
-    // Check cache size and cleanup if needed
-    if (this.cache.size >= this.maxCacheSize) {
-      this.cleanup();
-    }
-
-    this.cache.set(key, {
-      data: JSON.parse(JSON.stringify(data)), // Deep clone to prevent mutations
-      timestamp: Date.now(),
-      ttl: ttl
-    });
-    this.cacheExpiry.set(key, expiryTime);
-
-    // console.log(`[Cache] Stored ${type} for ${uuid} (TTL: ${ttl/1000}s)`);
-  }
-
-  get(type, uuid, userId = null) {
-    const key = this.generateKey(type, uuid, userId);
-    const expiryTime = this.cacheExpiry.get(key);
-
-    if (!expiryTime || Date.now() > expiryTime) {
-      // Cache expired or doesn't exist
-      this.cache.delete(key);
-      this.cacheExpiry.delete(key);
-      return null;
-    }
-
-    const cached = this.cache.get(key);
-    if (cached) {
-      // console.log(`[Cache] Hit for ${type}:${uuid} (age: ${(Date.now() - cached.timestamp)/1000}s)`);
-      return JSON.parse(JSON.stringify(cached.data)); // Return deep clone
-    }
-
-    return null;
-  }
-
-  has(type, uuid, userId = null) {
-    const key = this.generateKey(type, uuid, userId);
-    const expiryTime = this.cacheExpiry.get(key);
-    return expiryTime && Date.now() <= expiryTime;
-  }
-
-  invalidate(type, uuid, userId = null) {
-    const key = this.generateKey(type, uuid, userId);
-    this.cache.delete(key);
-    this.cacheExpiry.delete(key);
-    // console.log(`[Cache] Invalidated ${type} for ${uuid}`);
-  }
-
-  cleanup() {
-    const now = Date.now();
-    let cleanedCount = 0;
-
-    for (const [key, expiryTime] of this.cacheExpiry.entries()) {
-      if (now > expiryTime) {
-        this.cache.delete(key);
-        this.cacheExpiry.delete(key);
-        cleanedCount++;
-      }
-    }
-
-    if (cleanedCount > 0) {
-      // console.log(`[Cache] Cleaned up ${cleanedCount} expired entries`);
-    }
-  }
-
-  startCleanup() {
-    // Run cleanup every 5 minutes
-    setInterval(() => {
-      this.cleanup();
-    }, 5 * 60 * 1000);
-  }
-
-  getStats() {
-    return {
-      size: this.cache.size,
-      maxSize: this.maxCacheSize,
-      types: [...this.cache.keys()].reduce((acc, key) => {
-        const type = key.split(':')[0];
-        acc[type] = (acc[type] || 0) + 1;
-        return acc;
-      }, {})
-    };
-  }
-}
-
-// Create global cache instance
-const lhdnCache = new LHDNCache();
+// Caching removed - fetching fresh data from API/database on each request
 
 axiosRetry.default(axios, {
   retries: 3,
@@ -926,225 +835,155 @@ const fetchRecentDocuments = async (req) => {
     };
   }
 };
-// Enhanced caching function with better error handling
+// Function to get documents - no caching, direct fetch
 async function getCachedDocuments(req) {
-  const cacheKey = `recentDocuments_${req.session?.user?.TIN || "default"}`;
-  const forceRefresh = req.query.forceRefresh === "true";
   const useDatabase = req.query.useDatabase === "true";
   const incremental = req.query.incremental === "true";
+  let data;
 
-  // Get from cache if not forcing refresh
-  let data = forceRefresh ? null : cache.get(cacheKey);
-
-  // For incremental refresh, use shorter cache timeout and prioritize recent changes
-  if (incremental && !forceRefresh) {
-    // console.log("Performing incremental refresh with optimized caching");
-    const incrementalCacheKey = `${cacheKey}_incremental`;
-    const incrementalData = cache.get(incrementalCacheKey);
-
-    // Use incremental cache if available and less than 2 minutes old
-    if (incrementalData && (Date.now() - new Date(incrementalData.timestamp).getTime()) < 120000) {
-      // console.log("Returning incremental cached documents");
-      return incrementalData;
-    }
-  }
-
-  if (data && !forceRefresh && !incremental) {
-    // console.log("Returning cached documents");
-    return data;
-  }
-
-  if (!data || incremental) {
-    try {
-      // If useDatabase is true OR incremental is true, and we're not forcing refresh, try to get from database first
-      if ((useDatabase || incremental) && !forceRefresh) {
-        try {
-          console.log(
-            `📊 Using database as primary data source - useDatabase: ${useDatabase}, incremental: ${incremental}, forceRefresh: ${forceRefresh}`
-          );
-          // Get documents from database
-          const dbDocuments = await prisma.wP_INBOUND_STATUS.findMany({
-            orderBy: {
-              dateTimeReceived: "desc",
-            },
-            take: 1000, // Limit to latest 1000 records
-          });
-
-          if (dbDocuments && dbDocuments.length > 0) {
-            console.log(`✅ Found ${dbDocuments.length} documents in WP_INBOUND_STATUS database`);
-            data = {
-              result: dbDocuments,
-              cached: false,
-              fromDatabase: true,
-              fromApi: false,
-              timestamp: new Date().toISOString(),
-            };
-
-            // Store in cache with shorter TTL for database data
-            cache.set(cacheKey, data, 300); // 5 minutes
-            // console.log("Cached database documents for 5 minutes");
-
-            // Try to fetch from API in the background to update the database
-            try {
-              // console.log("Fetching from API in background to update database");
-              fetchRecentDocuments(req).catch((apiError) => {
-                console.warn("Background API fetch failed:", apiError.message);
-              });
-            } catch (backgroundError) {
-              console.warn("Error starting background fetch:", backgroundError);
-            }
-
-            return data;
-          } else if (useDatabase) {
-            // Honor strict database mode: do not call API, return empty dataset
-            console.log("ℹ️ No documents in WP_INBOUND_STATUS; honoring useDatabase=true with empty result");
-            data = {
-              result: [],
-              cached: false,
-              fromDatabase: true,
-              fromApi: false,
-              timestamp: new Date().toISOString(),
-            };
-            cache.set(cacheKey, data, 120); // cache empty for a short time to avoid thrash
-            return data;
-          }
-        } catch (dbError) {
-          console.error("Error getting documents from database:", dbError);
-          // Continue to API fetch if database fetch fails
-        }
-      }
-
-      // If not using database or database fetch failed, fetch from API
-      data = await fetchRecentDocuments(req);
-
-      // Only cache successful results
-      if (data && data.result && data.result.length > 0) {
-        // Store in cache with appropriate TTL based on source
-        const cacheTTL = data.fromApi ? 900 : 300; // 15 minutes for API data, 5 minutes for DB data
-        cache.set(cacheKey, data, cacheTTL);
-
-        // For incremental refresh, also store in incremental cache with shorter TTL
-        if (incremental) {
-          const incrementalCacheKey = `${cacheKey}_incremental`;
-          cache.set(incrementalCacheKey, data, 120); // 2 minutes for incremental cache
-          // console.log("Stored incremental cache for 2 minutes");
-        }
-
-        // console.log(
-        //   `${
-        //     forceRefresh ? "Force refreshed" : "Fetched"
-        //   } documents and cached for ${cacheTTL} seconds`
-        // );
-      }
-    } catch (error) {
-      console.error("Error in getCachedDocuments:", error);
-
-      // Check if it's an authentication error
-      if (error.message?.includes("Authentication failed")) {
-        // Log authentication error
-        await LoggingService.log({
-          description: `Authentication error in getCachedDocuments: ${error.message}`,
-          username: req.session?.user?.username || "System",
-          userId: req.session?.user?.id,
-          ipAddress: req.ip,
-          logType: LOG_TYPES.ERROR,
-          module: MODULES.AUTH,
-          action: ACTIONS.READ,
-          status: STATUS.FAILED,
-          details: { error: error.message },
+  try {
+    // If useDatabase is true OR incremental is true, try to get from database first
+    if (useDatabase || incremental) {
+      try {
+        console.log(
+          `📊 Using database as primary data source - useDatabase: ${useDatabase}, incremental: ${incremental}`
+        );
+        // Get documents from database
+        const dbDocuments = await prisma.wP_INBOUND_STATUS.findMany({
+          orderBy: {
+            dateTimeReceived: "desc",
+          },
+          take: 1000, // Limit to latest 1000 records
         });
 
-        // Try to refresh token
-        try {
-          // Get token from file using our enhanced function
-          const fileToken = await readTokenFromFile();
+        if (dbDocuments && dbDocuments.length > 0) {
+          console.log(`✅ Found ${dbDocuments.length} documents in WP_INBOUND_STATUS database`);
+          data = {
+            result: dbDocuments,
+            cached: false,
+            fromDatabase: true,
+            fromApi: false,
+            timestamp: new Date().toISOString(),
+          };
 
-          if (fileToken) {
-            // Update session with token from file
-            if (req.session) {
-              req.session.accessToken = fileToken;
-              // console.log("Updated session with token from file");
-
-              // Try fetching again with new token
-              try {
-                data = await fetchRecentDocuments(req);
-                if (data && data.result && data.result.length > 0) {
-                  cache.set(cacheKey, data, 900); // 15 minutes
-                  // console.log("Successfully fetched data with refreshed token");
-                }
-              } catch (retryError) {
-                console.error("Retry with refreshed token failed:", retryError);
-              }
-            }
-          } else {
-            // If no token in file, try to get a fresh one
-            try {
-              // console.log("No token in file, attempting to get a fresh token");
-              const {
-                getTokenSession,
-              } = require("../../services/token-prisma.service");
-              const freshToken = await getTokenSession();
-
-              if (freshToken && req.session) {
-                req.session.accessToken = freshToken;
-                // console.log("Updated session with fresh token");
-
-                // Try fetching again with fresh token
-                try {
-                  data = await fetchRecentDocuments(req);
-                  if (data && data.result && data.result.length > 0) {
-                    cache.set(cacheKey, data, 900); // 15 minutes
-                    // console.log("Successfully fetched data with fresh token");
-                  }
-                } catch (retryError) {
-                  console.error("Retry with fresh token failed:", retryError);
-                }
-              }
-            } catch (tokenError) {
-              console.error("Error getting fresh token:", tokenError);
-            }
+          // Try to fetch from API in the background to update the database
+          try {
+            fetchRecentDocuments(req).catch((apiError) => {
+              console.warn("Background API fetch failed:", apiError.message);
+            });
+          } catch (backgroundError) {
+            console.warn("Error starting background fetch:", backgroundError);
           }
-        } catch (tokenError) {
-          console.error("Error refreshing token from file:", tokenError);
+
+          return data;
+        } else if (useDatabase) {
+          // Honor strict database mode: do not call API, return empty dataset
+          console.log("ℹ️ No documents in WP_INBOUND_STATUS; honoring useDatabase=true with empty result");
+          data = {
+            result: [],
+            cached: false,
+            fromDatabase: true,
+            fromApi: false,
+            timestamp: new Date().toISOString(),
+          };
+          return data;
         }
-      }
-
-      // If we still don't have data, try database fallback
-      if (!data || !data.result || data.result.length === 0) {
-        try {
-          // console.log("Attempting final fallback to database...");
-          const fallbackDocuments = await prisma.wP_INBOUND_STATUS.findMany({
-            orderBy: {
-              dateTimeReceived: "desc",
-            },
-            take: 1000,
-          });
-
-          if (fallbackDocuments && fallbackDocuments.length > 0) {
-            // console.log(
-            //   `Using ${fallbackDocuments.length} database records as final fallback`
-            // );
-            data = {
-              result: fallbackDocuments,
-              cached: false,
-              fromDatabase: true,
-              fallback: true,
-              error: error.message,
-            };
-
-            // Cache fallback data for a shorter period
-            cache.set(cacheKey, data, 120); // 2 minutes
-          } else {
-            throw new Error("No documents found in database");
-          }
-        } catch (dbError) {
-          console.error("Database fallback also failed:", dbError);
-          throw error; // Rethrow the original error
-        }
+      } catch (dbError) {
+        console.error("Error getting documents from database:", dbError);
+        // Continue to API fetch if database fetch fails
       }
     }
-  } else {
-    // console.log(`Using cached data (${data.result?.length || 0} documents)`);
+
+    // If not using database or database fetch failed, fetch from API
+    data = await fetchRecentDocuments(req);
+  } catch (error) {
+    console.error("Error in getCachedDocuments:", error);
+
+    // Check if it's an authentication error
+    if (error.message?.includes("Authentication failed")) {
+      // Log authentication error
+      await LoggingService.log({
+        description: `Authentication error in getCachedDocuments: ${error.message}`,
+        username: req.session?.user?.username || "System",
+        userId: req.session?.user?.id,
+        ipAddress: req.ip,
+        logType: LOG_TYPES.ERROR,
+        module: MODULES.AUTH,
+        action: ACTIONS.READ,
+        status: STATUS.FAILED,
+        details: { error: error.message },
+      });
+
+      // Try to refresh token
+      try {
+        // Get token from file using our enhanced function
+        const fileToken = await readTokenFromFile();
+
+        if (fileToken) {
+          // Update session with token from file
+          if (req.session) {
+            req.session.accessToken = fileToken;
+
+            // Try fetching again with new token
+            try {
+              data = await fetchRecentDocuments(req);
+            } catch (retryError) {
+              console.error("Retry with refreshed token failed:", retryError);
+            }
+          }
+        } else {
+          // If no token in file, try to get a fresh one
+          try {
+            const {
+              getTokenSession,
+            } = require("../../services/token-prisma.service");
+            const freshToken = await getTokenSession();
+
+            if (freshToken && req.session) {
+              req.session.accessToken = freshToken;
+
+              // Try fetching again with fresh token
+              try {
+                data = await fetchRecentDocuments(req);
+              } catch (retryError) {
+                console.error("Retry with fresh token failed:", retryError);
+              }
+            }
+          } catch (tokenError) {
+            console.error("Error getting fresh token:", tokenError);
+          }
+        }
+      } catch (tokenError) {
+        console.error("Error refreshing token from file:", tokenError);
+      }
+    }
+
+    // If we still don't have data, try database fallback
+    if (!data || !data.result || data.result.length === 0) {
+      try {
+        const fallbackDocuments = await prisma.wP_INBOUND_STATUS.findMany({
+          orderBy: {
+            dateTimeReceived: "desc",
+          },
+          take: 1000,
+        });
+
+        if (fallbackDocuments && fallbackDocuments.length > 0) {
+          data = {
+            result: fallbackDocuments,
+            cached: false,
+            fromDatabase: true,
+            fallback: true,
+            error: error.message,
+          };
+        } else {
+          throw new Error("No documents found in database");
+        }
+      } catch (dbError) {
+        console.error("Database fallback also failed:", dbError);
+        throw error; // Rethrow the original error
+      }
+    }
   }
 
   return data;
@@ -1792,10 +1631,6 @@ router.post("/documents/refresh", async (req, res) => {
       status: STATUS.PENDING,
     });
 
-    // Force refresh by clearing cache
-    const cacheKey = `recentDocuments_${req.session?.user?.TIN || "default"}`;
-    cache.del(cacheKey);
-
     // Fetch fresh data from LHDN API
     const fetchResult = await fetchRecentDocuments(req);
 
@@ -2243,6 +2078,275 @@ router.get("/documents/recent", async (req, res) => {
         message: error.message || "An unexpected error occurred",
         details: error.response?.data?.error || error.original?.message || null,
         timestamp: new Date().toISOString(),
+      },
+    });
+  }
+});
+
+// New Search Documents endpoint - Uses LHDN Search API
+router.get("/documents/search", async (req, res) => {
+  console.log("LHDN documents/search endpoint hit");
+  try {
+    // Check if user is logged in
+    if (!req.session?.user) {
+      console.log("No user session found");
+      return handleAuthError(req, res);
+    }
+
+    console.log("User from session:", req.session.user);
+
+    // Get access token
+    let accessToken = await readTokenFromFile();
+    if (!accessToken && req.session.accessToken) {
+      accessToken = req.session.accessToken;
+    }
+    if (!accessToken) {
+      try {
+        const { getTokenSession } = require("../../services/token-prisma.service");
+        accessToken = await getTokenSession();
+      } catch (tokenError) {
+        console.error("Error getting fresh token:", tokenError);
+      }
+    }
+
+    if (!accessToken) {
+      console.log("No access token found");
+      return handleAuthError(req, res);
+    }
+
+    // Update session with token
+    req.session.accessToken = accessToken;
+
+    // Get current month date range
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+    // Format dates as ISO 8601
+    const submissionDateFrom = startOfMonth.toISOString();
+    const submissionDateTo = endOfMonth.toISOString();
+
+    console.log(`[LHDN Search] Searching documents from ${submissionDateFrom} to ${submissionDateTo}`);
+
+    // Import searchDocuments from lhdnService
+    const { searchDocuments } = require("../../services/lhdn/lhdnService");
+
+    // Fetch documents for both Sent and Received
+    const allDocuments = [];
+    const directions = ['Sent', 'Received'];
+
+    for (const direction of directions) {
+      let pageNo = 1;
+      let hasMorePages = true;
+      const pageSize = 100; // Max per page
+
+      while (hasMorePages && allDocuments.length < 10000) {
+        try {
+          console.log(`[LHDN Search] Fetching ${direction} documents - page ${pageNo}`);
+          
+          const searchResult = await searchDocuments({
+            submissionDateFrom,
+            submissionDateTo,
+            direction,
+            pageNo,
+            pageSize
+          }, accessToken);
+
+          if (searchResult.status === 'success' && searchResult.data?.result) {
+            const documents = searchResult.data.result;
+            allDocuments.push(...documents);
+            
+            console.log(`[LHDN Search] ${direction} page ${pageNo}: ${documents.length} documents`);
+
+            // Check if there are more pages
+            if (documents.length < pageSize) {
+              hasMorePages = false;
+            } else {
+              pageNo++;
+            }
+          } else {
+            hasMorePages = false;
+          }
+        } catch (searchError) {
+          console.error(`[LHDN Search] Error fetching ${direction} page ${pageNo}:`, searchError.message);
+          hasMorePages = false;
+        }
+      }
+    }
+
+    console.log(`[LHDN Search] Total documents fetched: ${allDocuments.length}`);
+
+    // Save all documents to WP_INBOUND_STATUS
+    if (allDocuments.length > 0) {
+      let savedCount = 0;
+      let errorCount = 0;
+
+      for (const doc of allDocuments) {
+        try {
+          // Log first document to see what fields are available
+          if (allDocuments.indexOf(doc) === 0) {
+            console.log("[LHDN Search] Sample document fields:", {
+              uuid: doc.uuid,
+              // Party fields
+              hasIssuerName: !!doc.issuerName,
+              hasSupplierName: !!doc.supplierName,
+              hasReceiverName: !!doc.receiverName,
+              hasBuyerName: !!doc.buyerName,
+              hasIssuerTin: !!doc.issuerTin,
+              hasSupplierTin: !!doc.supplierTin,
+              hasReceiverId: !!doc.receiverId,
+              hasBuyerTin: !!doc.buyerTin,
+              // Financial fields
+              hasTotalSales: !!doc.totalSales,
+              hasTotal: !!doc.total,
+              hasNetAmount: !!doc.netAmount,
+              hasTotalPayableAmount: !!doc.totalPayableAmount,
+              hasPayableAmount: !!doc.payableAmount,
+              partyFields: Object.keys(doc).filter(k => 
+                k.toLowerCase().includes('issuer') || 
+                k.toLowerCase().includes('supplier') || 
+                k.toLowerCase().includes('receiver') || 
+                k.toLowerCase().includes('buyer')
+              ),
+              financialFields: Object.keys(doc).filter(k => 
+                k.toLowerCase().includes('total') || 
+                k.toLowerCase().includes('amount') || 
+                k.toLowerCase().includes('sales') ||
+                k.toLowerCase().includes('payable')
+              )
+            });
+          }
+
+          // Map API response to WP_INBOUND_STATUS schema
+          // IMPORTANT: LHDN Search API may return supplier/buyer fields instead of issuer/receiver
+          const mappedDoc = {
+            uuid: doc.uuid || '',
+            submissionUid: doc.submissionUid || null,
+            longId: doc.longId || null,
+            internalId: doc.internalId || null,
+            typeName: doc.typeName || null,
+            typeVersionName: doc.typeVersionName || null,
+            // Map issuerTin with fallbacks (note: API returns supplierTIN with uppercase TIN!)
+            issuerTin: doc.issuerTin || doc.issuerTIN || doc.supplierTin || doc.supplierTIN || doc.issuerID || null,
+            // Map issuerName with fallback to supplierName
+            issuerName: doc.issuerName || doc.supplierName || null,
+            // Map receiverId with fallbacks (note: API returns buyerTIN and receiverID with uppercase!)
+            receiverId: doc.receiverId || doc.receiverID || doc.buyerTin || doc.buyerTIN || null,
+            // Map receiverName with fallback to buyerName
+            receiverName: doc.receiverName || doc.buyerName || null,
+            dateTimeReceived: doc.dateTimeReceived || null,
+            dateTimeValidated: doc.dateTimeValidated || null,
+            status: doc.status || null,
+            documentStatusReason: doc.documentStatusReason || null,
+            cancelDateTime: doc.cancelDateTime || null,
+            rejectRequestDateTime: doc.rejectRequestDateTime || null,
+            createdByUserId: doc.createdByUserId || null,
+            dateTimeIssued: doc.dateTimeIssued || null,
+            // Map total fields - IMPORTANT: LHDN Search API doesn't return totalSales/total/netAmount!
+            // It only returns: totalPayableAmount, totalExcludingTax, totalNetAmount, totalDiscount
+            // Use totalPayableAmount as the main total (this is what should be displayed)
+            totalSales: parseFloat(doc.totalPayableAmount || doc.totalSales || doc.total || 0),
+            totalExcludingTax: parseFloat(doc.totalExcludingTax || doc.taxExclusiveAmount || 0),
+            totalDiscount: parseFloat(doc.totalDiscount || doc.discount || 0),
+            totalNetAmount: parseFloat(doc.totalNetAmount || doc.netAmount || 0),
+            totalPayableAmount: parseFloat(doc.totalPayableAmount || doc.payableAmount || doc.total || 0),
+            documentCurrency: doc.documentCurrency || doc.currency || doc.currencyCode || 'MYR',
+            last_sync_date: new Date().toISOString(),
+            sync_status: 'success',
+            updated_at: new Date().toISOString()
+          };
+
+          // Upsert to database
+          await prisma.wP_INBOUND_STATUS.upsert({
+            where: { uuid: mappedDoc.uuid },
+            update: mappedDoc,
+            create: {
+              ...mappedDoc,
+              created_at: new Date().toISOString()
+            }
+          });
+
+          savedCount++;
+        } catch (saveError) {
+          console.error(`[LHDN Search] Error saving document ${doc.uuid}:`, saveError.message);
+          errorCount++;
+        }
+      }
+
+      console.log(`[LHDN Search] Saved ${savedCount} documents, ${errorCount} errors`);
+
+      // Log the operation
+      await LoggingService.log({
+        description: `Search API: Fetched and saved ${savedCount} documents`,
+        username: req.session?.user?.username || "System",
+        userId: req.session?.user?.id,
+        ipAddress: req.ip,
+        logType: LOG_TYPES.INFO,
+        module: MODULES.API,
+        action: ACTIONS.READ,
+        status: STATUS.SUCCESS,
+        details: { 
+          totalFetched: allDocuments.length, 
+          savedCount, 
+          errorCount,
+          dateRange: { from: submissionDateFrom, to: submissionDateTo }
+        }
+      });
+    }
+
+    // Return the saved documents from database
+    const savedDocuments = await prisma.wP_INBOUND_STATUS.findMany({
+      orderBy: {
+        dateTimeReceived: "desc",
+      },
+      take: 1000,
+    });
+
+    return res.json({
+      success: true,
+      result: savedDocuments,
+      metadata: {
+        total: savedDocuments.length,
+        fetched: allDocuments.length,
+        fromApi: true,
+        fromDatabase: true,
+        dateRange: { from: submissionDateFrom, to: submissionDateTo },
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+  } catch (error) {
+    console.error("Error in documents/search endpoint:", error);
+
+    // Log the error
+    await LoggingService.log({
+      description: `Error in search documents: ${error.message}`,
+      username: req.session?.user?.username || "System",
+      userId: req.session?.user?.id,
+      ipAddress: req.ip,
+      logType: LOG_TYPES.ERROR,
+      module: MODULES.API,
+      action: ACTIONS.READ,
+      status: STATUS.FAILED,
+      details: { error: error.message }
+    });
+
+    // Check if it's an authentication error
+    if (
+      error.message === "Authentication failed. Please log in again." ||
+      error.response?.status === 401 ||
+      error.response?.status === 403
+    ) {
+      return handleAuthError(req, res);
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to search documents",
+      error: {
+        code: error.code || "SEARCH_ERROR",
+        message: error.message || "An unexpected error occurred",
+        details: error.response?.data?.error || error.stack,
       },
     });
   }
@@ -3394,9 +3498,6 @@ router.post("/documents/refresh", async (req, res) => {
       .substring(2, 10)}`;
     console.log(`[${requestId}] Starting document refresh from LHDN API`);
 
-    // Clear cache for documents
-    cache.del("documents_recent");
-
     // Log the start of document fetching
     await LoggingService.log({
       description: "Manually refreshing documents from LHDN",
@@ -3492,11 +3593,11 @@ router.get("/test/config", async (req, res) => {
 // Enhanced display-details endpoint with intelligent caching
 router.get("/documents/:uuid/display-details", async (req, res) => {
   const lhdnConfig = await getLHDNConfig();
+  const { uuid } = req.params;
+  const userId = req.session?.user?.id;
+  const forceRefresh = req.query.force === "true";
 
   try {
-    const { uuid } = req.params;
-    const userId = req.session?.user?.id;
-    const forceRefresh = req.query.force === "true";
 
     // Log the request details
     console.log("Fetching details for document:", {
@@ -5648,21 +5749,8 @@ router.get("/taxpayer/validate/:tin", limiter, async (req, res) => {
     // Get LHDN configuration
     const lhdnConfig = await getLHDNConfig();
 
-    // Check cache first
-    const cacheKey = `tin_validation_${tin}_${idType}_${idValue}`;
-    const cachedResult = cache.get(cacheKey);
-
-    if (cachedResult) {
-      console.log(
-        `[${requestId}] Returning cached validation result for TIN: ${tin}`
-      );
-      return res.json({
-        success: true,
-        result: cachedResult,
-        cached: true,
-      });
-    }
-
+    // No caching - fetch fresh validation data
+    
     // Prepare standard LHDN API headers according to SDK specification
     const headers = {
       Authorization: `Bearer ${req.session.accessToken}`,
@@ -5713,7 +5801,7 @@ router.get("/taxpayer/validate/:tin", limiter, async (req, res) => {
       details: { tin, idType, idValue, requestId },
     });
 
-    // Cache the successful result
+    // Return the successful result
     const validationResult = {
       isValid: true,
       tin: tin,
@@ -5722,7 +5810,6 @@ router.get("/taxpayer/validate/:tin", limiter, async (req, res) => {
       timestamp: new Date().toISOString(),
       requestId: requestId,
     };
-    cache.set(cacheKey, validationResult, 300); // Cache for 5 minutes
 
     return res.json({
       success: true,
@@ -5875,6 +5962,11 @@ router.post("/documents/refresh", async (req, res) => {
             `Fetched ${pageDocuments.length} documents from page ${pageNo}`
           );
 
+          // Log first document to see what fields are actually returned
+          if (pageDocuments.length > 0) {
+            console.log("Sample document from LHDN API:", JSON.stringify(pageDocuments[0], null, 2));
+          }
+
           // If we got fewer documents than pageSize, we've reached the end
           if (pageDocuments.length < pageSize) {
             hasMorePages = false;
@@ -5882,6 +5974,19 @@ router.post("/documents/refresh", async (req, res) => {
 
           // Process each document to ensure supplier/issuer mapping is correct
           const processedDocuments = pageDocuments.map((doc) => {
+            // Log what fields are available
+            const hasIssuerFields = doc.issuerName || doc.supplierName;
+            const hasReceiverFields = doc.receiverName || doc.buyerName;
+            
+            if (!hasIssuerFields || !hasReceiverFields) {
+              console.log(`⚠️ Document ${doc.uuid} missing party fields:`, {
+                hasIssuerName: !!doc.issuerName,
+                hasSupplierName: !!doc.supplierName,
+                hasReceiverName: !!doc.receiverName,
+                hasBuyerName: !!doc.buyerName
+              });
+            }
+
             return {
               ...doc,
               // Important: Map supplierName to issuerName if issuerName is missing
@@ -5898,7 +6003,7 @@ router.post("/documents/refresh", async (req, res) => {
             };
           });
 
-          console.log("Current Process Documents:", processedDocuments);
+          console.log(`Processed ${processedDocuments.length} documents with mapping`);
 
           // Add to our collection
           allDocuments.push(...processedDocuments);

@@ -29,7 +29,10 @@ module.exports = {
         SECURE_COOKIE: "true",
         TRUST_PROXY: "true",
         UV_THREADPOOL_SIZE: 2,
-      },
+        HTTPS_ENABLED: "true",
+        SSL_KEY_PATH: "./ssl/server.key",
+        SSL_CERT_PATH: "./ssl/server.crt",
+      },      
 
       // === Logging: Reduce I/O impact ===
       log_file: "./logs/combined.log",

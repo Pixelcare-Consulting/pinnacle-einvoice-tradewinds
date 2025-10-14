@@ -66,6 +66,7 @@
     "body-parser": "^1.19.0",
     "canvas": "^3.1.0",
     "chok": "^0.2.0",
+    "compression": "^1.7.4",
     "connect-session-sequelize": "^7.1.7",
     "connect-sqlite3": "^0.9.15",
     "crypto-js": "^4.2.0",

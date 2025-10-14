@@ -1,8 +1,7 @@
 // 1. Environment and Core Dependencies
 require("dotenv").config();
 const express = require("express");
-const https = require("https");
-const http = require("http"); // Added for HTTP to HTTPS redirection
+const https = require("https"); 
 const session = require("express-session");
 const cors = require("cors");
 const swig = require("swig");
@@ -11,6 +10,7 @@ const fs = require("fs");
 const fsPromises = require("fs").promises;
 const os = require("os"); // Added os module which was missing
 const helmet = require("helmet"); // Added for security headers
+const compression = require("compression"); // Added for gzip compression
 const PrismaSessionStore = require("./src/lib/prisma-session-store");
 
 // 2. Local Dependencies
@@ -111,6 +111,20 @@ app.set("views", path.join(__dirname, "views"));
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
+// Compression middleware - gzip responses for better performance
+app.use(compression({
+  filter: (req, res) => {
+    // Don't compress if client doesn't accept encoding
+    if (req.headers['x-no-compression']) {
+      return false;
+    }
+    // Use compression filter for other cases
+    return compression.filter(req, res);
+  },
+  level: 6, // Balance between speed and compression ratio
+  threshold: 1024, // Only compress responses larger than 1KB
+}));
+
 // Request timeout middleware
 app.use((req, res, next) => {
   req.setTimeout(30000, () => {
@@ -120,7 +134,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Static file serving with correct MIME types
+// Static file serving with correct MIME types and caching
 const staticFileMiddleware = (req, res, next) => {
   if (req.path.endsWith(".css")) {
     res.type("text/css");
@@ -130,16 +144,49 @@ const staticFileMiddleware = (req, res, next) => {
   next();
 };
 
+// Cache configuration for static assets
+const staticCacheConfig = {
+  maxAge: '365d', // 1 year for immutable assets
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, filePath) => {
+    // HTML files should not be cached to ensure updates are seen immediately
+    if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+    // JavaScript and CSS files - cache with validation
+    else if (filePath.endsWith('.js') || filePath.endsWith('.css')) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
+    // Images and fonts - long cache
+    else if (/\.(jpg|jpeg|png|gif|svg|ico|woff|woff2|ttf|eot)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
+  }
+};
+
+// Temp files should have short cache (they may be regenerated)
+const tempCacheConfig = {
+  maxAge: '1h',
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, filePath) => {
+    res.setHeader('Cache-Control', 'public, max-age=3600, must-revalidate');
+  }
+};
+
 // Static file routes
 app.use(
   "/assets",
   staticFileMiddleware,
-  express.static(path.join(__dirname, "public/assets"))
+  express.static(path.join(__dirname, "public/assets"), staticCacheConfig)
 );
-app.use("/temp", express.static(path.join(__dirname, "public/temp")));
-app.use("/uploads", express.static(path.join(__dirname, "public/uploads")));
-app.use("/reports", express.static(path.join(__dirname, "src/reports")));
-app.use(express.static(path.join(__dirname, "public")));
+app.use("/temp", express.static(path.join(__dirname, "public/temp"), tempCacheConfig));
+app.use("/uploads", express.static(path.join(__dirname, "public/uploads"), staticCacheConfig));
+app.use("/reports", express.static(path.join(__dirname, "src/reports"), staticCacheConfig));
+app.use(express.static(path.join(__dirname, "public"), staticCacheConfig));
 
 // Session configuration with secure cookies and Prisma store
 app.use(
@@ -196,27 +243,85 @@ app.get("/api/clear-cache", (req, res) => {
   }
 });
 
+// Cache statistics endpoint (for monitoring)
+app.get("/api/cache-stats", (req, res) => {
+  try {
+    const { responseCache } = require('./middleware/index-prisma');
+    const stats = responseCache.getCacheStats();
+    res.json({
+      success: true,
+      stats: stats,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to get cache stats",
+      error: error.message
+    });
+  }
+});
+
+// Clear response cache endpoint (admin only)
+app.post("/api/clear-response-cache", auth.isApiAuthenticated, auth.isAdmin, (req, res) => {
+  try {
+    const { responseCache } = require('./middleware/index-prisma');
+    responseCache.clearAllCaches();
+    res.json({
+      success: true,
+      message: "Response cache cleared successfully"
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to clear response cache",
+      error: error.message
+    });
+  }
+});
+
 // CAPTCHA routes (public access)
 app.use("/api/captcha", captchaRoutes);
 
-// Auth middleware for protected routes
+// Optimized auth middleware - Check public paths first before expensive auth
 app.use((req, res, next) => {
+  // Fast path check for static assets and public routes
+  const path = req.path;
   const publicPaths = [
     "/assets/",
+    "/dist/",
     "/favicon.ico",
     "/public/",
     "/uploads/",
+    "/temp/",
+    "/reports/",
     "/auth/",
     "/vendor/",
     "/api/captcha/",
     "/api/health",
     "/api/version",
+    "/api/clear-cache",
+    "/api/cache-stats",
   ];
 
-  if (publicPaths.some((path) => req.path.startsWith(path))) {
+  // Quick string comparison for most common paths
+  if (
+    path.startsWith("/assets/") ||
+    path.startsWith("/dist/") ||
+    path === "/favicon.ico" ||
+    path.startsWith("/auth/") ||
+    path === "/api/health" ||
+    path === "/api/version"
+  ) {
     return next();
   }
 
+  // Fallback to array check for less common paths
+  if (publicPaths.some((publicPath) => path.startsWith(publicPath))) {
+    return next();
+  }
+
+  // Apply auth middleware for protected routes
   auth.middleware(req, res, next);
 });
 
@@ -268,7 +373,6 @@ async function ensureDirectories() {
     path.join(__dirname, "public/temp"),
     path.join(__dirname, "uploads/company-logos"),
     path.join(process.env.TEMP || os.tmpdir(), "jsreport"), // Add jsreport temp directory
-    path.join(__dirname, "ssl"), // Ensure SSL directory exists
   ];
 
   for (const dir of dirs) {
@@ -284,141 +388,64 @@ async function ensureDirectories() {
 // 7. Server Startup
 const startServer = async () => {
   let jsreportInstance;
-  let httpServer;
-  let httpsServer;
+  let server;
 
   try {
     await ensureDirectories();
     jsreportInstance = await initJsReport();
 
-    const httpPort = process.env.HTTP_PORT || 3010; // HTTP on 3000
-    const httpsPort = process.env.HTTPS_PORT || 3012; // HTTPS on 443 (different port)
-
-    // Create HTTP server
-    httpServer = http.createServer((req, res) => {
-      // Only redirect to HTTPS if in production, SSL certs exist, and not behind proxy
-      if (
-        process.env.NODE_ENV === "production" &&
-        !req.headers["x-forwarded-proto"] &&
-        fs.existsSync(path.join(__dirname, "ssl", "private.key")) &&
-        fs.existsSync(path.join(__dirname, "ssl", "certificate.crt"))
-      ) {
-        const host = req.headers.host.split(":")[0]; // Remove port if present
-        const httpsUrl = `https://${host}:${httpsPort}${req.url}`;
-        res.writeHead(301, { Location: httpsUrl });
-        res.end();
-      } else {
-        app(req, res);
-      }
-    });
-
-    // Create HTTPS server if SSL certificates exist
-    const sslPath = path.join(__dirname, "ssl");
-    if (
-      fs.existsSync(path.join(sslPath, "private.key")) &&
-      fs.existsSync(path.join(sslPath, "certificate.crt"))
-    ) {
-      const httpsOptions = {
-        key: fs.readFileSync(path.join(sslPath, "private.key")),
-        cert: fs.readFileSync(path.join(sslPath, "certificate.crt")),
-      };
-      httpsServer = https.createServer(httpsOptions, app);
-    }
-
-    // Start HTTP server with error handling
-    httpServer
-      .listen(httpPort, () => {
-        console.log(`HTTP server running on http://localhost:${httpPort}`);
-      })
-      .on("error", (err) => {
-        if (err.code === "EACCES") {
-          console.error(
-            `Port ${httpPort} requires elevated privileges. Try using a port number above 1024.`
-          );
-        } else if (err.code === "EADDRINUSE") {
-          console.error(
-            `Port ${httpPort} is already in use. Try a different port.`
-          );
-        } else {
-          console.error("HTTP server error:", err);
-        }
-        process.exit(1);
-      });
-
-    // Start HTTPS server if available
-    if (httpsServer) {
-      httpsServer
-        .listen(httpsPort, () => {
-          console.log(`HTTPS server running on https://localhost:${httpsPort}`);
-        })
-        .on("error", (err) => {
-          if (err.code === "EACCES") {
-            console.error(
-              `Port ${httpsPort} requires elevated privileges. Try using a port number above 1024.`
-            );
-          } else if (err.code === "EADDRINUSE") {
-            console.error(
-              `Port ${httpsPort} is already in use. Try a different port.`
-            );
-          } else {
-            console.error("HTTPS server error:", err);
-          }
-          // Don't exit process if HTTPS fails, as HTTP might still be working
-          console.log("Continuing with HTTP only...");
-        });
-    }
-
-    // Graceful shutdown
-    const gracefulShutdown = async (signal) => {
-      console.log(`Received ${signal} signal. Shutting down gracefully...`);
-
-      // Close the HTTP server
-      if (httpServer) {
-        await new Promise((resolve) => httpServer.close(resolve));
-        console.log("HTTP server closed.");
-      }
-
-      // Close the HTTPS server
-      if (httpsServer) {
-        await new Promise((resolve) => httpsServer.close(resolve));
-        console.log("HTTPS server closed.");
-      }
-
-      // Close jsreport
-      if (jsreportInstance && typeof jsreportInstance.close === "function") {
-        try {
-          await jsreportInstance.close();
-          console.log("jsreport closed.");
-        } catch (closeError) {
-          console.error("Error closing jsreport:", closeError);
-        }
-      }
-
-      process.exit(0);
+    const port = serverConfig.port;
+    
+    // Create HTTPS server with proper SSL configuration
+    const httpsOptions = {
+      key: fs.readFileSync(path.join(__dirname, 'ssl', 'client-key.pem')),
+      cert: fs.readFileSync(path.join(__dirname, 'ssl', 'client-cert.pem')),
+      requestCert: false,
+      rejectUnauthorized: false
     };
 
-    process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
-    process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+    server = https.createServer(httpsOptions, app);
 
-    process.on("uncaughtException", async (err) => {
-      console.error("Uncaught Exception:", err);
-      await gracefulShutdown("uncaughtException");
-    });
-
-    process.on("unhandledRejection", (reason, promise) => {
-      console.error("Unhandled Rejection at:", promise, "reason:", reason);
-    });
-  } catch (error) {
-    console.error("Failed to start server:", error);
-    if (jsreportInstance && typeof jsreportInstance.close === "function") {
-      try {
-        await jsreportInstance.close();
-      } catch (closeError) {
-        console.error("Error closing jsreport:", closeError);
+    server.listen(port, () => {
+      console.log(`✅ HTTPS Server started on https://pxcserver.ddns.net:${port}`);
+    }).on('error', (err) => {
+      console.error('Server error:', err);
+      if (err.code === 'EACCES') {
+        console.error(`Port ${port} requires elevated privileges`);
+      } else if (err.code === 'EADDRINUSE') {
+        console.error(`Port ${port} is already in use`);
       }
-    }
+      process.exit(1);
+    });
+
+    // Add error handler for uncaught exceptions
+    process.on('uncaughtException', async (err) => {
+      console.error('Uncaught Exception:', err);
+      if (jsreportInstance) {
+        try {
+          await jsreportInstance.close();
+        } catch (closeError) {
+          console.error('Error closing jsreport:', closeError);
+        }
+      }
+      process.exit(1);
+    });
+
+    // Add error handler for unhandled promise rejections
+    process.on('unhandledRejection', (reason, promise) => {
+      console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    });
+    
+    // Cleanup handlers
+    const cleanup = require('./utils/cleanup');
+    process.on('SIGTERM', () => cleanup.handleShutdown(jsreportInstance));
+    process.on('SIGINT', () => cleanup.handleShutdown(jsreportInstance));
+    
+  } catch (error) {
+    console.error('Failed to start server:', error);
     process.exit(1);
   }
 };
 
 startServer();
+

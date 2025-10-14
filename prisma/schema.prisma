@@ -50,6 +50,9 @@ model WP_COMPANY_SETTINGS {
   Email        String? @db.VarChar(255)
   ValidStatus  String? @db.VarChar(255)
   UserID       String? @db.VarChar(255)
+
+  @@index([TIN], map: "IX_WP_COMPANY_SETTINGS_TIN")
+  @@index([UserID], map: "IX_WP_COMPANY_SETTINGS_UserID")
 }
 
 model WP_CONFIGURATION {
@@ -60,6 +63,10 @@ model WP_CONFIGURATION {
   IsActive Boolean? @default(true, map: "DF__WP_CONFIG__IsAct__2D27B809")
   CreateTS DateTime @db.DateTime
   UpdateTS DateTime @db.DateTime
+
+  @@index([UserID], map: "IX_WP_CONFIGURATION_UserID")
+  @@index([Type], map: "IX_WP_CONFIGURATION_Type")
+  @@index([IsActive], map: "IX_WP_CONFIGURATION_IsActive")
 }
 
 model WP_FLATFILE {
@@ -153,6 +160,11 @@ model WP_LOGS {
   Action      String? @db.VarChar(255)
   Status      String? @db.VarChar(255)
   UserID      Int?
+
+  @@index([UserID], map: "IX_WP_LOGS_UserID")
+  @@index([LogType], map: "IX_WP_LOGS_LogType")
+  @@index([Module], map: "IX_WP_LOGS_Module")
+  @@index([CreateTS], map: "IX_WP_LOGS_CreateTS")
 }
 
 model WP_OUTBOUND_STATUS {
@@ -234,6 +246,10 @@ model WP_USER_REGISTRATION {
   TwoFactorEnabled         Boolean?  @default(false, map: "DF__WP_USER_R__TwoFa__276EDEB3")
   NotificationsEnabled     Boolean?  @default(false, map: "DF__WP_USER_R__Notif__286302EC")
   UpdateTS                 DateTime? @db.DateTime
+
+  @@index([TIN], map: "IX_WP_USER_REGISTRATION_TIN")
+  @@index([ValidStatus], map: "IX_WP_USER_REGISTRATION_ValidStatus")
+  @@index([Admin], map: "IX_WP_USER_REGISTRATION_Admin")
 }
 
 model LHDN_TOKENS {

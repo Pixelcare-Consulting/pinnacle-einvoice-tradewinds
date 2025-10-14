@@ -869,7 +869,7 @@ class InvoiceTableManager {
     try {
       console.log("[Inbound] Testing endpoint connectivity...");
 
-      // Test the main endpoint
+      // Test the main endpoint - fallback to recent endpoint if search unavailable
       const response = await fetch("/api/lhdn/documents/recent?useDatabase=true&fallbackOnly=true", {
         method: "GET",
         headers: {
@@ -1320,8 +1320,8 @@ class InvoiceTableManager {
 
         // Show success feedback with refresh type
         const successMessage = forceFullRefresh
-          ? "Full data refresh completed"
-          : "Quick refresh completed";
+          ? "Synced with LHDN - Full refresh completed"
+          : "Synced with LHDN - Quick refresh completed";
         ToastManager.show(successMessage, "success");
       } catch (error) {
         console.error("Error refreshing data:", error);
@@ -1357,7 +1357,7 @@ class InvoiceTableManager {
 
       // Show loading state with rate limit info
       this.showLoadingBackdrop(
-        "Loading Live LHDN Data",
+        "Searching Current Month's Documents",
         `${remainingRequests || 0} requests remaining this minute`
       );
 
@@ -1366,9 +1366,9 @@ class InvoiceTableManager {
 
       // Queue the request to manage concurrency
       await this.requestQueue.add(async () => {
-        // Update the table's AJAX URL to live endpoint
+        // Update the table's AJAX URL to new search endpoint
         if (this.table) {
-          this.table.ajax.url("/api/lhdn/documents/recent").load(() => {
+          this.table.ajax.url("/api/lhdn/documents/search").load(() => {
             this.hideLoadingBackdrop();
             this.updateCardTotals();
           });
@@ -1493,8 +1493,8 @@ class InvoiceTableManager {
       const currentData = this.table.data().toArray();
       const currentUUIDs = new Set(currentData.map(row => row.uuid));
 
-      // Fetch fresh data from API with database priority for incremental refresh
-      const response = await fetch("/api/lhdn/documents/recent?incremental=true&useDatabase=true", {
+      // Fetch fresh data from new search endpoint
+      const response = await fetch("/api/lhdn/documents/search", {
         method: "GET",
         headers: {
           "Accept": "application/json",
@@ -1573,7 +1573,7 @@ class InvoiceTableManager {
       window.forceRefreshLHDN = true;
       await this.switchToLiveData();
     } finally {
-      this.hideIncrementalLoadingIndicator();
+      //this.hideIncrementalLoadingIndicator();
     }
   }
 
@@ -1594,41 +1594,6 @@ class InvoiceTableManager {
       refreshBtn.find(".btn-text").text("Checking for updates...");
     }
 
-    // Add subtle overlay to table
-    const tableContainer = $("#invoiceTable").closest(".table-body-container");
-    if (tableContainer.length && !tableContainer.find(".incremental-loading").length) {
-      tableContainer.append(`
-        <div class="incremental-loading" style="
-          position: absolute;
-          top: 0;
-          right: 0;
-          background: rgba(13, 110, 253, 0.1);
-          color: #0d6efd;
-          padding: 8px 16px;
-          border-radius: 0 0 0 8px;
-          font-size: 0.875rem;
-          z-index: 10;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        ">
-          <div class="spinner-border spinner-border-sm" role="status"></div>
-          Checking for updates...
-        </div>
-      `);
-    }
-  }
-
-  // Hide incremental loading indicator
-  hideIncrementalLoadingIndicator() {
-    const refreshBtn = $("#refreshLHDNData");
-    if (refreshBtn.length) {
-      refreshBtn.removeClass("btn-loading");
-      refreshBtn.find(".btn-text").text("Refresh LHDN Data");
-    }
-
-    // Remove table overlay
-    $(".incremental-loading").remove();
   }
 
   // Highlight updated rows briefly
@@ -2156,207 +2121,6 @@ class InvoiceTableManager {
     this.addExportButton();
     this.initializeTooltipsAndCopy();
 
-    // Add enhanced refresh button with status indicator
-    const refreshButton = $(`
-            <button id="refreshLHDNData" class="btn btn-primary btn-sm ms-2 refresh-enhanced"
-                    data-bs-toggle="tooltip"
-                    data-bs-placement="top"
-                    title="Full refresh from LHDN server - fetches latest data and updates database">
-                <i class="bi bi-cloud-download me-1"></i>
-                <span class="btn-text">Full LHDN Refresh</span>
-                <small class="text-light ms-1 refresh-timer" style="display: none;"></small>
-            </button>
-        `);
-
-    // Add status indicator for refresh operations
-    const statusIndicator = $(`
-            <div class="refresh-status-indicator ms-2" style="display: none;">
-                <small class="text-muted d-flex align-items-center">
-                    <div class="spinner-border spinner-border-sm me-1" role="status" style="width: 12px; height: 12px;"></div>
-                    <span class="status-text">Checking for updates...</span>
-                </small>
-            </div>
-        `);
-
-    $(".dataTables_length").append(refreshButton).append(statusIndicator);
-    // Initialize tooltip for the refresh button with proper container
-    new bootstrap.Tooltip(refreshButton[0], {
-      container: 'body',
-      boundary: 'viewport'
-    });
-
-    // Handle refresh button click with enhanced responsiveness
-    $("#refreshLHDNData")
-      .off("click")
-      .on("click", async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        const button = $("#refreshLHDNData");
-
-        // Immediate visual feedback
-        button.addClass("btn-loading");
-
-        // Prevent spam clicking - check both isRefreshing flag and button state
-        if (this.isRefreshing || button.prop("disabled")) {
-          console.log("Refresh already in progress, ignoring click");
-          button.removeClass("btn-loading");
-          return;
-        }
-
-        // Rate limiting - prevent too frequent refreshes
-        const now = Date.now();
-        const timeSinceLastRefresh = now - this.lastRefreshTime;
-        if (timeSinceLastRefresh < this.refreshCooldown) {
-          const remainingTime = Math.ceil(
-            (this.refreshCooldown - timeSinceLastRefresh) / 1000
-          );
-          button.removeClass("btn-loading");
-          this.showRefreshCooldown(remainingTime);
-          ToastManager.showRateLimit(
-            "Too many refresh requests",
-            remainingTime
-          );
-          return;
-        }
-
-        this.isRefreshing = true;
-        this.lastRefreshTime = now; // Update last refresh time
-
-        // Enhanced button state management
-        button.prop("disabled", true);
-        button.addClass("processing btn-loading");
-        button.find(".btn-text").text("Processing...");
-
-        let loadingModal, progressBar, statusText, detailsText, backdrop;
-        try {
-          // Only live LHDN data is supported now
-
-          // For live data, use the full refresh process
-          loadingModal = document.getElementById("loadingModal");
-          progressBar = document.querySelector("#loadingModal .progress-bar");
-          statusText = document.getElementById("loadingStatus");
-          detailsText = document.getElementById("loadingDetails");
-
-          if (this.checkDataFreshness() && !window.forceRefreshLHDN) {
-            const result = await CustomModal.fire({
-              title: "Data is up to date",
-              text: "The data was updated less than 15 minutes ago. Do you still want to refresh?",
-              icon: "info",
-              showCancelButton: true,
-              confirmButtonText: "Yes, refresh anyway",
-              cancelButtonText: "No, keep current data",
-            });
-
-            if (!result.isConfirmed) {
-              return;
-            }
-          }
-
-          // Enhanced button loading state
-          button.addClass("loading");
-          button.html(
-            '<i class="bi bi-arrow-clockwise me-1 spin"></i>Connecting...'
-          );
-
-          loadingModal.classList.add("show");
-          loadingModal.style.display = "block";
-          document.body.classList.add("modal-open");
-
-          backdrop = document.createElement("div");
-          backdrop.className = "modal-backdrop fade show";
-          document.body.appendChild(backdrop);
-
-          progressBar.style.width = "10%";
-          statusText.textContent = "Connecting to LHDN server...";
-          detailsText.textContent = "Please wait while we establish connection";
-
-          // Call the new refresh endpoint
-          const response = await fetch("/api/lhdn/documents/refresh", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-          });
-
-          if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error?.message || "Failed to refresh data");
-          }
-
-          progressBar.style.width = "50%";
-          statusText.textContent = "Refreshing data...";
-          detailsText.textContent = "Fetching latest documents from LHDN";
-          button.html(
-            '<i class="bi bi-arrow-clockwise me-1 spin"></i>Refreshing...'
-          );
-
-          // Force a fresh fetch from the API
-          window.forceRefreshLHDN = true;
-
-          // Clear the cache timestamp to force a fresh fetch
-          localStorage.removeItem("lastDataUpdate");
-
-          // Use incremental refresh for better UX, unless forced
-          await this.refreshCurrentDataSource({
-            incremental: !window.forceRefreshLHDN,
-            force: window.forceRefreshLHDN
-          });
-
-          progressBar.style.width = "100%";
-          statusText.textContent = "Success! Your data is now up to date.";
-          detailsText.textContent = "Data refresh completed successfully";
-          button.html('<i class="bi bi-check-circle me-1"></i>Completed!');
-
-          setTimeout(() => {
-            loadingModal.classList.remove("show");
-            loadingModal.style.display = "none";
-            document.body.classList.remove("modal-open");
-            backdrop.remove();
-            progressBar.style.width = "0%";
-            detailsText.textContent = "";
-            ToastManager.show(
-              "Successfully fetched fresh data from LHDN",
-              "success"
-            );
-            this.startRefreshTimer();
-          }, 1000);
-        } catch (error) {
-          console.error("Error refreshing LHDN data:", error);
-
-          // Restore button state on error
-          const refreshBtn = $("#refreshLHDNData");
-          refreshBtn.prop("disabled", false); // Ensure button is enabled
-          refreshBtn.removeClass("loading"); // Remove loading state if present
-          refreshBtn.html(
-            '<i class="bi bi-exclamation-triangle me-1"></i>Retry'
-          );
-
-          ToastManager.show(
-            error.message ||
-              "Unable to fetch fresh data from LHDN. Please try again.",
-            "error"
-          );
-        } finally {
-          try {
-            if (loadingModal) {
-              loadingModal.classList.remove("show");
-              loadingModal.style.display = "none";
-              document.body.classList.remove("modal-open");
-            }
-            if (backdrop) backdrop.remove();
-            if (progressBar) progressBar.style.width = "0%";
-            if (detailsText) detailsText.textContent = "";
-          } catch (_) {}
-
-          // Add delay before re-enabling button to prevent rapid clicking
-          setTimeout(() => {
-            $("#refreshLHDNData").removeClass("loading");
-            this.isRefreshing = false;
-          }, 2000); // 2 second delay
-
-          window.forceRefreshLHDN = false;
-        }
-      });
-
     this.startRefreshTimer();
   }
 
@@ -2466,7 +2230,7 @@ class InvoiceTableManager {
       processing: false,
       serverSide: false,
       ajax: {
-        url: "/api/lhdn/documents/recent?useDatabase=true", // Database-first data source (DB-only by default)
+        url: "/api/lhdn/documents/recent?useDatabase=true&fallbackOnly=true", // Strict database-only on initial load
         method: "GET",
         data: function (d) {
           console.log("[Inbound] Making AJAX request to:", "/api/lhdn/documents/recent");
@@ -3074,154 +2838,6 @@ class InvoiceTableManager {
     this.initializeSelectAll();
     this.addExportButton();
     this.initializeTooltipsAndCopy();
-
-    // Add refresh button with enhanced styling
-    const refreshButton = $(`
-            <button id="refreshLHDNData" class="outbound-action-btn submit btn-sm ms-2"
-                    data-bs-toggle="tooltip"
-                    data-bs-placement="top"
-                    title="Refresh data from LHDN server">
-                <i class="bi bi-arrow-clockwise me-1"></i>Refresh LHDN Data
-                <small class="text-muted ms-1 refresh-timer" style="display: none;"></small>
-            </button>
-        `);
-
-    $(".dataTables_length").append(refreshButton);
-    // Initialize tooltip for the refresh button with proper container
-    new bootstrap.Tooltip(refreshButton[0], {
-      container: 'body',
-      boundary: 'viewport'
-    });
-
-    // Handle refresh button click (guard against multiple bindings and concurrent refresh)
-    // Guard the second handler as well
-    $("#refreshLHDNData")
-      .off("click")
-      .on("click", async () => {
-        const button = $("#refreshLHDNData");
-
-        // Prevent spam clicking - check both isRefreshing flag and button state
-        if (this.isRefreshing || button.prop("disabled")) {
-          console.log("Refresh already in progress, ignoring click");
-          return;
-        }
-
-        // Rate limiting - prevent too frequent refreshes
-        const now = Date.now();
-        const timeSinceLastRefresh = now - this.lastRefreshTime;
-        if (timeSinceLastRefresh < this.refreshCooldown) {
-          const remainingTime = Math.ceil(
-            (this.refreshCooldown - timeSinceLastRefresh) / 1000
-          );
-          this.showRefreshCooldown(remainingTime);
-          ToastManager.show(
-            `Please wait ${remainingTime} more seconds before refreshing again.`,
-            "info"
-          );
-          return;
-        }
-
-        this.isRefreshing = true;
-        this.lastRefreshTime = now; // Update last refresh time
-        button.prop("disabled", true);
-        let loadingModal, progressBar, statusText, detailsText, backdrop;
-        try {
-          loadingModal = document.getElementById("loadingModal");
-          progressBar = document.querySelector("#loadingModal .progress-bar");
-          statusText = document.getElementById("loadingStatus");
-          detailsText = document.getElementById("loadingDetails");
-
-          if (this.checkDataFreshness() && !window.forceRefreshLHDN) {
-            const result = await CustomModal.fire({
-              title: "Data is up to date",
-              text: "The data was updated less than 15 minutes ago. Do you still want to refresh?",
-              icon: "info",
-              showCancelButton: true,
-              confirmButtonText: "Yes, refresh anyway",
-              cancelButtonText: "No, keep current data",
-            });
-            if (!result.isConfirmed) return;
-          }
-
-          loadingModal.classList.add("show");
-          loadingModal.style.display = "block";
-          document.body.classList.add("modal-open");
-
-          backdrop = document.createElement("div");
-          backdrop.className = "modal-backdrop fade show";
-          document.body.appendChild(backdrop);
-
-          progressBar.style.width = "10%";
-          statusText.textContent = "Connecting to LHDN server...";
-
-          const response = await fetch("/api/lhdn/documents/refresh", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-          });
-          if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error?.message || "Failed to refresh data");
-          }
-
-          progressBar.style.width = "50%";
-          statusText.textContent = "Refreshing data...";
-          window.forceRefreshLHDN = true;
-          localStorage.removeItem("lastDataUpdate");
-
-          if (this.table.ajax && this.table.ajax.reload) {
-            await this.table.ajax.reload(null, false);
-          } else {
-            await this.refreshCurrentDataSource();
-          }
-
-          progressBar.style.width = "100%";
-          statusText.textContent = "Success! Your data is now up to date.";
-          setTimeout(() => {
-            loadingModal.classList.remove("show");
-            loadingModal.style.display = "none";
-            document.body.classList.remove("modal-open");
-            backdrop.remove();
-            progressBar.style.width = "0%";
-            detailsText.textContent = "";
-            ToastManager.show(
-              "Successfully fetched fresh data from LHDN",
-              "success"
-            );
-            this.startRefreshTimer();
-          }, 1000);
-        } catch (error) {
-          console.error("Error refreshing LHDN data:", error);
-          ToastManager.show(
-            error.message ||
-              "Unable to fetch fresh data from LHDN. Please try again.",
-            "error"
-          );
-        } finally {
-          try {
-            if (loadingModal) {
-              loadingModal.classList.remove("show");
-              loadingModal.style.display = "none";
-              document.body.classList.remove("modal-open");
-            }
-            if (backdrop) backdrop.remove();
-            if (progressBar) progressBar.style.width = "0%";
-            if (detailsText) detailsText.textContent = "";
-          } catch (_) {}
-
-          // Add delay before re-enabling button to prevent rapid clicking
-          setTimeout(() => {
-            const refreshBtn = $("#refreshLHDNData");
-            refreshBtn.removeClass("loading");
-            refreshBtn.prop("disabled", false);
-            refreshBtn.html(
-              '<i class="bi bi-arrow-clockwise me-1"></i>Refresh LHDN Data'
-            );
-            this.isRefreshing = false;
-          }, 2000); // 2 second delay
-
-          window.forceRefreshLHDN = false;
-        }
-      });
 
     this.startRefreshTimer();
   }

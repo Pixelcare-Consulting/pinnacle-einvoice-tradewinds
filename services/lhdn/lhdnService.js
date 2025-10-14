@@ -789,6 +789,73 @@ async function validateCustomerTin(settings, tin, idType, idValue, token) {
   }
 }
 
+// Search Documents API - fetches documents with filters
+async function searchDocuments(params, token, attempt = 0) {
+  try {
+    const settings = await getConfig();
+    const baseUrl = settings.environment === 'production' ? settings.middlewareUrl : settings.middlewareUrl;
+
+    // Add searchDocuments to rate limits if not already defined
+    if (!RATE_LIMITS.searchDocuments) {
+      RATE_LIMITS.searchDocuments = { rpm: 100, minIntervalMs: Math.ceil(60000 / 100) }; // 600ms
+    }
+
+    // Respect searchDocuments rate limit
+    await waitForSlot('searchDocuments');
+
+    // Default pagination values
+    const pageNo = params.pageNo || 1;
+    const pageSize = params.pageSize || 100; // Max 100 per page
+
+    console.log(`[LHDN Search] Fetching page ${pageNo} with pageSize ${pageSize}`);
+
+    const response = await axios.get(
+      `${baseUrl}/api/v1.0/documents/search`,
+      {
+        params: {
+          submissionDateFrom: params.submissionDateFrom,
+          submissionDateTo: params.submissionDateTo,
+          issuerId: params.issuerId,
+          receiverId: params.receiverId,
+          direction: params.direction, // 'Sent' or 'Received'
+          status: params.status,
+          pageNo: pageNo,
+          pageSize: pageSize
+        },
+        headers: { 
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json'
+        },
+        timeout: 30000 // 30 seconds timeout
+      }
+    );
+
+    if (response.status === 200 && response.data) {
+      console.log(`[LHDN Search] Successfully fetched page ${pageNo}, results: ${response.data.result?.length || 0}`);
+      return { status: 'success', data: response.data };
+    }
+
+    return { status: 'failed', error: { code: 'EMPTY_RESPONSE', message: 'No data returned from search API' } };
+  } catch (err) {
+    // Handle rate limiting (429)
+    if (err.response?.status === 429) {
+      const retryAfter = err.response.headers['retry-after'] || err.response.headers['x-rate-limit-reset'];
+      const baseDelay = parseRetryAfter(retryAfter) || RATE_LIMITS.searchDocuments?.minIntervalMs || 600;
+      console.warn(`[RateLimit] SearchDocuments 429. Retry-After: ${retryAfter || 'n/a'}. Base delay ~${baseDelay}ms`);
+      await backoffWait(baseDelay, attempt);
+      return await searchDocuments(params, token, attempt + 1);
+    }
+
+    console.error(`[LHDN Search] Error searching documents:`, {
+      status: err.response?.status,
+      message: err.message,
+      details: err.response?.data
+    });
+
+    throw err;
+  }
+}
+
 module.exports = {
     submitDocument,
     validateCustomerTin,
@@ -799,5 +866,6 @@ module.exports = {
     calculateSHA256,
     getCertificatesHashedParams,
     testIRBCall,
-    getSubmission
+    getSubmission,
+    searchDocuments
 };

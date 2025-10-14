@@ -16,6 +16,7 @@ const {
 const errorMiddleware = require('./error.middleware');
 const maintenanceMiddleware = require('./maintenance.middleware');
 const validation = require('./validation');
+const responseCache = require('./response-cache.middleware');
 
 module.exports = {
   auth: {
@@ -34,5 +35,6 @@ module.exports = {
   },
   error: errorMiddleware,
   maintenance: maintenanceMiddleware,
-  validation
+  validation,
+  responseCache
 };

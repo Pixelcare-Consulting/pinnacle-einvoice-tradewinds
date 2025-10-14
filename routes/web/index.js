@@ -103,6 +103,16 @@ router.get('/inbound', auth.middleware, (req, res) => {
   });
 });
 
+
+router.get("/outbound", auth.middleware, (req, res) => {
+  res.render("dashboard/outbound.html", {
+    title: "Outbound Manual",
+    user: req.session.user || null,
+    layout: "layout",
+  });
+});
+
+
 router.get('/outbound-manual', auth.middleware, (req, res) => {
   res.render('dashboard/outbound-manual.html', {
     title: 'Outbound Manual',
