@@ -2117,14 +2117,15 @@ router.get("/documents/search", async (req, res) => {
     // Update session with token
     req.session.accessToken = accessToken;
 
-    // Get last 3 months date range
+    // Get last 30 days date range (LHDN API limit)
     const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth() - 2, 1);
-    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+    const startDate = new Date(now);
+    startDate.setDate(now.getDate() - 30);
+    const endDate = new Date(now);
 
     // Format dates as ISO 8601
-    const submissionDateFrom = startOfMonth.toISOString();
-    const submissionDateTo = endOfMonth.toISOString();
+    const submissionDateFrom = startDate.toISOString();
+    const submissionDateTo = endDate.toISOString();
 
     console.log(`[LHDN Search] Searching documents from ${submissionDateFrom} to ${submissionDateTo}`);
 

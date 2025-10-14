@@ -398,8 +398,8 @@ const startServer = async () => {
     
     // Create HTTPS server with proper SSL configuration
     const httpsOptions = {
-      key: fs.readFileSync(path.join(__dirname, 'ssl', 'client-key.pem')),
-      cert: fs.readFileSync(path.join(__dirname, 'ssl', 'client-cert.pem')),
+      key: fs.readFileSync(path.join(__dirname, 'ssl', 'client.key')),
+      cert: fs.readFileSync(path.join(__dirname, 'ssl', 'client.cert')),
       requestCert: false,
       rejectUnauthorized: false
     };
@@ -407,7 +407,7 @@ const startServer = async () => {
     server = https.createServer(httpsOptions, app);
 
     server.listen(port, () => {
-      console.log(`✅ HTTPS Server started on https://pxcserver.ddns.net:${port}`);
+      console.log(`✅ HTTPS Server started on https://localhost:${port}`);
     }).on('error', (err) => {
       console.error('Server error:', err);
       if (err.code === 'EACCES') {
