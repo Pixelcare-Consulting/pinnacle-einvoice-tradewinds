@@ -4,14 +4,55 @@
 The LHDN Search Documents API was being throttled due to exceeding rate limits, causing the fetch process to stop after ~12-13 pages.
 
 ## Root Causes
-1. **Rate limit too aggressive**: Set to 600ms between requests (100 RPM)
-2. **No retry limit**: Infinite retry loops on 429 errors
-3. **No page limit**: Could attempt to fetch hundreds of pages
-4. **Violating LHDN best practices**: Using the API for bulk synchronization
+1. **No concurrency control**: Multiple users could trigger simultaneous searches, overwhelming the API
+2. **Rate limit too aggressive**: Set to 600ms between requests (100 RPM) instead of 5 seconds
+3. **No retry limit**: Infinite retry loops on 429 errors
+4. **No page limit**: Could attempt to fetch hundreds of pages
+5. **Violating LHDN best practices**: Using the API for bulk synchronization
 
 ## Solutions Implemented
 
-### 1. Fixed Rate Limiting
+### 1. Concurrency Control (Prevents Multiple Users)
+**File**: `routes/api/lhdn.js`
+
+Added an in-memory lock mechanism to prevent concurrent search operations:
+
+```javascript
+const searchLock = {
+  isLocked: false,
+  lockedBy: null,
+  lockedAt: null,
+  acquire(requestId) { /* locks the search */ },
+  release() { /* unlocks the search */ },
+  getStatus() { /* returns lock status */ }
+};
+```
+
+**Features**:
+- Only ONE search operation can run at a time
+- Other requests get HTTP 409 (Conflict) with clear message
+- Auto-releases stuck locks after 10 minutes
+- Tracks who initiated the search and duration
+- Always releases lock in `finally` block (even on errors)
+
+**User Experience**:
+When a search is in progress, other users see:
+```json
+{
+  "error": {
+    "code": "SEARCH_IN_PROGRESS",
+    "message": "A search operation is already in progress. Please wait for it to complete.",
+    "lockedBy": "admin-1728901234567",
+    "duration": 45
+  }
+}
+```
+
+**New Endpoint**: `/api/lhdn/documents/search-status`
+- Check if a search is currently running
+- Get information about who started it and how long it's been running
+
+### 2. Fixed Rate Limiting
 **File**: `services/lhdn/lhdnService.js`
 
 ```javascript
@@ -23,7 +64,7 @@ RATE_LIMITS.searchDocuments = { rpm: 12, minIntervalMs: 5000 };
 - Throttling limit: **1 Request every 5 Seconds** per taxpayer
 - Rate limit: **12 Requests Per Minute (RPM)** per Client ID
 
-### 2. Added Retry Limit
+### 3. Added Retry Limit
 **File**: `services/lhdn/lhdnService.js`
 
 ```javascript
@@ -35,7 +76,7 @@ if (attempt >= 3) {
 
 **Reasoning**: Prevents the service from getting stuck in endless retry loops when rate limited.
 
-### 3. Added Page Limit
+### 4. Added Page Limit
 **File**: `routes/api/lhdn.js`
 
 ```javascript
@@ -48,14 +89,14 @@ const MAX_PAGES_PER_DIRECTION = 20; // 2000 documents max per direction (Sent/Re
 - Fetches up to 4000 documents total (2000 Sent + 2000 Received)
 - Respects LHDN's 10,000 document maximum
 
-### 4. Enhanced Error Handling
+### 5. Enhanced Error Handling
 Added better logging and graceful error handling:
 - Shows progress: `page X/20` 
 - Shows running total: `Total: X documents`
 - Gracefully stops on rate limit errors
 - Logs when reaching maximum pages
 
-### 5. Updated Date Range
+### 6. Updated Date Range
 **File**: `routes/api/lhdn.js`
 
 ```javascript
@@ -90,16 +131,20 @@ According to the [official documentation](https://sdk.myinvois.hasil.gov.my/einv
 ## Performance Impact
 
 ### Before Optimization
-- Rate: ~1-2 requests per second
-- Result: Hit rate limits at page 13
-- Time: ~13-15 seconds before failure
-- Documents: ~1200 before stopping
+- **Concurrency**: Multiple users could trigger simultaneous searches
+- **Rate**: ~1-2 requests per second (too fast)
+- **Result**: Hit rate limits at page 13, requests getting stuck in retry loops
+- **Time**: ~13-15 seconds before failure
+- **Documents**: ~1200 before stopping
+- **Issue**: Logs showed page 1, 6, 9 fetching at the same time
 
 ### After Optimization
-- Rate: 1 request per 5 seconds
-- Result: No rate limit errors
-- Time: ~100 seconds for 20 pages (5 sec × 20 pages)
-- Documents: Up to 2000 per direction (4000 total)
+- **Concurrency**: Only ONE search at a time (others get 409 error)
+- **Rate**: 1 request per 5 seconds (LHDN compliant)
+- **Result**: No rate limit errors, no concurrent requests
+- **Time**: ~100 seconds for 20 pages (5 sec × 20 pages)
+- **Documents**: Up to 2000 per direction (4000 total)
+- **Protection**: Lock prevents multiple users from overwhelming the API
 
 ### Expected Behavior
 - **Sent documents**: Fetches up to 20 pages (2000 documents)
@@ -120,21 +165,70 @@ const maxRetries = 3; // Adjust retry attempts for rate limit errors
 const minIntervalMs = 5000; // DO NOT decrease below 5000ms (LHDN limit)
 ```
 
+## API Endpoints
+
+### 1. Search Documents
+**Endpoint**: `GET /api/lhdn/documents/search`
+
+- Fetches documents from LHDN (last 30 days)
+- Returns HTTP 409 if search already in progress
+- Automatically releases lock on completion/error
+
+### 2. Search Status
+**Endpoint**: `GET /api/lhdn/documents/search-status`
+
+Check if a search is currently running:
+```json
+{
+  "success": true,
+  "searchInProgress": true,
+  "lockedBy": "admin-1728901234567",
+  "durationSeconds": 45
+}
+```
+
 ## Testing
 
 To test the optimized implementation:
 
-1. Clear any existing data
-2. Call the `/api/lhdn/documents/search` endpoint
-3. Monitor the logs for:
+### Test 1: Normal Search
+1. Call the `/api/lhdn/documents/search` endpoint
+2. Monitor the logs for:
+   - `[SearchLock] Lock acquired by username-timestamp`
    - `[LHDN Search] Fetching X documents - page Y/20`
    - No repeated 429 rate limit errors
+   - `[SearchLock] Lock released by username-timestamp after XXXms`
    - Successful completion message
+
+### Test 2: Concurrent Search Prevention
+1. Start a search from User A
+2. While it's running, try to start another search from User B
+3. User B should receive HTTP 409 with message:
+   ```json
+   {
+     "error": {
+       "code": "SEARCH_IN_PROGRESS",
+       "message": "A search operation is already in progress..."
+     }
+   }
+   ```
+4. After User A's search completes, User B can try again
+
+### Test 3: Status Check
+1. Call `/api/lhdn/documents/search-status` before a search
+   - Should return `searchInProgress: false`
+2. Start a search
+3. Call status endpoint during the search
+   - Should return `searchInProgress: true` with details
+4. Wait for search to complete
+5. Call status endpoint again
+   - Should return `searchInProgress: false`
 
 ## Files Modified
 
 1. `services/lhdn/lhdnService.js` - Updated rate limiting and retry logic
-2. `routes/api/lhdn.js` - Added page limits and better error handling
+2. `routes/api/lhdn.js` - Added concurrency lock, page limits, search status endpoint, and better error handling
+3. `LHDN_SEARCH_API_OPTIMIZATION.md` - Complete documentation of changes
 
 ## References
 

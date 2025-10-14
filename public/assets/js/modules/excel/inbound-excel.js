@@ -942,23 +942,33 @@ class InvoiceTableManager {
   setupRealTimeStatusMonitoring() {
     console.log('🔍 Setting up real-time status monitoring...');
 
-    // Monitor for status changes every 30 seconds (optimized interval)
+    // Monitor for status changes every 60 seconds (reduced frequency to avoid conflicts)
     this.statusMonitorInterval = setInterval(async () => {
       try {
+        // Skip monitoring if a refresh is already in progress
+        if (this.isRefreshing) {
+          console.log('⏭️ Skipping status check - refresh in progress');
+          return;
+        }
         await this.checkForStatusChanges();
       } catch (error) {
         console.error('❌ Status monitoring error:', error);
       }
-    }, 30000); // 30 seconds
+    }, 60000); // 60 seconds (reduced from 30)
 
-    // Monitor for new submissions every 15 seconds
+    // Monitor for new submissions every 60 seconds (reduced frequency)
     this.submissionMonitorInterval = setInterval(async () => {
       try {
+        // Skip monitoring if a refresh is already in progress
+        if (this.isRefreshing) {
+          console.log('⏭️ Skipping submission check - refresh in progress');
+          return;
+        }
         await this.checkForNewSubmissions();
       } catch (error) {
         console.error('❌ Submission monitoring error:', error);
       }
-    }, 15000); // 15 seconds
+    }, 60000); // 60 seconds (reduced from 15)
 
     // Clean up intervals when page unloads
     window.addEventListener('beforeunload', () => {
@@ -1426,6 +1436,11 @@ class InvoiceTableManager {
     this.lastRefreshTime = now;
 
     try {
+      // IMPORTANT: Clear localStorage cache to ensure fresh data from database
+      console.log('[Refresh] Clearing localStorage cache to fetch fresh data');
+      localStorage.removeItem('inboundTableData');
+      localStorage.removeItem('lastDataUpdate');
+      
       if (this.currentDataSource === "live") {
         // Check LHDN rate limits before refreshing
         const endpoint = "getRecentDocuments";

@@ -399,7 +399,7 @@ const startServer = async () => {
     // Create HTTPS server with proper SSL configuration
     const httpsOptions = {
       key: fs.readFileSync(path.join(__dirname, 'ssl', 'client.key')),
-      cert: fs.readFileSync(path.join(__dirname, 'ssl', 'client.cert')),
+      cert: fs.readFileSync(path.join(__dirname, 'ssl', 'client.crt')),
       requestCert: false,
       rejectUnauthorized: false
     };

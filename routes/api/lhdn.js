@@ -192,6 +192,52 @@ axiosRetry.default(axios, {
   },
 });
 
+// Search operation lock to prevent concurrent requests
+const searchLock = {
+  isLocked: false,
+  lockedBy: null,
+  lockedAt: null,
+  
+  acquire(requestId) {
+    if (this.isLocked) {
+      const lockDuration = Date.now() - this.lockedAt;
+      // Auto-release if locked for more than 10 minutes (stuck lock)
+      if (lockDuration > 600000) {
+        console.warn(`[SearchLock] Auto-releasing stuck lock held by ${this.lockedBy} for ${lockDuration}ms`);
+        this.release();
+      } else {
+        return false;
+      }
+    }
+    this.isLocked = true;
+    this.lockedBy = requestId;
+    this.lockedAt = Date.now();
+    console.log(`[SearchLock] Lock acquired by ${requestId}`);
+    return true;
+  },
+  
+  release() {
+    if (this.isLocked) {
+      const duration = Date.now() - this.lockedAt;
+      console.log(`[SearchLock] Lock released by ${this.lockedBy} after ${duration}ms`);
+    }
+    this.isLocked = false;
+    this.lockedBy = null;
+    this.lockedAt = null;
+  },
+  
+  getStatus() {
+    if (!this.isLocked) {
+      return { locked: false };
+    }
+    return {
+      locked: true,
+      lockedBy: this.lockedBy,
+      duration: Date.now() - this.lockedAt
+    };
+  }
+};
+
 // Document retrieval limitations
 const getDocumentRetrievalLimits = () => {
   return {
@@ -290,7 +336,7 @@ const fetchRecentDocuments = async (req) => {
       orderBy: {
         dateTimeReceived: "desc",
       },
-      take: 1000, // Limit to latest 1000 records
+      take: 9999, // Limit to latest 1000 records
     });
 
     // Get the most recent document timestamp for incremental sync
@@ -853,7 +899,7 @@ async function getCachedDocuments(req) {
           orderBy: {
             dateTimeReceived: "desc",
           },
-          take: 1000, // Limit to latest 1000 records
+          take: 9999, // Limit to latest 1000 records
         });
 
         if (dbDocuments && dbDocuments.length > 0) {
@@ -965,7 +1011,7 @@ async function getCachedDocuments(req) {
           orderBy: {
             dateTimeReceived: "desc",
           },
-          take: 1000,
+          take: 9999,
         });
 
         if (fallbackDocuments && fallbackDocuments.length > 0) {
@@ -1773,7 +1819,7 @@ router.get("/documents/recent", async (req, res) => {
           orderBy: {
             dateTimeReceived: "desc",
           },
-          take: 1000, // Limit to latest 1000 records
+          take: 9999, // Limit to latest 1000 records
         });
 
         if (dbDocuments && dbDocuments.length > 0) {
@@ -1855,7 +1901,7 @@ router.get("/documents/recent", async (req, res) => {
             orderBy: {
               dateTimeReceived: "desc",
             },
-            take: 1000, // Limit to latest 1000 records
+            take: 9999, // Limit to latest 1000 records
           });
 
           if (dbDocuments && dbDocuments.length > 0) {
@@ -2089,7 +2135,38 @@ router.get("/documents/recent", async (req, res) => {
 // Throttling: 1 Request every 5 Seconds | Rate Limit: 12 RPM
 // Reference: https://sdk.myinvois.hasil.gov.my/einvoicingapi/09-search-documents/
 router.get("/documents/search", async (req, res) => {
-  console.log("LHDN documents/search endpoint hit");
+  const requestId = `${req.session?.user?.username || 'unknown'}-${Date.now()}`;
+  console.log(`[LHDN Search] Request ${requestId} - Endpoint hit`);
+  
+  // Check if a search is already in progress
+  const lockStatus = searchLock.getStatus();
+  if (lockStatus.locked) {
+    console.warn(`[LHDN Search] Request ${requestId} - Search already in progress by ${lockStatus.lockedBy} (${Math.round(lockStatus.duration/1000)}s)`);
+    return res.status(409).json({
+      success: false,
+      error: {
+        code: 'SEARCH_IN_PROGRESS',
+        message: 'A search operation is already in progress. Please wait for it to complete.',
+        lockedBy: lockStatus.lockedBy,
+        duration: Math.round(lockStatus.duration/1000),
+        timestamp: new Date().toISOString()
+      }
+    });
+  }
+  
+  // Try to acquire lock
+  if (!searchLock.acquire(requestId)) {
+    console.warn(`[LHDN Search] Request ${requestId} - Failed to acquire lock`);
+    return res.status(409).json({
+      success: false,
+      error: {
+        code: 'SEARCH_IN_PROGRESS',
+        message: 'A search operation is already in progress. Please wait for it to complete.',
+        timestamp: new Date().toISOString()
+      }
+    });
+  }
+  
   try {
     // Check if user is logged in
     if (!req.session?.user) {
@@ -2257,7 +2334,6 @@ router.get("/documents/search", async (req, res) => {
             documentStatusReason: doc.documentStatusReason || null,
             cancelDateTime: doc.cancelDateTime || null,
             rejectRequestDateTime: doc.rejectRequestDateTime || null,
-            createdByUserId: doc.createdByUserId || null,
             dateTimeIssued: doc.dateTimeIssued || null,
             // Map total fields - IMPORTANT: LHDN Search API doesn't return totalSales/total/netAmount!
             // It only returns: totalPayableAmount, totalExcludingTax, totalNetAmount, totalDiscount
@@ -2316,7 +2392,7 @@ router.get("/documents/search", async (req, res) => {
       orderBy: {
         dateTimeReceived: "desc",
       },
-      take: 1000,
+      take: 9999,
     });
 
     return res.json({
@@ -2366,7 +2442,23 @@ router.get("/documents/search", async (req, res) => {
         details: error.response?.data?.error || error.stack,
       },
     });
+  } finally {
+    // Always release the lock when request completes (success or error)
+    searchLock.release();
   }
+});
+
+// Search status endpoint - Check if a search is in progress
+router.get("/documents/search-status", async (_req, res) => {
+  const status = searchLock.getStatus();
+  return res.json({
+    success: true,
+    searchInProgress: status.locked,
+    ...(status.locked && {
+      lockedBy: status.lockedBy,
+      durationSeconds: Math.round(status.duration / 1000)
+    })
+  });
 });
 
 router.get("/documents/recent-total", async (_req, res) => {
