@@ -199,8 +199,8 @@ app.use(
       maxAge: authConfig.session.timeout,
       rolling: true,
       httpOnly: true, // Ensure cookies are HTTP only
-      // Add domain for subdomain access
-      domain: '.tradewindscorp-insbrok.com'
+      // Remove domain restriction to work with any domain
+      // domain: '.tradewindscorp-insbrok.com'
     },
     resave: true,
     saveUninitialized: true,
@@ -215,19 +215,19 @@ app.use(
 app.use(passport.initialize());
 app.use(passport.session());
 
-// Debug middleware to log session and cookie information
-app.use((req, res, next) => {
-  if (req.path.includes('/api/lhdn/documents/') && req.path.includes('/display-details')) {
-    console.log('=== COOKIE DEBUG ===');
-    console.log('Request cookies:', req.headers.cookie);
-    console.log('Session ID:', req.sessionID);
-    console.log('Session exists:', !!req.session);
-    console.log('Session user:', req.session?.user ? 'EXISTS' : 'MISSING');
-    console.log('Session accessToken:', req.session?.accessToken ? 'EXISTS' : 'MISSING');
-    console.log('===================');
-  }
-  next();
-});
+// Debug middleware to log session and cookie information (disabled for performance)
+// app.use((req, res, next) => {
+//   if (req.path.includes('/api/lhdn/documents/') && req.path.includes('/display-details')) {
+//     console.log('=== COOKIE DEBUG ===');
+//     console.log('Request cookies:', req.headers.cookie);
+//     console.log('Session ID:', req.sessionID);
+//     console.log('Session exists:', !!req.session);
+//     console.log('Session user:', req.session?.user ? 'EXISTS' : 'MISSING');
+//     console.log('Session accessToken:', req.session?.accessToken ? 'EXISTS' : 'MISSING');
+//     console.log('===================');
+//   }
+//   next();
+// });
 
 // 5. Application Middleware
 app.use(maintenance); // Maintenance mode check
@@ -244,13 +244,22 @@ app.get("/api/version", (req, res) => {
 
 // Test endpoint to check session
 app.get("/api/test-session", (req, res) => {
+  console.log('=== SESSION TEST DEBUG ===');
+  console.log('Session ID:', req.sessionID);
+  console.log('Session exists:', !!req.session);
+  console.log('Session user:', req.session?.user);
+  console.log('Session accessToken:', req.session?.accessToken ? 'EXISTS' : 'MISSING');
+  console.log('Session keys:', req.session ? Object.keys(req.session) : 'No session');
+  console.log('==========================');
+  
   res.json({
     sessionID: req.sessionID,
     hasSession: !!req.session,
     hasUser: !!req.session?.user,
     hasAccessToken: !!req.session?.accessToken,
     cookies: req.headers.cookie,
-    userAgent: req.headers['user-agent']
+    userAgent: req.headers['user-agent'],
+    sessionKeys: req.session ? Object.keys(req.session) : []
   });
 });
 
@@ -315,37 +324,25 @@ app.use("/api/captcha", captchaRoutes);
 app.use((req, res, next) => {
   // Fast path check for static assets and public routes
   const path = req.path;
-  const publicPaths = [
-    "/assets/",
-    "/dist/",
-    "/favicon.ico",
-    "/public/",
-    "/uploads/",
-    "/temp/",
-    "/reports/",
-    "/auth/",
-    "/vendor/",
-    "/api/captcha/",
-    "/api/health",
-    "/api/version",
-    "/api/clear-cache",
-    "/api/cache-stats",
-  ];
-
+  
   // Quick string comparison for most common paths
   if (
     path.startsWith("/assets/") ||
     path.startsWith("/dist/") ||
     path === "/favicon.ico" ||
     path.startsWith("/auth/") ||
-    path === "/api/health" ||
-    path === "/api/version"
+    path.startsWith("/api/captcha/") ||
+    path.startsWith("/api/health") ||
+    path.startsWith("/api/version") ||
+    path.startsWith("/api/test-session") ||
+    path.startsWith("/api/clear-cache") ||
+    path.startsWith("/api/cache-stats") ||
+    path.startsWith("/uploads/") ||
+    path.startsWith("/temp/") ||
+    path.startsWith("/reports/") ||
+    path.startsWith("/public/") ||
+    path.startsWith("/vendor/")
   ) {
-    return next();
-  }
-
-  // Fallback to array check for less common paths
-  if (publicPaths.some((publicPath) => path.startsWith(publicPath))) {
     return next();
   }
 

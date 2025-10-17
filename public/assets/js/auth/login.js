@@ -305,10 +305,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Form validation and submission - using fetch for better UX
     loginForm.addEventListener('submit', function(event) {
+        // Always prevent default form submission
+        event.preventDefault();
+        event.stopPropagation();
+        
         // Check form validity
         if (!this.checkValidity()) {
-            event.preventDefault();
-            event.stopPropagation();
             this.classList.add('was-validated');
             return;
         }
@@ -343,7 +345,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         // Use fetch API for better UX
-        event.preventDefault();
 
         fetch('/auth/login', {
             method: 'POST',
@@ -355,6 +356,11 @@ document.addEventListener('DOMContentLoaded', function() {
             credentials: 'include'
         })
         .then(response => {
+            console.log('=== LOGIN RESPONSE DEBUG ===');
+            console.log('Response status:', response.status);
+            console.log('Response headers:', Object.fromEntries(response.headers.entries()));
+            console.log('============================');
+            
             // If we get a 404 error, try the alternative login endpoint
             if (response.status === 404) {
                 console.log('Login endpoint not found, trying alternative endpoint...');

@@ -293,16 +293,16 @@ const authMiddleware = (req, res, next) => {
 
   // Check if user is authenticated via session
   if (req.session && req.session.user) {
-    // Log session user data for debugging
-    console.log('=== AUTH MIDDLEWARE DEBUG ===');
-    console.log('Path:', req.path);
-    console.log('Session exists:', !!req.session);
-    console.log('Session user exists:', !!req.session.user);
-    console.log('User ID:', req.session.user?.id);
-    console.log('Username:', req.session.user?.username);
-    console.log('Admin Status:', req.session.user?.admin);
-    console.log('Session ID:', req.sessionID);
-    console.log('=============================');
+    // Log session user data for debugging (disabled for performance)
+    // console.log('=== AUTH MIDDLEWARE DEBUG ===');
+    // console.log('Path:', req.path);
+    // console.log('Session exists:', !!req.session);
+    // console.log('Session user exists:', !!req.session.user);
+    // console.log('User ID:', req.session.user?.id);
+    // console.log('Username:', req.session.user?.username);
+    // console.log('Admin Status:', req.session.user?.admin);
+    // console.log('Session ID:', req.sessionID);
+    // console.log('=============================');
 
     // Check if session is about to expire
     if (req.session.cookie && req.session.cookie.expires) {

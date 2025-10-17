@@ -220,15 +220,33 @@ router.post('/login', loginSecurityMiddleware, async (req, res, next) => {
           // Try to get token from LHDN
           let tokenData = null;
           try {
+            console.log('=== TOKEN ACQUISITION DEBUG ===');
+            console.log('Attempting to get token for user:', user.Username);
             tokenData = await getTokenSession();
+            console.log('Token acquisition result:', tokenData ? 'SUCCESS' : 'FAILED');
+            console.log('Token data type:', typeof tokenData);
+            console.log('Token preview:', tokenData ? tokenData.substring(0, 20) + '...' : 'null');
+            console.log('===============================');
 
             // Store token separately in session
             if (tokenData && tokenData.access_token) {
               req.session.accessToken = tokenData.access_token;
               req.session.tokenExpiryTime = Date.now() + (tokenData.expires_in * 1000);
+              console.log('Token stored in session successfully');
+            } else if (tokenData) {
+              // If tokenData is a string (direct token), store it
+              req.session.accessToken = tokenData;
+              req.session.tokenExpiryTime = Date.now() + (3600 * 1000); // Default 1 hour
+              console.log('String token stored in session successfully');
+            } else {
+              console.log('No token data to store in session');
             }
           } catch (tokenError) {
+            console.error('=== TOKEN ACQUISITION ERROR ===');
             console.error('Token acquisition error:', tokenError);
+            console.error('Error message:', tokenError.message);
+            console.error('Error stack:', tokenError.stack);
+            console.error('================================');
             // Log the token error but continue with login
             await LoggingService.log({
               description: `Token acquisition failed for user: ${user.Username}`,
@@ -268,12 +286,6 @@ router.post('/login', loginSecurityMiddleware, async (req, res, next) => {
 
           // Check if this is an API request or form submission
           const isApiRequest = req.headers['accept'] && req.headers['accept'].includes('application/json');
-          console.log('=== LOGIN SUCCESS DEBUG ===');
-          console.log('Request headers accept:', req.headers['accept']);
-          console.log('Is API request:', isApiRequest);
-          console.log('Session user:', req.session.user);
-          console.log('Session ID:', req.sessionID);
-          console.log('===========================');
           
           if (isApiRequest) {
             return res.json({
@@ -291,7 +303,6 @@ router.post('/login', loginSecurityMiddleware, async (req, res, next) => {
             });
           } else {
             // Form submission - redirect to dashboard
-            console.log('Redirecting to dashboard...');
             return res.redirect('/dashboard');
           }
         } catch (error) {
