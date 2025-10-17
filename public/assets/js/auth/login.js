@@ -14,7 +14,9 @@ function onHCaptchaSuccess(token) {
 // Check if CAPTCHA is required
 async function checkCaptchaRequired() {
     try {
-        const response = await fetch(`/api/captcha/required?attempts=${failedAttempts}`);
+        const response = await fetch(`/api/captcha/required?attempts=${failedAttempts}`, {
+            credentials: 'include'
+        });
         const result = await response.json();
 
         if (result.success && result.data.required) {
@@ -98,7 +100,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json'
             },
-            body: JSON.stringify({ username })
+            body: JSON.stringify({ username }),
+            credentials: 'include'
         })
         .then(response => {
             if (!response.ok) {
@@ -349,7 +352,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 'Accept': 'application/json'
             },
             body: JSON.stringify(formDataObj),
-            credentials: 'same-origin'
+            credentials: 'include'
         })
         .then(response => {
             // If we get a 404 error, try the alternative login endpoint
@@ -363,7 +366,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         'Accept': 'application/json'
                     },
                     body: JSON.stringify(formDataObj),
-                    credentials: 'same-origin'
+                    credentials: 'include'
                 });
             }
 
@@ -372,7 +375,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Check if we're actually logged in by trying to access the dashboard
                 fetch('/dashboard', {
                     method: 'HEAD',
-                    credentials: 'same-origin'
+                    credentials: 'include'
                 }).then(dashboardResponse => {
                     if (dashboardResponse.ok) {
                         // We're actually logged in despite the 500 error
@@ -421,7 +424,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         'Content-Type': 'application/json',
                         'Accept': 'application/json'
                     },
-                    credentials: 'same-origin'
+                    credentials: 'include'
                 })
                 .then(response => response.json())
                 .then(sessionData => {
@@ -501,7 +504,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 setTimeout(() => {
                     fetch('/dashboard', {
                         method: 'HEAD',
-                        credentials: 'same-origin'
+                        credentials: 'include'
                     }).then(response => {
                         if (response.ok) {
                             // We're actually logged in despite the error

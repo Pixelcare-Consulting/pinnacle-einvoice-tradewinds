@@ -268,6 +268,13 @@ router.post('/login', loginSecurityMiddleware, async (req, res, next) => {
 
           // Check if this is an API request or form submission
           const isApiRequest = req.headers['accept'] && req.headers['accept'].includes('application/json');
+          console.log('=== LOGIN SUCCESS DEBUG ===');
+          console.log('Request headers accept:', req.headers['accept']);
+          console.log('Is API request:', isApiRequest);
+          console.log('Session user:', req.session.user);
+          console.log('Session ID:', req.sessionID);
+          console.log('===========================');
+          
           if (isApiRequest) {
             return res.json({
               success: true,
@@ -284,6 +291,7 @@ router.post('/login', loginSecurityMiddleware, async (req, res, next) => {
             });
           } else {
             // Form submission - redirect to dashboard
+            console.log('Redirecting to dashboard...');
             return res.redirect('/dashboard');
           }
         } catch (error) {
