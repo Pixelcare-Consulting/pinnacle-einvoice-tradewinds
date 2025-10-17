@@ -4674,6 +4674,19 @@ async function viewInvoiceDetails(uuid) {
       console.log("Document cookies:", document.cookie);
       console.log("==================");
       
+      // Test session endpoint first
+      try {
+        const sessionTest = await fetch('/api/test-session', {
+          credentials: 'include'
+        });
+        const sessionData = await sessionTest.json();
+        console.log("=== SESSION TEST ===");
+        console.log("Session test result:", sessionData);
+        console.log("===================");
+      } catch (e) {
+        console.log("Session test failed:", e);
+      }
+      
       const response = await fetch(
         `/api/lhdn/documents/${uuid}/display-details`,
         {

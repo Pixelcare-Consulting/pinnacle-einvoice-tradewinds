@@ -199,8 +199,8 @@ app.use(
       maxAge: authConfig.session.timeout,
       rolling: true,
       httpOnly: true, // Ensure cookies are HTTP only
-      // Add domain if needed for subdomain access
-      // domain: '.tradewindscorp-insbrok.com'
+      // Add domain for subdomain access
+      domain: '.tradewindscorp-insbrok.com'
     },
     resave: true,
     saveUninitialized: true,
@@ -215,6 +215,20 @@ app.use(
 app.use(passport.initialize());
 app.use(passport.session());
 
+// Debug middleware to log session and cookie information
+app.use((req, res, next) => {
+  if (req.path.includes('/api/lhdn/documents/') && req.path.includes('/display-details')) {
+    console.log('=== COOKIE DEBUG ===');
+    console.log('Request cookies:', req.headers.cookie);
+    console.log('Session ID:', req.sessionID);
+    console.log('Session exists:', !!req.session);
+    console.log('Session user:', req.session?.user ? 'EXISTS' : 'MISSING');
+    console.log('Session accessToken:', req.session?.accessToken ? 'EXISTS' : 'MISSING');
+    console.log('===================');
+  }
+  next();
+});
+
 // 5. Application Middleware
 app.use(maintenance); // Maintenance mode check
 app.use("/auth", authRoutes); // Auth routes (before auth middleware)
@@ -225,6 +239,18 @@ app.get("/api/version", (req, res) => {
     version: appVersion.getSemanticVersion(),
     fullVersion: appVersion.getFullVersion(),
     timestamp: appVersion.buildDate,
+  });
+});
+
+// Test endpoint to check session
+app.get("/api/test-session", (req, res) => {
+  res.json({
+    sessionID: req.sessionID,
+    hasSession: !!req.session,
+    hasUser: !!req.session?.user,
+    hasAccessToken: !!req.session?.accessToken,
+    cookies: req.headers.cookie,
+    userAgent: req.headers['user-agent']
   });
 });
 
