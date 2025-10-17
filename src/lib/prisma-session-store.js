@@ -18,23 +18,28 @@ class PrismaSessionStore extends session.Store {
 
   async get(sid, callback) {
     try {
+      console.log(`[Session Store] Getting session for SID: ${sid}`);
       const sessionData = await this.prisma.session.findUnique({
         where: { sid },
       });
 
       if (!sessionData) {
+        console.log(`[Session Store] No session found for SID: ${sid}`);
         return callback(null, null);
       }
 
       // Check if session is expired
       if (sessionData.expires < new Date()) {
+        console.log(`[Session Store] Session expired for SID: ${sid}, destroying...`);
         await this.destroy(sid);
         return callback(null, null);
       }
 
       const session = JSON.parse(sessionData.data);
+      console.log(`[Session Store] Session found for SID: ${sid}, has user: ${!!session.user}`);
       return callback(null, session);
     } catch (error) {
+      console.error(`[Session Store] Error getting session for SID: ${sid}`, error);
       return callback(error);
     }
   }

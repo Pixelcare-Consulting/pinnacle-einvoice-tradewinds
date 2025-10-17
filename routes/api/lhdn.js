@@ -3718,7 +3718,17 @@ router.get("/documents/:uuid/display-details", async (req, res) => {
     });
 
     // Check if user is logged in
+    console.log("=== SESSION DEBUG ===");
+    console.log("Request headers:", req.headers);
+    console.log("Session ID:", req.sessionID);
+    console.log("Session exists:", !!req.session);
+    console.log("Session user:", req.session?.user);
+    console.log("Session accessToken:", req.session?.accessToken ? "EXISTS" : "MISSING");
+    console.log("Session cookie:", req.session?.cookie);
+    console.log("===================");
+    
     if (!req.session.user || !req.session.accessToken) {
+      console.log("Authentication failed - missing user or accessToken");
       return res.status(401).json({
         success: false,
         message: "Authentication required. Please log in again.",

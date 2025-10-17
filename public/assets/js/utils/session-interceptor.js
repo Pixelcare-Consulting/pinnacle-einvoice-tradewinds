@@ -58,12 +58,14 @@
 
             // Check if response is 401 Unauthorized
             if (response.status === 401 && !isPublic && !isLoginPage()) {
+                console.log('Session interceptor: 401 detected for URL:', url);
                 // Clone the response to read it
                 const clonedResponse = response.clone();
 
                 try {
                     // Try to parse the response as JSON
                     const data = await clonedResponse.json();
+                    console.log('Session interceptor: Response data:', data);
 
                     // If we have a redirect URL in the response, use it
                     if (data.redirect) {
@@ -72,6 +74,7 @@
                         return response; // Return original response
                     }
                 } catch (e) {
+                    console.log('Session interceptor: Could not parse JSON, redirecting to login');
                     // If we can't parse as JSON, just redirect to login
                     console.log('Session expired, redirecting to login');
                     window.location.replace('/auth/login?expired=true&reason=timeout');

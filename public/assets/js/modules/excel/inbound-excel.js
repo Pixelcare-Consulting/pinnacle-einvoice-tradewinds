@@ -872,6 +872,7 @@ class InvoiceTableManager {
       // Test the main endpoint - fallback to recent endpoint if search unavailable
       const response = await fetch("/api/lhdn/documents/recent?useDatabase=true&fallbackOnly=true", {
         method: "GET",
+        credentials: 'include',
         headers: {
           "Accept": "application/json",
           "Content-Type": "application/json"
@@ -1004,6 +1005,7 @@ class InvoiceTableManager {
       // Check for status updates from the server
       const response = await fetch('/api/lhdn/status-check', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json'
@@ -1211,7 +1213,9 @@ class InvoiceTableManager {
 
       // Check for recent submissions in the last 5 minutes
       const fiveMinutesAgo = new Date(currentTime - 5 * 60 * 1000).toISOString();
-      const response = await fetch(`/api/outbound-files/recent-submissions?since=${fiveMinutesAgo}`);
+      const response = await fetch(`/api/outbound-files/recent-submissions?since=${fiveMinutesAgo}`, {
+        credentials: 'include'
+      });
 
       if (response.ok) {
         const data = await response.json();
@@ -1244,7 +1248,9 @@ class InvoiceTableManager {
       }
 
       // Check for any active polling statuses
-      const response = await fetch('/api/outbound-files/polling-status');
+      const response = await fetch('/api/outbound-files/polling-status', {
+        credentials: 'include'
+      });
 
       if (response.ok) {
         const data = await response.json();
@@ -1511,6 +1517,7 @@ class InvoiceTableManager {
       // Fetch fresh data from new search endpoint
       const response = await fetch("/api/lhdn/documents/search", {
         method: "GET",
+        credentials: 'include',
         headers: {
           "Accept": "application/json",
           "Content-Type": "application/json"
@@ -1713,7 +1720,10 @@ class InvoiceTableManager {
 
       // Fetch data from database endpoint
       const response = await fetch(
-        "/api/lhdn/documents/recent?useDatabase=true&fallbackOnly=true"
+        "/api/lhdn/documents/recent?useDatabase=true&fallbackOnly=true",
+        {
+          credentials: 'include'
+        }
       );
 
       if (!response.ok) {
@@ -2245,7 +2255,7 @@ class InvoiceTableManager {
       processing: false,
       serverSide: false,
       ajax: {
-        url: "/api/lhdn/documents/recent?useDatabase=true&fallbackOnly=true", // Strict database-only on initial load
+        url: "/api/lhdn/documents/recent", // Strict database-only on initial load
         method: "GET",
         data: function (d) {
           console.log("[Inbound] Making AJAX request to:", "/api/lhdn/documents/recent");
@@ -2411,7 +2421,9 @@ class InvoiceTableManager {
           $("#loadingDetail").text("Please wait while we retrieve your data");
 
           // Try to load data from database as fallback with improved error handling
-          fetch("/api/lhdn/documents/recent?useDatabase=true&fallbackOnly=true")
+          fetch("/api/lhdn/documents/recent?useDatabase=true&fallbackOnly=true", {
+            credentials: 'include'
+          })
             .then((response) => {
               if (!response.ok) {
                 throw new Error(
@@ -4384,6 +4396,7 @@ async function cancelInboundDocument(uuid) {
         const data = await manager.requestQueue.add(async () => {
           const response = await fetch(`/api/outbound-files/${uuid}/cancel`, {
             method: "POST",
+            credentials: 'include',
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ reason: value }),
           });
@@ -4655,8 +4668,20 @@ async function viewInvoiceDetails(uuid) {
     const result = await manager.requestQueue.add(async () => {
       console.log(`Fetching document details for UUID: ${uuid}`);
 
+      console.log("=== FETCH DEBUG ===");
+      console.log("URL:", `/api/lhdn/documents/${uuid}/display-details`);
+      console.log("Credentials:", 'include');
+      console.log("Document cookies:", document.cookie);
+      console.log("==================");
+      
       const response = await fetch(
-        `/api/lhdn/documents/${uuid}/display-details`
+        `/api/lhdn/documents/${uuid}/display-details`,
+        {
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        }
       );
 
       console.log(`Response status: ${response.status} ${response.statusText}`);
@@ -5497,6 +5522,7 @@ async function loadPDF(uuid, documentData) {
       try {
         const response = await fetch(`/api/lhdn/documents/${uuid}/pdf`, {
           method: "POST",
+          credentials: 'include',
           headers: {
             "Content-Type": "application/json",
           },
@@ -5990,7 +6016,9 @@ async function openValidationResultsModal(uuid) {
         const shouldRefresh = window.forceValidationRefresh || false;
         const refreshParam = shouldRefresh ? '?refresh=true' : '';
 
-        const response = await fetch(`/api/lhdn/documents/${uuid}/validation-results${refreshParam}`);
+        const response = await fetch(`/api/lhdn/documents/${uuid}/validation-results${refreshParam}`, {
+          credentials: 'include'
+        });
         const result = await response.json();
 
         if (!response.ok) {

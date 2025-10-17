@@ -199,6 +199,8 @@ app.use(
       maxAge: authConfig.session.timeout,
       rolling: true,
       httpOnly: true, // Ensure cookies are HTTP only
+      // Add domain if needed for subdomain access
+      // domain: '.tradewindscorp-insbrok.com'
     },
     resave: true,
     saveUninitialized: true,
