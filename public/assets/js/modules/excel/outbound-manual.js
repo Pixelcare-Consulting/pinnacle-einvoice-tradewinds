@@ -2548,7 +2548,7 @@ class FileUploadManager {
                         <tr>
                             <td>${doc.documentNumber || (index + 1)}</td>
                             <td>${doc.invoiceNo || 'N/A'}</td>
-                            <td>${supplierName}</td>
+                            <td>${supplierName  || 'Multiple Supplier'}</td>
                             <td>${buyerName}</td>
                             <td>${totalAmount}</td>
                             <td><span class="badge ${status === 'Preview' ? 'bg-info' : 'bg-success'}">${status}</span></td>
@@ -3668,7 +3668,7 @@ class InvoiceTableManager {
                     }
                 },
                 order: [
-                    [8, 'desc'], // Primary: statusPriority (Ready to Submit > Processed > others)
+                    [1, 'asc'], // Primary: statusPriority (Ready to Submit > Processed > others)
                     [6, 'desc'] // Secondary: upload date, newest first
                 ],
                 language: {

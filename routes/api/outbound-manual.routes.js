@@ -2163,7 +2163,7 @@ router.get('/list-fixed-paths', [auth.isApiAuthenticated], async (req, res) => {
             }
 
             // Format supplier names for display (support object or string)
-            let supplierDisplay = file.uploaded_by_name || 'N/A';
+            let supplierDisplay = 'Multiple Supplier';
             if (invoiceDetails.length > 0) {
                 const supplierNames = invoiceDetails
                     .map(inv => typeof inv.supplier === 'object' ? (inv.supplier?.company || inv.supplier?.name) : inv.supplier)
