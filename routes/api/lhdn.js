@@ -863,11 +863,19 @@ const fetchRecentDocumentsImpl = async (req) => {
   }
 };
 
+const {
+  getInboundSyncSessionKey: inboundSyncSessionKey,
+  isStaleInboundSyncRequest: isStaleSyncId,
+  coalesceInboundForceRefresh,
+} = require("../../src/lib/inbound-sync-request-helpers");
+
 /** Per-user active forceRefresh sync token — stale clients (e.g. after F5) are ignored. */
 const activeSyncRequestId = new Map();
+/** One in-flight LHDN forceRefresh per session; overlapping callers await the same promise. */
+const inboundForceRefreshInFlight = new Map();
 
 function getInboundSyncSessionKey(req) {
-  return String(req.session?.user?.id ?? req.sessionID ?? "anon");
+  return inboundSyncSessionKey(req.session);
 }
 
 function registerInboundSyncRequest(req) {
@@ -880,7 +888,35 @@ function isStaleInboundSyncRequest(req) {
   const syncRequestId = req.query.syncRequestId;
   if (!syncRequestId) return false;
   const current = activeSyncRequestId.get(getInboundSyncSessionKey(req));
-  return Boolean(current && current !== syncRequestId);
+  return isStaleSyncId(current, syncRequestId);
+}
+
+async function buildStaleForceRefreshPageData(req) {
+  if (!wantsInboundPagination(req)) {
+    return {
+      result: [],
+      staleSync: true,
+      supersededSync: true,
+      cached: false,
+      fromDatabase: true,
+      fromApi: true,
+      timestamp: new Date().toISOString(),
+    };
+  }
+  const page = await queryInboundListPage(req);
+  return {
+    result: page.rows,
+    paginated: true,
+    recordsTotal: page.recordsTotal,
+    recordsFiltered: page.recordsFiltered,
+    start: page.start,
+    length: page.length,
+    cached: false,
+    fromDatabase: true,
+    fromApi: true,
+    supersededSync: true,
+    timestamp: new Date().toISOString(),
+  };
 }
 
 async function queryInboundListPage(req) {
@@ -930,18 +966,18 @@ function buildInboundPaginatedJson(page, formattedDocuments, extraMetadata = {})
  * could apply API page batches out of order, flipping the same UUID Valid ↔ Invalid.
  */
 let inboundRecentSyncChain = Promise.resolve();
-/** Latest client syncRequestId; superseded forceRefresh callers skip waiting on stale results. */
-let inboundActiveSyncRequestId = null;
 
 const fetchRecentDocuments = async (req) => {
   const syncRequestId = req.query.syncRequestId || null;
   if (syncRequestId) {
-    inboundActiveSyncRequestId = syncRequestId;
+    registerInboundSyncRequest(req);
   }
   const ownerId = syncRequestId;
   const run = async () => {
     const result = await fetchRecentDocumentsImpl(req);
-    if (ownerId && inboundActiveSyncRequestId !== ownerId) {
+    const sessionKey = getInboundSyncSessionKey(req);
+    const activeId = activeSyncRequestId.get(sessionKey);
+    if (ownerId && isStaleSyncId(activeId, ownerId)) {
       return { ...result, staleSync: true };
     }
     return result;
@@ -950,11 +986,6 @@ const fetchRecentDocuments = async (req) => {
   inboundRecentSyncChain = p.catch(() => {});
   return p;
 };
-
-function isInboundSyncRequestStale(req) {
-  const id = req.query.syncRequestId;
-  return Boolean(id && inboundActiveSyncRequestId && id !== inboundActiveSyncRequestId);
-}
 
 // Function to get documents - no caching, direct fetch
 async function getCachedDocuments(req) {
@@ -969,11 +1000,16 @@ async function getCachedDocuments(req) {
     // (user never saw new invoices until a later request).
     if (forceRefresh) {
       registerInboundSyncRequest(req);
+      const sessionKey = getInboundSyncSessionKey(req);
       try {
         console.log(
           "[getCachedDocuments] forceRefresh=true — awaiting fetchRecentDocuments"
         );
-        await fetchRecentDocuments(req);
+        await coalesceInboundForceRefresh(
+          inboundForceRefreshInFlight,
+          sessionKey,
+          () => fetchRecentDocuments(req)
+        );
       } catch (frErr) {
         console.error(
           "[getCachedDocuments] forceRefresh fetchRecentDocuments failed:",
@@ -983,17 +1019,10 @@ async function getCachedDocuments(req) {
 
       if (isStaleInboundSyncRequest(req)) {
         console.log(
-          "[getCachedDocuments] Ignoring stale forceRefresh result",
+          "[getCachedDocuments] Superseded forceRefresh — returning DB page",
           req.query.syncRequestId
         );
-        return {
-          result: [],
-          staleSync: true,
-          cached: false,
-          fromDatabase: true,
-          fromApi: true,
-          timestamp: new Date().toISOString(),
-        };
+        return buildStaleForceRefreshPageData(req);
       }
 
       try {
@@ -2507,16 +2536,29 @@ router.get("/documents/recent", async (req, res) => {
         );
       }
 
-      if (fetchResult.staleSync) {
+      if (fetchResult.staleSync || fetchResult.supersededSync) {
+        if (wantsInboundPagination(req)) {
+          const page = await queryInboundListPage(req);
+          const lightweight = req.query.lightweight !== "false";
+          const formatted = formatInboundDocumentsForResponse(page.rows, {
+            lightweight,
+          });
+          return res.json(
+            buildInboundPaginatedJson(page, formatted, {
+              supersededSync: true,
+              staleSync: true,
+              fromDatabase: true,
+              fromApi: fetchResult.fromApi ?? true,
+              timestamp: new Date().toISOString(),
+            })
+          );
+        }
         return res.json({
           success: true,
-          result: [],
-          recordsTotal: 0,
-          recordsFiltered: 0,
+          result: fetchResult.result || [],
           metadata: {
+            supersededSync: true,
             staleSync: true,
-            recordsTotal: 0,
-            recordsFiltered: 0,
             timestamp: new Date().toISOString(),
           },
         });

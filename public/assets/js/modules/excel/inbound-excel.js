@@ -567,6 +567,9 @@ class InvoiceTableManager {
     this._liveLoadTimeout = null;
     this._inboundAjaxXhr = null;
     this.syncRequestId = this.newInboundSyncRequestId();
+    this._inboundForceRefreshDepth = 0;
+    this._lastInboundRows = null;
+    this._staleSyncFallbackPending = false;
 
     this.initializeTable();
     this.finishInboundConstructorSetup();
@@ -576,6 +579,51 @@ class InvoiceTableManager {
 
   newInboundSyncRequestId() {
     return `sync-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  }
+
+  beginInboundForceRefresh() {
+    if (this._inboundForceRefreshDepth === 0) {
+      this.syncRequestId = this.newInboundSyncRequestId();
+      window.forceRefreshLHDN = true;
+    }
+    this._inboundForceRefreshDepth += 1;
+  }
+
+  endInboundForceRefresh() {
+    if (this._inboundForceRefreshDepth > 0) {
+      this._inboundForceRefreshDepth -= 1;
+    }
+    if (this._inboundForceRefreshDepth === 0) {
+      window.forceRefreshLHDN = false;
+    }
+  }
+
+  isInboundAjaxAborted(xhr) {
+    return !xhr || xhr.status === 0;
+  }
+
+  scheduleInboundStaleFallbackReload() {
+    if (!this.table || this._staleSyncFallbackPending) return;
+    this._staleSyncFallbackPending = true;
+    window.forceRefreshLHDN = false;
+    setTimeout(() => {
+      this._staleSyncFallbackPending = false;
+      if (this.table) {
+        this.table.ajax.reload(null, false);
+      }
+    }, 0);
+  }
+
+  reloadInboundTableAfterForceRefresh(onDone) {
+    return new Promise((resolve, reject) => {
+      if (!this.table) {
+        Promise.resolve(onDone?.()).then(resolve).catch(reject);
+        return;
+      }
+      this.table.ajax.reload(() => {
+        Promise.resolve(onDone?.()).then(resolve).catch(reject);
+      }, false);
+    });
   }
 
   buildInboundAjaxParams(d) {
@@ -596,9 +644,6 @@ class InvoiceTableManager {
       params["order[0][dir]"] = d.order[0].dir;
     }
 
-    if (window.forceRefreshLHDN === true) {
-      this.syncRequestId = this.newInboundSyncRequestId();
-    }
     params.syncRequestId = this.syncRequestId;
 
     const startDate = $("#tableStartDate").val();
@@ -1544,7 +1589,7 @@ class InvoiceTableManager {
         if (this._inboundAjaxXhr?.abort) {
           this._inboundAjaxXhr.abort();
         }
-        window.forceRefreshLHDN = false;
+        this.endInboundForceRefresh();
         this.hideLoadingBackdrop();
         ToastManager.show(
           "LHDN sync is taking longer than expected. The table may still update when the server finishes.",
@@ -1559,27 +1604,37 @@ class InvoiceTableManager {
       // Queue the request to manage concurrency
       await this.requestQueue.add(async () => {
         if (this.table) {
-          window.forceRefreshLHDN = true;
-          await new Promise((resolve, reject) => {
-            this.table.ajax.reload(() => {
-              if (this._liveLoadTimeout) {
-                clearTimeout(this._liveLoadTimeout);
-                this._liveLoadTimeout = null;
-              }
-              window.forceRefreshLHDN = false;
-              this.hideLoadingBackdrop();
-              this.fetchInboundSummary().then(() => resolve());
-            }, false);
-            this.table.one("xhr.error", () => {
-              if (this._liveLoadTimeout) {
-                clearTimeout(this._liveLoadTimeout);
-                this._liveLoadTimeout = null;
-              }
-              window.forceRefreshLHDN = false;
-              this.hideLoadingBackdrop();
-              reject(new Error("Failed to load live LHDN data"));
+          this.beginInboundForceRefresh();
+          try {
+            await new Promise((resolve, reject) => {
+              const onXhrError = (_e, _settings, _json, xhr) => {
+                if (this.isInboundAjaxAborted(xhr)) {
+                  return;
+                }
+                if (this._liveLoadTimeout) {
+                  clearTimeout(this._liveLoadTimeout);
+                  this._liveLoadTimeout = null;
+                }
+                this.endInboundForceRefresh();
+                this.hideLoadingBackdrop();
+                reject(new Error("Failed to load live LHDN data"));
+              };
+              this.table.one("xhr.error", onXhrError);
+              this.table.ajax.reload(() => {
+                this.table.off("xhr.error", onXhrError);
+                if (this._liveLoadTimeout) {
+                  clearTimeout(this._liveLoadTimeout);
+                  this._liveLoadTimeout = null;
+                }
+                this.endInboundForceRefresh();
+                this.hideLoadingBackdrop();
+                this.fetchInboundSummary().then(() => resolve());
+              }, false);
             });
-          });
+          } catch (reloadErr) {
+            this.endInboundForceRefresh();
+            throw reloadErr;
+          }
         } else {
           await this.initializeTableWithData();
           if (this._liveLoadTimeout) {
@@ -1743,8 +1798,6 @@ class InvoiceTableManager {
         if (options.incremental && this.table) {
           await this.performIncrementalRefresh();
         } else {
-          // Force refresh live data with rate limiting
-          window.forceRefreshLHDN = true;
           await this.switchToLiveData();
         }
       }
@@ -1782,17 +1835,21 @@ class InvoiceTableManager {
       console.log("🔄 Performing incremental refresh (LHDN sync + paged reload)...");
       this.showIncrementalLoadingIndicator();
 
-      window.forceRefreshLHDN = true;
-      await new Promise((resolve) => {
-        this.table.ajax.reload(() => {
-          window.forceRefreshLHDN = false;
-          const json = this.table.ajax.json();
-          if (json?.metadata?.staleSync) {
-            console.log("[Inbound] Stale sync response ignored");
+      this.beginInboundForceRefresh();
+      try {
+        await this.reloadInboundTableAfterForceRefresh(async () => {
+          const json = this.table?.ajax?.json?.();
+          if (json?.metadata?.staleSync || json?.metadata?.supersededSync) {
+            console.log("[Inbound] Superseded sync — chaining fallback reload");
+            window.forceRefreshLHDN = false;
+            await new Promise((resolve) => {
+              this.table.ajax.reload(() => resolve(), false);
+            });
           }
-          resolve();
-        }, false);
-      });
+        });
+      } finally {
+        this.endInboundForceRefresh();
+      }
 
       await this.fetchInboundSummary();
 
@@ -1814,7 +1871,7 @@ class InvoiceTableManager {
       }
     } catch (error) {
       console.error("❌ Incremental refresh failed:", error);
-      window.forceRefreshLHDN = false;
+      this.endInboundForceRefresh();
       ToastManager.show(
         "Quick refresh failed. Please try again.",
         "error"
@@ -2452,16 +2509,40 @@ class InvoiceTableManager {
         },
         complete: () => {
           self._inboundAjaxXhr = null;
-          self.hideLoadingBackdrop();
+          if (self._liveLoadTimeout) {
+            self.hideLoadingBackdrop();
+          }
         },
         dataSrc: function (json) {
           if (!json || json.success === false) {
             return [];
           }
 
-          if (json.metadata?.staleSync) {
-            window.forceRefreshLHDN = false;
-            return [];
+          const isSuperseded =
+            json.metadata?.staleSync || json.metadata?.supersededSync;
+          if (isSuperseded) {
+            const staleRows =
+              (json.result && json.result.length > 0
+                ? json.result
+                : null) || self._lastInboundRows;
+            if (!staleRows?.length) {
+              self.scheduleInboundStaleFallbackReload();
+            }
+            if (staleRows?.length) {
+              self._lastInboundRows = staleRows;
+              const recordsTotal =
+                json.recordsTotal ??
+                json.metadata?.recordsTotal ??
+                staleRows.length;
+              const recordsFiltered =
+                json.recordsFiltered ??
+                json.metadata?.recordsFiltered ??
+                recordsTotal;
+              json.recordsTotal = recordsTotal;
+              json.recordsFiltered = recordsFiltered;
+              return staleRows;
+            }
+            return self._lastInboundRows || [];
           }
 
           const recordsTotal =
@@ -2481,8 +2562,11 @@ class InvoiceTableManager {
             self.updateDataSourceIndicator("api", totalLabel);
           }
 
-          const wasForceRefresh = window.forceRefreshLHDN === true;
-          window.forceRefreshLHDN = false;
+          const wasForceRefresh =
+            window.forceRefreshLHDN === true || self._inboundForceRefreshDepth > 0;
+          if (self._inboundForceRefreshDepth === 0) {
+            window.forceRefreshLHDN = false;
+          }
 
           if (wasForceRefresh) {
             try {
@@ -2494,9 +2578,13 @@ class InvoiceTableManager {
 
           self.fetchInboundSummary();
 
+          self._lastInboundRows = result;
           return result;
         },
         error: function (xhr, error, thrown) {
+          if (self.isInboundAjaxAborted(xhr)) {
+            return;
+          }
           self.hideLoadingBackdrop();
           console.error("[Inbound] Ajax error:", {
             status: xhr.status,
@@ -2549,7 +2637,9 @@ class InvoiceTableManager {
           }
 
           console.log(errorMessage);
-          window.forceRefreshLHDN = false;
+          if (self._inboundForceRefreshDepth === 0) {
+            window.forceRefreshLHDN = false;
+          }
         },
       },
       columns: [

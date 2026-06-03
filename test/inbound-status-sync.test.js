@@ -9,6 +9,11 @@ const {
   summarizeInboundStatusGroups,
   QUEUE_STATUSES,
 } = require('../src/lib/inbound-list-helpers');
+const {
+  getInboundSyncSessionKey,
+  isStaleInboundSyncRequest,
+  coalesceInboundForceRefresh,
+} = require('../src/lib/inbound-sync-request-helpers');
 
 function buildStatusCheckChanges(beforeRows, afterRows) {
   const beforeByUuid = new Map(beforeRows.map((doc) => [doc.uuid, doc]));
@@ -115,5 +120,36 @@ describe('Inbound list paging helpers', () => {
     expect(summary.invoices).toBe(15);
     expect(summary.valid).toBe(10);
     expect(summary.queue).toBe(5);
+  });
+});
+
+describe('Inbound sync request helpers', () => {
+  test('getInboundSyncSessionKey prefers user id', () => {
+    expect(
+      getInboundSyncSessionKey({ user: { id: 42 }, sessionID: 'sess-1' })
+    ).toBe('42');
+    expect(getInboundSyncSessionKey({ sessionID: 'sess-1' })).toBe('sess-1');
+  });
+
+  test('isStaleInboundSyncRequest when active id differs', () => {
+    expect(isStaleInboundSyncRequest('sync-b', 'sync-a')).toBe(true);
+    expect(isStaleInboundSyncRequest('sync-a', 'sync-a')).toBe(false);
+    expect(isStaleInboundSyncRequest(null, 'sync-a')).toBe(false);
+    expect(isStaleInboundSyncRequest('sync-a', null)).toBe(false);
+  });
+
+  test('coalesceInboundForceRefresh runs factory once per session', async () => {
+    const inFlight = new Map();
+    let runs = 0;
+    const factory = () => {
+      runs += 1;
+      return new Promise((resolve) => setTimeout(() => resolve('ok'), 20));
+    };
+    const p1 = coalesceInboundForceRefresh(inFlight, 'user-1', factory);
+    const p2 = coalesceInboundForceRefresh(inFlight, 'user-1', factory);
+    const p3 = coalesceInboundForceRefresh(inFlight, 'user-2', factory);
+    await Promise.all([p1, p2, p3]);
+    expect(runs).toBe(2);
+    expect(inFlight.size).toBe(0);
   });
 });
