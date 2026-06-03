@@ -562,24 +562,66 @@ class InvoiceTableManager {
     this.requestQueue = new RequestQueue();
     this.loadingStates = new Map(); // Track loading states for different operations
 
-    // Test endpoint connectivity before initializing table
-    this.testEndpointConnectivity();
+    const cachedRows = this.getValidInboundCache();
+    if (cachedRows) {
+      this.bootstrapFromLocalCache(cachedRows);
+    } else {
+      this.initializeTable();
+      this.finishInboundConstructorSetup();
+    }
 
-    this.initializeTable();
+    InvoiceTableManager.instance = this;
+  }
+
+  finishInboundConstructorSetup() {
     this.initializeDataSourceToggle();
-
-    // Start rate limit monitoring after initialization
     setTimeout(() => {
       this.startRateLimitMonitoring();
     }, 1000);
-
-    // Set up auto-refresh mechanism for new submissions
     this.setupAutoRefresh();
-
-    // Set up real-time status monitoring
     this.setupRealTimeStatusMonitoring();
+  }
 
-    InvoiceTableManager.instance = this;
+  getInboundCacheTtlMs(cachedRows) {
+    let cacheValidTime = 5 * 60 * 1000;
+    if (Array.isArray(cachedRows)) {
+      const hasNonTerminal = cachedRows.some((row) =>
+        ["Submitted", "Processing", "Pending"].includes(row?.status)
+      );
+      if (hasNonTerminal) {
+        cacheValidTime = 2 * 60 * 1000;
+      }
+    }
+    return cacheValidTime;
+  }
+
+  getValidInboundCache() {
+    const lastUpdate = localStorage.getItem("lastDataUpdate");
+    const cachedData = localStorage.getItem("inboundTableData");
+    if (!lastUpdate || !cachedData || window.forceRefreshLHDN) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(cachedData);
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        return null;
+      }
+      const ttl = this.getInboundCacheTtlMs(parsed);
+      if (Date.now() - parseInt(lastUpdate, 10) >= ttl) {
+        return null;
+      }
+      return parsed;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  bootstrapFromLocalCache(cachedRows) {
+    console.log(
+      `[Inbound] localStorage-first bootstrap (${cachedRows.length} rows)`
+    );
+    this.initializeTableWithLocalData(cachedRows, { skipDestroy: true });
+    this.finishInboundConstructorSetup();
   }
 
   // Create enhanced loading skeleton
@@ -792,12 +834,22 @@ class InvoiceTableManager {
     `;
   }
 
-  initializeTable() {
-    // Properly destroy existing DataTable instance
-    if ($.fn.DataTable.isDataTable("#invoiceTable")) {
+  initializeTable(options = {}) {
+    const skipDestroy = options.skipDestroy === true;
+    if (
+      !skipDestroy &&
+      $.fn.DataTable.isDataTable("#invoiceTable")
+    ) {
       console.log("Destroying existing DataTable instance");
       $("#invoiceTable").DataTable().destroy();
-      $("#invoiceTable").empty(); // Clear the table content
+      $("#invoiceTable").empty();
+    } else if (
+      skipDestroy &&
+      $.fn.DataTable.isDataTable("#invoiceTable") &&
+      this.table
+    ) {
+      this.table.ajax.reload(null, false);
+      return;
     }
 
     const self = this;
@@ -1834,19 +1886,25 @@ class InvoiceTableManager {
   }
 
   // Initialize table with local data
-  initializeTableWithLocalData(localData) {
-    // Similar to initializeTableWithData but uses provided data instead of AJAX
+  initializeTableWithLocalData(localData, options = {}) {
     const self = this;
 
-    // Remove loading indicator
+    if (
+      !options.skipDestroy &&
+      $.fn.DataTable.isDataTable("#invoiceTable")
+    ) {
+      $("#invoiceTable").DataTable().destroy();
+      $("#invoiceTable").empty();
+    }
+
     $("#invoiceTable").closest(".card").removeClass("loading");
     $("#invoiceTable").closest(".card").find(".loading-overlay").remove();
 
     this.table = $("#invoiceTable").DataTable({
-      // Same configuration as in initializeTableWithData but without AJAX
       processing: false,
       serverSide: false,
-      data: localData, // Use local data instead of AJAX
+      stateSave: true,
+      data: localData,
       columns: [
         // Same columns configuration as in initializeTableWithData
         {
@@ -2293,8 +2351,9 @@ class InvoiceTableManager {
     this.table = $("#invoiceTable").DataTable({
       processing: false,
       serverSide: false,
+      stateSave: true,
       ajax: {
-        url: "/api/lhdn/documents/recent", // Strict database-only on initial load
+        url: "/api/lhdn/documents/recent",
         method: "GET",
         data: function (d) {
           console.log("[Inbound] Making AJAX request to:", "/api/lhdn/documents/recent");
@@ -2327,13 +2386,14 @@ class InvoiceTableManager {
             }
           }
 
-          // useDatabase + fallbackOnly=false so the server runs getCachedDocuments (token + LHDN background sync).
-          // fallbackOnly=true skipped LHDN entirely and only read WP_INBOUND_STATUS — no recent sync on load.
-          d.forceRefresh = window.forceRefreshLHDN || false;
+          const isManualRefresh = window.forceRefreshLHDN === true;
+          d.forceRefresh = isManualRefresh;
           d.useDatabase = true;
-          d.fallbackOnly = false;
+          d.fallbackOnly = !isManualRefresh;
+          d.skipBackgroundSync = !isManualRefresh;
+          d.lightweight = !isManualRefresh;
 
-          console.log("[Inbound] Request parameters (Database-first mode):", d);
+          console.log("[Inbound] Request parameters:", d);
           return d;
         },
         dataSrc: function (json) {

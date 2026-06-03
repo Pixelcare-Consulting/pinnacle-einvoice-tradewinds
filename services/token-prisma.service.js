@@ -64,6 +64,25 @@ async function getConfig() {
 }
 
 /**
+ * Token issuer URL must match documents API host (see getLhdnConfig in routes/api/lhdn.js).
+ * WP_CONFIGURATION: productionUrl and middlewareUrl should be the same MyInvois environment
+ * (e.g. https://api.myinvois.hasil.gov.my); a mismatch causes valid tokens but 401 on /documents/recent.
+ */
+function getLhdnTokenBaseUrl(settings) {
+  if (!settings || typeof settings !== 'object') {
+    throw new Error('Invalid LHDN configuration structure');
+  }
+  const baseUrl =
+    settings.environment === 'production'
+      ? settings.productionUrl || settings.middlewareUrl
+      : settings.sandboxUrl || settings.middlewareUrl;
+  if (!baseUrl) {
+    throw new Error('LHDN API URL not configured (productionUrl/sandboxUrl/middlewareUrl)');
+  }
+  return baseUrl;
+}
+
+/**
  * Get token as taxpayer from LHDN
  */
 async function getTokenAsTaxPayer() {
@@ -80,13 +99,7 @@ async function getTokenAsTaxPayer() {
       throw new Error(`Failed to get LHDN configuration: ${configError.message}`);
     }
 
-    // Validate and construct base URL
-    const baseUrl = settings.environment === 'production' ?
-      settings.middlewareUrl : settings.middlewareUrl;
-
-    if (!baseUrl) {
-      throw new Error(`Missing ${settings.environment === 'production' ? 'middlewareUrl' : 'middlewareUrl'} in configuration`);
-    }
+    const baseUrl = getLhdnTokenBaseUrl(settings);
 
     // Check if client credentials are configured
     if (!settings.clientId || !settings.clientSecret) {
@@ -209,21 +222,61 @@ function readTokenFromFile() {
 }
 
 /**
- * Get token session - uses caching and file storage
+ * Clear in-memory LHDN token cache (call after 401/403 before re-fetching token).
  */
-async function getTokenSession() {
+function invalidateTokenCache() {
+  globalTokenCache = { token: null, expiryTime: 0, safeExpiryTime: 0 };
+}
+
+/**
+ * Get token session - uses caching and file storage
+ * @param {{ forceRefresh?: boolean }} [options] - forceRefresh skips cache/file and requests a new token
+ */
+async function getTokenSession(options = {}) {
   try {
+    const forceRefresh = options.forceRefresh === true;
     const now = Date.now();
     const bufferTime = 5 * 60 * 1000; // 5 minutes buffer
 
+    if (forceRefresh) {
+      invalidateTokenCache();
+      console.log('[Backend] Forcing new LHDN token (cache cleared)...');
+      const tokenData = await getTokenAsTaxPayer();
+      if (!tokenData || !tokenData.access_token) {
+        throw new Error('Failed to obtain access token on forced refresh');
+      }
+      const newToken = tokenData.access_token;
+      const newExpiryTime = now + (tokenData.expires_in * 1000);
+      globalTokenCache.token = newToken;
+      globalTokenCache.expiryTime = newExpiryTime;
+      globalTokenCache.safeExpiryTime = newExpiryTime - bufferTime;
+      try {
+        await prisma.lHDN_TOKENS.create({
+          data: {
+            access_token: newToken,
+            expiry_time: new Date(newExpiryTime),
+          },
+        });
+      } catch (dbError) {
+        console.error('[Backend] Error saving forced-refresh token to database:', dbError);
+      }
+      console.log('[Backend] Forced token refresh complete (expires in',
+        Math.round(tokenData.expires_in), 'seconds)');
+      return newToken;
+    }
+
     // 1. Check in-memory cache first
     if (globalTokenCache.token && globalTokenCache.safeExpiryTime > now) {
-      console.log('[Backend] Using existing token from in-memory cache (expires in',
-        Math.round((globalTokenCache.expiryTime - now) / 1000), 'seconds)');
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('[Backend] Using existing token from in-memory cache (expires in',
+          Math.round((globalTokenCache.expiryTime - now) / 1000), 'seconds)');
+      }
       return globalTokenCache.token;
     }
 
-    console.log('[Backend] In-memory cache expired or empty. Checking file...');
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[Backend] In-memory cache expired or empty. Checking file...');
+    }
 
     // 2. Check file for the latest valid token
     const fileToken = readTokenFromFile();
@@ -282,6 +335,44 @@ async function getTokenSession() {
     globalTokenCache = { token: null, expiryTime: 0, safeExpiryTime: 0 };
     throw error; // Re-throwing to indicate failure
   }
+}
+
+/**
+ * Resolve LHDN access token: prefer login session, then cache/file, then refresh.
+ * @param {import('express').Request} [req]
+ * @param {{ forceRefresh?: boolean }} [options]
+ */
+async function resolveLhdnAccessToken(req, options = {}) {
+  const forceRefresh = options.forceRefresh === true;
+
+  if (!forceRefresh && req?.session?.accessToken) {
+    return req.session.accessToken;
+  }
+
+  return getTokenSession({ forceRefresh });
+}
+
+/**
+ * Update session token only when the value changes; set tokenExpiryTime when missing or token changed.
+ * @param {number} [expiresInSeconds=3600]
+ * @returns {boolean} true if accessToken was updated
+ */
+function syncSessionLhdnToken(req, token, expiresInSeconds = 3600) {
+  if (!req?.session || !token) {
+    return false;
+  }
+  const changed = req.session.accessToken !== token;
+  if (changed) {
+    req.session.accessToken = token;
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[Backend] Updated session with new LHDN access token');
+    }
+  }
+  if (!req.session.tokenExpiryTime || changed) {
+    req.session.tokenExpiryTime =
+      Date.now() + Math.max(60, expiresInSeconds) * 1000;
+  }
+  return changed;
 }
 
 /**
@@ -353,7 +444,11 @@ async function validateCredentials(options) {
 module.exports = {
   getTokenAsTaxPayer,
   getTokenSession,
+  resolveLhdnAccessToken,
+  syncSessionLhdnToken,
+  invalidateTokenCache,
   readTokenFromFile,
   saveTokenToFile,
-  validateCredentials
+  validateCredentials,
+  getLhdnTokenBaseUrl,
 };

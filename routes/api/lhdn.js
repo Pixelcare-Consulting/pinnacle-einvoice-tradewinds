@@ -419,6 +419,7 @@ const fetchRecentDocumentsImpl = async (req) => {
 
     // Attempt to fetch from API
     try {
+      req._lhdnAuthRefreshCount = 0;
       // console.log("Fetching fresh data from LHDN API...");
       const documents = [];
       let pageNo = 1;
@@ -452,20 +453,20 @@ const fetchRecentDocumentsImpl = async (req) => {
               }
             }
 
-            // Get token from session (which should now have the token from file)
-            let token = req.session?.accessToken;
+            const {
+              getTokenSession,
+            } = require("../../services/token-prisma.service");
 
-            // If no token in session, try to get directly from file
+            let token = req.session?.accessToken;
             if (!token) {
-              // console.log(
-              //   "No token in session, trying to get from file directly"
-              // );
-              token = await readTokenFromFile();
+              token = await getTokenSession();
+              if (req.session) {
+                req.session.accessToken = token;
+              }
             }
 
-            // If still no token, throw error
             if (!token) {
-              console.error("No valid access token found in session or file");
+              console.error("No valid LHDN access token available");
               throw new Error("No valid access token found");
             }
 
@@ -642,53 +643,29 @@ const fetchRecentDocumentsImpl = async (req) => {
             retryCount++;
             console.error(`Error fetching page ${pageNo}:`, error.message);
 
-            // Handle authentication errors
+            // Handle authentication errors — invalidate stale cache, force one new token
             if (
               error.response?.status === 401 ||
               error.response?.status === 403
             ) {
               console.error("Authentication error detected:", error.message);
 
-              // Try to refresh token first
+              if ((req._lhdnAuthRefreshCount || 0) >= 1) {
+                throw new Error(
+                  "LHDN authentication failed after token refresh. Verify client ID, secret, and API URL in LHDN settings."
+                );
+              }
+
               try {
-                // console.log("Attempting to refresh token...");
-
-                // Try to get token from file using our enhanced function
-                const fileToken = await readTokenFromFile();
-
-                if (fileToken) {
-                  // If file token is different from session token, try using it
-                  if (fileToken !== req.session.accessToken) {
-                    // console.log("Found different token in file, trying it...");
-                    req.session.accessToken = fileToken;
-                    retryCount--; // Don't count this as a retry
-                    continue;
-                  }
-                }
-
-                // If file token didn't work, try to get a fresh token
-                try {
-                  // console.log("Attempting to get a fresh token...");
-                  const {
-                    getTokenSession,
-                  } = require("../../services/token-prisma.service");
-                  const freshToken = await getTokenSession();
-
-                  if (freshToken) {
-                    // console.log("Successfully obtained fresh token");
-                    req.session.accessToken = freshToken;
-                    retryCount--; // Don't count this as a retry
-                    continue;
-                  }
-                } catch (tokenError) {
-                  console.error("Error getting fresh token:", tokenError);
-                }
-
-                // If we couldn't refresh the token, throw authentication error
-                throw new Error("Authentication failed. Please log in again.");
+                await refreshLhdnTokenAfter401(req);
+                req._lhdnAuthRefreshCount = (req._lhdnAuthRefreshCount || 0) + 1;
+                retryCount++;
+                continue;
               } catch (refreshError) {
                 console.error("Token refresh failed:", refreshError.message);
-                throw new Error("Authentication failed. Please log in again.");
+                throw new Error(
+                  "Authentication failed. Check LHDN configuration and try again."
+                );
               }
             }
 
@@ -966,13 +943,19 @@ async function getCachedDocuments(req) {
             timestamp: new Date().toISOString(),
           };
 
-          // Try to fetch from API in the background to update the database
-          try {
-            fetchRecentDocuments(req).catch((apiError) => {
-              console.warn("Background API fetch failed:", apiError.message);
-            });
-          } catch (backgroundError) {
-            console.warn("Error starting background fetch:", backgroundError);
+          const skipBackground = await shouldSkipInboundBackgroundSync(req);
+          if (!skipBackground) {
+            try {
+              fetchRecentDocuments(req).catch((apiError) => {
+                console.warn("Background API fetch failed:", apiError.message);
+              });
+            } catch (backgroundError) {
+              console.warn("Error starting background fetch:", backgroundError);
+            }
+          } else {
+            console.log(
+              "[getCachedDocuments] Skipping background LHDN sync (gated)"
+            );
           }
 
           return data;
@@ -1014,47 +997,12 @@ async function getCachedDocuments(req) {
         details: { error: error.message },
       });
 
-      // Try to refresh token
       try {
-        // Get token from file using our enhanced function
-        const fileToken = await readTokenFromFile();
-
-        if (fileToken) {
-          // Update session with token from file
-          if (req.session) {
-            req.session.accessToken = fileToken;
-
-            // Try fetching again with new token
-            try {
-              data = await fetchRecentDocuments(req);
-            } catch (retryError) {
-              console.error("Retry with refreshed token failed:", retryError);
-            }
-          }
-        } else {
-          // If no token in file, try to get a fresh one
-          try {
-            const {
-              getTokenSession,
-            } = require("../../services/token-prisma.service");
-            const freshToken = await getTokenSession();
-
-            if (freshToken && req.session) {
-              req.session.accessToken = freshToken;
-
-              // Try fetching again with fresh token
-              try {
-                data = await fetchRecentDocuments(req);
-              } catch (retryError) {
-                console.error("Retry with fresh token failed:", retryError);
-              }
-            }
-          } catch (tokenError) {
-            console.error("Error getting fresh token:", tokenError);
-          }
-        }
+        req._lhdnAuthRefreshCount = 0;
+        await refreshLhdnTokenAfter401(req);
+        data = await fetchRecentDocuments(req);
       } catch (tokenError) {
-        console.error("Error refreshing token from file:", tokenError);
+        console.error("Error refreshing LHDN token after auth failure:", tokenError);
       }
     }
 
@@ -1158,6 +1106,59 @@ const formatInboundDateField = (date) => {
 const MAX_INBOUND_DETAILS_ENRICH = 35;
 const INBOUND_NON_TERMINAL_SYNC_MS = 5 * 60 * 1000;
 const INBOUND_DEFAULT_SYNC_MS = 15 * 60 * 1000;
+const INBOUND_LHDN_401_COOLDOWN_MS = 10 * 60 * 1000;
+let inboundLhdn401CooldownUntil = 0;
+
+function markInboundLhdn401Cooldown() {
+  inboundLhdn401CooldownUntil = Date.now() + INBOUND_LHDN_401_COOLDOWN_MS;
+}
+
+/** Gate background fetchRecentDocuments (sync threshold, 401 cooldown, client flags). */
+async function shouldSkipInboundBackgroundSync(req) {
+  if (req.query.fallbackOnly === "true") {
+    return true;
+  }
+  if (req.query.skipBackgroundSync === "true") {
+    return true;
+  }
+  if (Date.now() < inboundLhdn401CooldownUntil) {
+    return true;
+  }
+  if (req.query.forceRefresh === "true") {
+    return false;
+  }
+
+  try {
+    const lastSyncedDocument = await prisma.wP_INBOUND_STATUS.findFirst({
+      orderBy: { last_sync_date: "desc" },
+      select: { last_sync_date: true },
+    });
+    if (!lastSyncedDocument?.last_sync_date) {
+      return false;
+    }
+
+    const dbStatuses = await prisma.wP_INBOUND_STATUS.findMany({
+      select: { status: true },
+      take: 5000,
+    });
+    const hasNonTerminalRows = dbStatuses.some((d) =>
+      isNonTerminalInboundStatus(d.status)
+    );
+    const syncThreshold = hasNonTerminalRows
+      ? INBOUND_NON_TERMINAL_SYNC_MS
+      : INBOUND_DEFAULT_SYNC_MS;
+    const timeSinceLastSync =
+      Date.now() - new Date(lastSyncedDocument.last_sync_date).getTime();
+    return timeSinceLastSync < syncThreshold;
+  } catch (gateErr) {
+    console.warn(
+      "[getCachedDocuments] Background sync gate check failed:",
+      gateErr.message
+    );
+    return false;
+  }
+}
+
 const {
   getSubmissionUidFromDoc,
   extractUniqueSubmissionUids,
@@ -1933,6 +1934,148 @@ router.post("/documents/refresh", async (req, res) => {
   }
 });
 
+/**
+ * Invalidate cached LHDN token and obtain a new one (after 401/403).
+ */
+async function refreshLhdnTokenAfter401(req) {
+  const {
+    getTokenSession,
+    invalidateTokenCache,
+    syncSessionLhdnToken,
+  } = require("../../services/token-prisma.service");
+
+  markInboundLhdn401Cooldown();
+  invalidateTokenCache();
+  if (req.session) {
+    delete req.session.accessToken;
+  }
+
+  const freshToken = await getTokenSession({ forceRefresh: true });
+  if (!freshToken) {
+    throw new Error("Could not obtain LHDN access token");
+  }
+
+  if (req.session) {
+    syncSessionLhdnToken(req, freshToken);
+  }
+
+  console.log("[LHDN] Obtained new access token after authentication failure");
+  return freshToken;
+}
+
+function formatDateForDisplay(dateString) {
+  if (!dateString) return null;
+  try {
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return dateString;
+    return date.toISOString();
+  } catch (_err) {
+    return dateString;
+  }
+}
+
+function formatDateForUI(dateString) {
+  if (!dateString) return null;
+  try {
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return null;
+    return date.toLocaleString("en-US", {
+      month: "short",
+      day: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+  } catch (_err) {
+    return null;
+  }
+}
+
+/**
+ * Map DB/API rows for inbound UI. Skips per-row UI formatting when lightweight.
+ */
+function formatInboundDocumentsForResponse(documents, options = {}) {
+  if (!documents?.length) {
+    return [];
+  }
+  if (options.lightweight) {
+    return documents;
+  }
+
+  return documents.map((doc) => {
+    const receivedDate = doc.dateTimeReceived || doc.created_at;
+    const validatedDate = doc.dateTimeValidated;
+    let processingTimeMinutes = null;
+    if (receivedDate && validatedDate) {
+      try {
+        const received = new Date(receivedDate);
+        const validated = new Date(validatedDate);
+        if (!isNaN(received.getTime()) && !isNaN(validated.getTime())) {
+          processingTimeMinutes = (validated - received) / (1000 * 60);
+        }
+      } catch (_e) {
+        processingTimeMinutes = null;
+      }
+    }
+    const statusNorm = (doc.status || "").toLowerCase();
+    const isValidDoc = statusNorm === "valid";
+    const isInvalidDoc = statusNorm === "invalid";
+
+    return {
+      uuid: doc.uuid,
+      irbmUniqueIdentifierNo: isValidDoc ? doc.uuid : null,
+      submissionUid: doc.submissionUid,
+      longId: doc.longId,
+      internalId: doc.internalId,
+      dateTimeIssued: formatDateForDisplay(doc.dateTimeIssued),
+      dateTimeReceived: formatDateForDisplay(receivedDate),
+      dateTimeValidated: formatDateForDisplay(validatedDate),
+      submissionDate: formatDateForDisplay(receivedDate),
+      validationDate: formatDateForDisplay(validatedDate),
+      receivedDateFormatted: formatDateForUI(receivedDate),
+      validatedDateFormatted: formatDateForUI(validatedDate),
+      dateInfo: {
+        date: formatDateForUI(validatedDate || receivedDate),
+        type:
+          isValidDoc && validatedDate
+            ? "Validated"
+            : isInvalidDoc && validatedDate
+              ? "Invalid"
+              : validatedDate
+                ? "Processed"
+                : "Submitted",
+        tooltip:
+          isValidDoc && validatedDate
+            ? "LHDN Validation Date"
+            : isInvalidDoc && validatedDate
+              ? "LHDN response timestamp (document not valid)"
+              : validatedDate
+                ? "LHDN timestamp"
+                : "LHDN Submission Date",
+      },
+      status: doc.status,
+      totalSales: doc.totalSales || 0,
+      totalExcludingTax: doc.totalExcludingTax || 0,
+      totalDiscount: doc.totalDiscount || 0,
+      totalNetAmount: doc.totalNetAmount || 0,
+      totalPayableAmount: doc.totalPayableAmount || 0,
+      issuerTin: doc.issuerTin,
+      issuerName: doc.issuerName,
+      receiverId: doc.receiverId,
+      receiverName: doc.receiverName,
+      supplierName: doc.issuerName,
+      typeName: doc.typeName,
+      typeVersionName: doc.typeVersionName,
+      documentStatusReason: doc.documentStatusReason,
+      documentCurrency:
+        doc.documentCurrency || doc.currency || doc.currencyCode || "MYR",
+      processingTimeMinutes,
+      ...extractInboundSstFromRow(doc),
+    };
+  });
+}
+
 // Helper function to read token from file
 async function readTokenFromFile() {
   try {
@@ -2051,32 +2194,20 @@ router.get("/documents/recent", async (req, res) => {
       }
     }
 
-    // First try to get token from file (preferred method)
-    let accessToken = await readTokenFromFile();
+    const {
+      resolveLhdnAccessToken,
+      syncSessionLhdnToken,
+    } = require("../../services/token-prisma.service");
 
-    // If no token in file, try session as fallback
-    if (!accessToken && req.session.accessToken) {
-      console.log("No token in file, using token from session");
-      accessToken = req.session.accessToken;
+    let accessToken;
+    try {
+      accessToken = await resolveLhdnAccessToken(req);
+      syncSessionLhdnToken(req, accessToken);
+    } catch (tokenError) {
+      console.error("Error resolving LHDN access token:", tokenError);
+      accessToken = null;
     }
 
-    // If still no token, try to get a fresh one
-    if (!accessToken) {
-      try {
-        console.log("No token found, attempting to get a fresh token");
-        const {
-          getTokenSession,
-        } = require("../../services/token-prisma.service");
-        accessToken = await getTokenSession();
-        if (accessToken) {
-          console.log("Successfully obtained fresh token");
-        }
-      } catch (tokenError) {
-        console.error("Error getting fresh token:", tokenError);
-      }
-    }
-
-    // Final check if we have a token
     if (!accessToken) {
       console.log("No access token found after all attempts");
 
@@ -2113,10 +2244,6 @@ router.get("/documents/recent", async (req, res) => {
 
       return handleAuthError(req, res);
     }
-
-    // Always update session with the token we're using
-    req.session.accessToken = accessToken;
-    console.log("Updated session with token");
 
     try {
       // If useCache is true, return a signal to use cached data
@@ -2163,120 +2290,18 @@ router.get("/documents/recent", async (req, res) => {
       const documents = fetchResult.result || [];
       console.log("Got documents from fetchResult, count:", documents.length);
 
-      // Helper function to format dates for display
-      const formatDateForDisplay = (dateString) => {
-        if (!dateString) return null;
-        try {
-          const date = new Date(dateString);
-          if (isNaN(date.getTime())) return dateString; // Return original if invalid
-          return date.toISOString();
-        } catch (err) {
-          console.log("Error formatting date:", dateString, err);
-          return dateString;
-        }
-      };
+      const forceRefresh = req.query.forceRefresh === "true";
+      const lightweight =
+        req.query.lightweight === "true" ||
+        (fetchResult.fromDatabase && !forceRefresh);
 
-      // Helper function to format dates for UI display
-      const formatDateForUI = (dateString) => {
-        if (!dateString) return null;
-        try {
-          const date = new Date(dateString);
-          if (isNaN(date.getTime())) return null;
-
-          // Format as "Apr 07, 2025, 01:14 PM"
-          return date.toLocaleString("en-US", {
-            month: "short",
-            day: "2-digit",
-            year: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-            hour12: true,
-          });
-        } catch (err) {
-          console.log("Error formatting date for UI:", dateString, err);
-          return null;
-        }
-      };
-
-      const formattedDocuments = documents.map((doc) => {
-        // Get submission and validation dates
-        const receivedDate = doc.dateTimeReceived || doc.created_at;
-        const validatedDate = doc.dateTimeValidated;
-        // Calculate processing time in minutes (float)
-        let processingTimeMinutes = null;
-        if (receivedDate && validatedDate) {
-          try {
-            const received = new Date(receivedDate);
-            const validated = new Date(validatedDate);
-            if (!isNaN(received.getTime()) && !isNaN(validated.getTime())) {
-              processingTimeMinutes = (validated - received) / (1000 * 60);
-            }
-          } catch (e) {
-            processingTimeMinutes = null;
-          }
-        }
-        const statusNorm = (doc.status || "").toLowerCase();
-        const isValidDoc = statusNorm === "valid";
-        const isInvalidDoc = statusNorm === "invalid";
-
-        return {
-          // Always present: LHDN technical document id (DB PK, detail API path). Not the same as
-          // showing the IRBM Unique Identifier No. in the UI when status !== Valid.
-          uuid: doc.uuid,
-          // Official IRBM Unique Identifier No. for display (MyInvois): only when LHDN accepted the doc.
-          irbmUniqueIdentifierNo: isValidDoc ? doc.uuid : null,
-          submissionUid: doc.submissionUid,
-          longId: doc.longId,
-          internalId: doc.internalId,
-          dateTimeIssued: formatDateForDisplay(doc.dateTimeIssued),
-          dateTimeReceived: formatDateForDisplay(receivedDate),
-          dateTimeValidated: formatDateForDisplay(validatedDate),
-          submissionDate: formatDateForDisplay(receivedDate),
-          validationDate: formatDateForDisplay(validatedDate),
-          // UI display formatted dates
-          receivedDateFormatted: formatDateForUI(receivedDate),
-          validatedDateFormatted: formatDateForUI(validatedDate),
-          dateInfo: {
-            date: formatDateForUI(validatedDate || receivedDate),
-            type:
-              isValidDoc && validatedDate
-                ? "Validated"
-                : isInvalidDoc && validatedDate
-                  ? "Invalid"
-                  : validatedDate
-                    ? "Processed"
-                    : "Submitted",
-            tooltip: isValidDoc && validatedDate
-              ? "LHDN Validation Date"
-              : isInvalidDoc && validatedDate
-                ? "LHDN response timestamp (document not valid)"
-                : validatedDate
-                  ? "LHDN timestamp"
-                  : "LHDN Submission Date",
-          },
-          status: doc.status,
-          totalSales: doc.totalSales || 0,
-          totalExcludingTax: doc.totalExcludingTax || 0,
-          totalDiscount: doc.totalDiscount || 0,
-          totalNetAmount: doc.totalNetAmount || 0,
-          totalPayableAmount: doc.totalPayableAmount || 0,
-          issuerTin: doc.issuerTin,
-          issuerName: doc.issuerName,
-          receiverId: doc.receiverId,
-          receiverName: doc.receiverName,
-          supplierName: doc.issuerName, // Use the potentially updated issuerName
-          typeName: doc.typeName,
-          typeVersionName: doc.typeVersionName,
-          documentStatusReason: doc.documentStatusReason,
-          documentCurrency:
-            doc.documentCurrency || doc.currency || doc.currencyCode || "MYR",
-          processingTimeMinutes,
-          ...extractInboundSstFromRow(doc),
-        };
-      });
+      const formattedDocuments = formatInboundDocumentsForResponse(
+        documents,
+        { lightweight }
+      );
 
       console.log(
-        "Sending response with formatted documents:",
+        `Sending response with ${lightweight ? "lightweight" : "formatted"} documents:`,
         formattedDocuments.length
       );
 

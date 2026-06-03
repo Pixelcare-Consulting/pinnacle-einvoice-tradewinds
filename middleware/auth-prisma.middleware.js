@@ -1,8 +1,6 @@
 const prisma = require('../src/lib/prisma');
 const { LoggingService, LOG_TYPES, MODULES, ACTIONS, STATUS } = require('../services/logging-prisma.service');
 const authConfig = require('../config/auth.config');
-const { getTokenSession } = require('../services/token-prisma.service');
-
 // Active sessions and login attempts tracking
 const activeSessions = new Map();
 const loginAttempts = new Map();
@@ -406,13 +404,16 @@ async function isApiAuthenticated(req, res, next) {
 
     // Get LHDN access token and attach to headers
     try {
-      // Always get token from AuthorizeToken.ini file
-      const { getTokenSession } = require("../services/token-prisma.service");
-      const token = await getTokenSession();
+      const { resolveLhdnAccessToken } = require("../services/token-prisma.service");
+      const token = await resolveLhdnAccessToken(req);
 
       if (token) {
         req.headers["Authorization"] = `Bearer ${token}`;
-        console.log("Attached LHDN token to request headers from session.");
+        if (req.session?.accessToken) {
+          console.log("Attached LHDN token from session.");
+        } else {
+          console.log("Attached LHDN token from LHDN token cache.");
+        }
       } else {
         // Fallback to reading directly from file if getTokenSession fails
         try {
