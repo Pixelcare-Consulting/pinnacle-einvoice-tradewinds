@@ -1,4 +1,3 @@
-const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
@@ -47,18 +46,22 @@ function loadOutboundManualContext() {
     return context;
 }
 
-const context = loadOutboundManualContext();
+describe('Outbound manual invoice date formatting', () => {
+    const context = loadOutboundManualContext();
 
-assert.strictEqual(
-    context.formatManualInvoiceDateForDisplay('11/05/2026'),
-    '11/05/2026',
-    'DD/MM/YYYY invoice dates should not be reinterpreted as MM/DD/YYYY'
-);
+    test('DD/MM/YYYY is not reinterpreted as MM/DD/YYYY', () => {
+        expect(context.formatManualInvoiceDateForDisplay('11/05/2026')).toBe('11/05/2026');
+    });
 
-assert.strictEqual(
-    context.formatManualInvoiceDateForDisplay('2026-05-11T00:00:00.000Z'),
-    '11/05/2026',
-    'ISO invoice dates should still render in Malaysian date format'
-);
+    test('ISO datetime renders in Malaysian format', () => {
+        expect(context.formatManualInvoiceDateForDisplay('2026-05-11T00:00:00.000Z')).toBe('11/05/2026');
+    });
 
-console.log('Outbound manual invoice date formatting test passed');
+    test('ISO date-only metadata renders as DD/MM/YYYY', () => {
+        expect(context.formatManualInvoiceDateForDisplay('2026-05-11')).toBe('11/05/2026');
+    });
+
+    test('filename-derived date stays DD/MM/YYYY', () => {
+        expect(context.formatManualInvoiceDateForDisplay('05/11/2026')).toBe('05/11/2026');
+    });
+});

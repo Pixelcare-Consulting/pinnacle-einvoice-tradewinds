@@ -9,6 +9,118 @@ const XLSX = require('xlsx');
 const prisma = require('../../src/lib/prisma');
 const { auth }  = require('../../middleware/index-prisma');
 const { validateExcelFilename } = require('../../services/helpers/filenameValidator');
+
+function toInvDateIso(value) {
+    if (value == null || value === '') return null;
+    if (value instanceof Date && !isNaN(value.getTime())) {
+        return value.toISOString().slice(0, 10);
+    }
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) return trimmed.slice(0, 10);
+        const d = new Date(trimmed);
+        if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    }
+    return null;
+}
+
+function extractInvDateIsoFromProcessedData(processedData, filenameValidation) {
+    const first = processedData?.[0];
+    const issue =
+        first?.header?.issueDate?.[0]?._ ?? first?.header?.issueDate;
+    const fromExcel = toInvDateIso(issue);
+    if (fromExcel) return fromExcel;
+    if (filenameValidation?.parsedData?.dateObject) {
+        return toInvDateIso(filenameValidation.parsedData.dateObject);
+    }
+    return null;
+}
+
+/** Compact invoice rows for table display (persisted in metadata). */
+function buildListInvoiceDetailsFromProcessedData(processedData) {
+    return (processedData || []).map((doc) => ({
+        invoiceNumber: doc.header?.invoiceNo || doc.header?.invoiceNumber,
+        supplier: doc.supplier?.name || doc.supplier,
+        buyer: doc.buyer?.name || doc.buyer,
+        totalAmount: Number(doc.summary?.amounts?.payableAmount) || 0,
+        invoiceDate:
+            doc.header?.issueDate?.[0]?._ ?? doc.header?.issueDate ?? null,
+    }));
+}
+
+function loadInvoiceDetailsForList(file, metadata) {
+    if (Array.isArray(metadata?.listInvoiceDetails) && metadata.listInvoiceDetails.length > 0) {
+        return metadata.listInvoiceDetails;
+    }
+
+    try {
+        const logs =
+            typeof file.processing_logs === 'string'
+                ? JSON.parse(file.processing_logs)
+                : file.processing_logs;
+        const simplifiedPath = logs?.simplified;
+        if (simplifiedPath && fs.existsSync(simplifiedPath)) {
+            const logData = JSON.parse(fs.readFileSync(simplifiedPath, 'utf8'));
+            if (logData?.summary?.invoices?.length) {
+                return logData.summary.invoices;
+            }
+        }
+    } catch (e) {
+        console.warn('Failed to read processing_logs simplified path:', file.filename, e.message);
+    }
+
+    try {
+        const logDir = path.join(__dirname, '..', '..', 'logs', 'excel-consumer');
+        if (!fs.existsSync(logDir)) return [];
+
+        const baseFilename = file.filename.replace(/\.xlsx$/i, '');
+        const logFiles = fs.readdirSync(logDir).filter(
+            (f) => f.startsWith(baseFilename) && f.includes('_simplified_')
+        );
+
+        if (logFiles.length > 0) {
+            const latestLogFile = logFiles.sort().pop();
+            const logPath = path.join(logDir, latestLogFile);
+            const logData = JSON.parse(fs.readFileSync(logPath, 'utf8'));
+            if (logData?.summary?.invoices?.length) {
+                return logData.summary.invoices;
+            }
+        }
+    } catch (e) {
+        console.warn('Failed to read simplified log for file:', file.filename, e.message);
+    }
+
+    return [];
+}
+
+function resolveInvDateInfoForList(metadata, filenameValidation, invoiceDetails = []) {
+    if (metadata?.invDateInfoIso) return metadata.invDateInfoIso;
+
+    const fromExcel = [];
+    for (const inv of invoiceDetails || []) {
+        const iso = toInvDateIso(
+            inv.invoiceDate || inv.InvoiceDate || inv.issueDate
+        );
+        if (iso) fromExcel.push(iso);
+    }
+    const uniqueExcel = [...new Set(fromExcel)];
+    if (uniqueExcel.length === 1) return uniqueExcel[0];
+    if (uniqueExcel.length > 1) {
+        return `${uniqueExcel.length} Dates\n${uniqueExcel.join('\n')}`;
+    }
+
+    if (filenameValidation?.parsedData?.dateObject) {
+        const iso = toInvDateIso(filenameValidation.parsedData.dateObject);
+        if (iso) return iso;
+    }
+    return filenameValidation?.parsedData?.formattedDate || 'N/A';
+}
+
+const verboseOutboundManual =
+    process.env.VERBOSE_LOGGING === 'true' || process.env.DEBUG_MODE === 'true';
+function uploadDebugLog(...args) {
+    if (verboseOutboundManual) console.log(...args);
+}
 const { consumeExcelFile, previewExcelFile } = require('../../services/excel/excelConsumer');
 const LHDNSubmitter = require('../../services/lhdn/lhdnSubmitter');
 const { mapToLHDNFormat } = require('../../services/lhdn/lhdnMapper');
@@ -1326,13 +1438,13 @@ router.post('/upload-excel-template', [auth.isApiAuthenticated, excelUpload.sing
         });
 
         // Process Excel file using existing consumer
-        console.log(`🔍 [UPLOAD DEBUG] Starting Excel processing for file: ${filename}`);
-        console.log(`🔍 [UPLOAD DEBUG] File path: ${filePath}`);
-        console.log(`🔍 [UPLOAD DEBUG] File size: ${fileSize} bytes`);
+        uploadDebugLog(`🔍 [UPLOAD DEBUG] Starting Excel processing for file: ${filename}`);
+        uploadDebugLog(`🔍 [UPLOAD DEBUG] File path: ${filePath}`);
+        uploadDebugLog(`🔍 [UPLOAD DEBUG] File size: ${fileSize} bytes`);
 
         const processingResult = await consumeExcelFile(filePath);
 
-        console.log(`🔍 [UPLOAD DEBUG] Processing result:`, {
+        uploadDebugLog(`🔍 [UPLOAD DEBUG] Processing result:`, {
             success: processingResult.success,
             hasProcessingResults: !!processingResult.processingResults,
             processingResultsLength: processingResult.processingResults?.length || 0,
@@ -1342,7 +1454,7 @@ router.post('/upload-excel-template', [auth.isApiAuthenticated, excelUpload.sing
         });
 
         if (!processingResult.success) {
-            console.log(`🔍 [UPLOAD DEBUG] Processing failed:`, processingResult.error);
+            uploadDebugLog(`🔍 [UPLOAD DEBUG] Processing failed:`, processingResult.error);
             // Update database with error status
             await prisma.wP_UPLOADED_EXCEL_FILES.update({
                 where: { id: uploadedFile.id },
@@ -1364,7 +1476,7 @@ router.post('/upload-excel-template', [auth.isApiAuthenticated, excelUpload.sing
         const processedData = processingResult.processingResults || [];
 
         console.log(`Successfully processed ${processedData.length} invoices from Excel file`);
-        console.log(`🔍 [UPLOAD DEBUG] Processed data sample:`, {
+        uploadDebugLog(`🔍 [UPLOAD DEBUG] Processed data sample:`, {
             count: processedData.length,
             firstItem: processedData[0] || null,
             hasItems: processedData.length > 0,
@@ -1464,6 +1576,16 @@ router.post('/upload-excel-template', [auth.isApiAuthenticated, excelUpload.sing
             }
         });
 
+        const invDateInfoIso = extractInvDateIsoFromProcessedData(
+            processedData,
+            filenameValidation
+        );
+        const listInvoiceDetails = buildListInvoiceDetailsFromProcessedData(processedData);
+        const metadataTotalAmount = listInvoiceDetails.reduce(
+            (sum, inv) => sum + (inv.totalAmount || 0),
+            0
+        );
+
         // Update database with processing results and duplicate check data
         await prisma.wP_UPLOADED_EXCEL_FILES.update({
             where: { id: uploadedFile.id },
@@ -1475,6 +1597,9 @@ router.post('/upload-excel-template', [auth.isApiAuthenticated, excelUpload.sing
                 metadata: JSON.stringify({
                     originalPath: filePath,
                     filenameValidation: filenameValidation,
+                    invDateInfoIso: invDateInfoIso,
+                    listInvoiceDetails,
+                    totalAmount: metadataTotalAmount,
                     contentHash: contentHash,
                     invoiceHashes: invoiceHashes,
                     duplicateCheck: {
@@ -1489,7 +1614,7 @@ router.post('/upload-excel-template', [auth.isApiAuthenticated, excelUpload.sing
 
         // Store processed data in memory with session ID for immediate use
         const sessionId = uuidv4();
-        console.log(`🔍 [UPLOAD DEBUG] Storing data in memory with sessionId: ${sessionId}`);
+        uploadDebugLog(`🔍 [UPLOAD DEBUG] Storing data in memory with sessionId: ${sessionId}`);
 
         excelDataStorage.set(sessionId, {
             data: processedData,
@@ -1499,7 +1624,7 @@ router.post('/upload-excel-template', [auth.isApiAuthenticated, excelUpload.sing
             fileId: uploadedFile.id
         });
 
-        console.log(`🔍 [UPLOAD DEBUG] Final response data:`, {
+        uploadDebugLog(`🔍 [UPLOAD DEBUG] Final response data:`, {
             success: true,
             processedDataCount: processedData.length,
             filename: filename,
@@ -2119,36 +2244,7 @@ router.get('/list-fixed-paths', [auth.isApiAuthenticated], async (req, res) => {
                 metadata = {};
             }
 
-            // Try to read the simplified log file for detailed invoice data
-            let invoiceDetails = [];
-            try {
-                const fs = require('fs');
-                const path = require('path');
-
-                // Look for simplified log file
-                const logDir = path.join(__dirname, '..', '..', 'logs', 'excel-consumer');
-                const baseFilename = file.filename.replace('.xlsx', '');
-
-                // Find the most recent simplified log file for this Excel file
-                const logFiles = fs.readdirSync(logDir).filter(f =>
-                    f.startsWith(baseFilename) && f.includes('_simplified_')
-                );
-
-                if (logFiles.length > 0) {
-                    // Get the most recent log file
-                    const latestLogFile = logFiles.sort().pop();
-                    const logPath = path.join(logDir, latestLogFile);
-
-                    if (fs.existsSync(logPath)) {
-                        const logData = JSON.parse(fs.readFileSync(logPath, 'utf8'));
-                        if (logData.summary && logData.summary.invoices) {
-                            invoiceDetails = logData.summary.invoices;
-                        }
-                    }
-                }
-            } catch (e) {
-                console.warn('Failed to read simplified log for file:', file.filename, e.message);
-            }
+            let invoiceDetails = loadInvoiceDetailsForList(file, metadata);
 
             // Extract invoice information from metadata or log data
             const totalAmount = invoiceDetails.reduce((sum, inv) => sum + (inv.totalAmount || 0), 0) || metadata.totalAmount || 0;
@@ -2206,7 +2302,11 @@ router.get('/list-fixed-paths', [auth.isApiAuthenticated], async (req, res) => {
                 supplier: supplierDisplay,
                 receiver: receiverDisplay,
                 date: file.upload_date,
-                invDateInfo: filenameValidation.parsedData?.formattedDate || 'N/A',
+                invDateInfo: resolveInvDateInfoForList(
+                    metadata,
+                    filenameValidation,
+                    invoiceDetails
+                ),
                 status: file.processing_status,
                 source: 'Excel Upload',
                 totalAmount: totalAmount,
@@ -3643,6 +3743,13 @@ router.post(
       }
 
       const processedData = processingResult.processingResults;
+      const listInvoiceDetails = buildListInvoiceDetailsFromProcessedData(processedData);
+      let existingMeta = {};
+      try {
+        existingMeta = JSON.parse(file.metadata || '{}');
+      } catch (_) {
+        existingMeta = {};
+      }
 
       // Update database with new processing results
       await prisma.wP_UPLOADED_EXCEL_FILES.update({
@@ -3653,6 +3760,14 @@ router.post(
           processed_date: new Date(),
           processing_logs: JSON.stringify(processingResult.logs),
           error_message: null,
+          metadata: JSON.stringify({
+            ...existingMeta,
+            listInvoiceDetails,
+            totalAmount: listInvoiceDetails.reduce(
+              (sum, inv) => sum + (inv.totalAmount || 0),
+              0
+            ),
+          }),
         },
       });
 

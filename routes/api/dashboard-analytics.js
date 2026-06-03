@@ -23,6 +23,26 @@ router.get('/test', async (req, res) => {
     }
 });
 
+/** SQL Server TEXT columns cannot be compared to nvarchar literals in Prisma filters. */
+const uploadedExcelNoErrorSql = `
+  processing_status IN ('processed', 'submitted')
+  AND (error_message IS NULL OR LEN(CAST(error_message AS NVARCHAR(MAX))) = 0)
+`;
+
+async function countUploadedExcelWithoutErrors() {
+    const rows = await prisma.$queryRawUnsafe(
+        `SELECT COUNT(*) AS cnt FROM WP_UPLOADED_EXCEL_FILES WHERE ${uploadedExcelNoErrorSql}`
+    );
+    return Number(rows[0]?.cnt ?? 0);
+}
+
+async function sumUploadedExcelInvoicesWithoutErrors() {
+    const rows = await prisma.$queryRawUnsafe(
+        `SELECT COALESCE(SUM(invoice_count), 0) AS total FROM WP_UPLOADED_EXCEL_FILES WHERE ${uploadedExcelNoErrorSql}`
+    );
+    return Number(rows[0]?.total ?? 0);
+}
+
 async function getLHDNConfig() {
     const config = await prisma.wP_CONFIGURATION.findFirst({
         where: {
@@ -692,56 +712,17 @@ router.get('/success-rate', async (req, res) => {
         // Get total uploaded Excel files
         const totalFiles = await prisma.wP_UPLOADED_EXCEL_FILES.count();
 
-        // Get successful files (processed or submitted with no errors)
-        const successfulFiles = await prisma.wP_UPLOADED_EXCEL_FILES.count({
-            where: {
-                AND: [
-                    {
-                        processing_status: {
-                            in: ['processed', 'submitted']
-                        }
-                    },
-                    {
-                        OR: [
-                            { error_message: null },
-                            { error_message: '' }
-                        ]
-                    }
-                ]
-            }
-        });
+        const successfulFiles = await countUploadedExcelWithoutErrors();
 
-        // Get total invoices across all files
         const totalInvoicesResult = await prisma.wP_UPLOADED_EXCEL_FILES.aggregate({
             _sum: {
                 invoice_count: true
             }
         });
 
-        // Get total invoices from successful files only
-        const successfulInvoicesResult = await prisma.wP_UPLOADED_EXCEL_FILES.aggregate({
-            _sum: {
-                invoice_count: true
-            },
-            where: {
-                AND: [
-                    {
-                        processing_status: {
-                            in: ['processed', 'submitted']
-                        }
-                    },
-                    {
-                        OR: [
-                            { error_message: null },
-                            { error_message: '' }
-                        ]
-                    }
-                ]
-            }
-        });
+        const successfulInvoices = await sumUploadedExcelInvoicesWithoutErrors();
 
         const totalInvoices = totalInvoicesResult._sum.invoice_count || 0;
-        const successfulInvoices = successfulInvoicesResult._sum.invoice_count || 0;
 
         // Calculate success rates
         const fileSuccessRate = totalFiles > 0 ? Math.round((successfulFiles / totalFiles) * 100) : 0;

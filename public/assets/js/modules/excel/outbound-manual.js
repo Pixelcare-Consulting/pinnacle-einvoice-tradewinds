@@ -112,6 +112,20 @@ function formatManualInvoiceDateForDisplay(data) {
     });
 }
 
+function notifyInboundModule(submissionData) {
+    try {
+        localStorage.setItem('newSubmissionNotification', JSON.stringify({
+            timestamp: Date.now(),
+            data: submissionData
+        }));
+        window.dispatchEvent(new CustomEvent('outboundSubmissionComplete', {
+            detail: submissionData
+        }));
+    } catch (error) {
+        console.error('Error notifying inbound module:', error);
+    }
+}
+
 class ValidationError extends Error {
     constructor(message, validationErrors = [], fileName = null) {
         super(message);
@@ -3563,17 +3577,25 @@ class InvoiceTableManager {
                     {
                         data: 'date',
                         orderable: true,
-                        title: 'DATE',
+                        title: 'Uploaded',
                         width: '10%',
                         className: 'text-center',
                         render: (data) => this.renderUploadedDate(data)
                     },
                     {
                         data: 'invDateInfo',
-                        title: 'INV. DATE INFO',
+                        title: 'Invoice date',
                         width: '10%',
                         className: 'text-center',
                         render: (data, type, row) => this.renderInvDateInfo(data, type, row)
+                    },
+                    {
+                        data: 'submittedDate',
+                        title: 'Submitted',
+                        width: '10%',
+                        className: 'text-center',
+                        orderable: true,
+                        render: (data) => this.renderUploadedDate(data)
                     },
                     {
                         data: 'statusPriority',
@@ -3649,6 +3671,7 @@ class InvoiceTableManager {
                                 submittedDate: file.submittedDate,
                                 submissionUid: file.submissionUid,
                                 metadata: file.metadata,
+                                invoiceDetails: file.invoiceDetails || [],
                                 lhdnResponse: file.lhdnResponse || file.lhdn_response
                             };
 
@@ -3665,26 +3688,67 @@ class InvoiceTableManager {
                             let supplierData = [];
                             let receiverData = [];
 
-                            if (file.invoiceDetails && Array.isArray(file.invoiceDetails)) {
+                            if (file.invoiceDetails && Array.isArray(file.invoiceDetails) && file.invoiceDetails.length > 0) {
                                 supplierData = window.outboundManualExcel.extractSupplierData(file.invoiceDetails);
                                 receiverData = window.outboundManualExcel.extractReceiverData(file.invoiceDetails);
 
-                                // Build receiver display string from invoiceDetails buyers (Receiver = Buyer)
+                                const partyLabel = (party) => {
+                                    if (!party) return null;
+                                    if (typeof party === 'string' && party.trim()) return party.trim();
+                                    return (
+                                        party.company ||
+                                        party.name ||
+                                        party.registrationName ||
+                                        null
+                                    );
+                                };
+
                                 try {
-                                    const namesSet = new Set();
-                                    file.invoiceDetails.forEach(doc => {
-                                        const name = doc?.buyer?.company || doc?.buyer?.name || doc?.buyer?.registrationName;
-                                        if (typeof name === 'string' && name.trim()) namesSet.add(name.trim());
-                                    });
-                                    const names = Array.from(namesSet);
-                                    if (names.length === 1) {
-                                        rowData.receiver = names[0];
-                                    } else if (names.length > 1) {
-                                        rowData.receiver = `${names.length} Receiver(s)\n${names.join('\n')}`;
+                                    const invoiceNumbers = file.invoiceDetails
+                                        .map((doc) => doc.invoiceNumber || doc.invoiceNo)
+                                        .filter(Boolean);
+                                    if (invoiceNumbers.length === 1) {
+                                        rowData.invoiceNumber = invoiceNumbers[0];
+                                    } else if (invoiceNumbers.length > 1) {
+                                        rowData.invoiceNumber = `${invoiceNumbers.length} Invoice(s)\n${invoiceNumbers.join('\n')}`;
+                                    }
+
+                                    const supplierNames = [
+                                        ...new Set(
+                                            file.invoiceDetails
+                                                .map((doc) => partyLabel(doc.supplier))
+                                                .filter(Boolean)
+                                        ),
+                                    ];
+                                    if (supplierNames.length === 1) {
+                                        rowData.supplier = supplierNames[0];
+                                    } else if (supplierNames.length > 1) {
+                                        rowData.supplier = `${supplierNames.length} Supplier(s)\n${supplierNames.join('\n')}`;
+                                    }
+
+                                    const receiverNames = [
+                                        ...new Set(
+                                            file.invoiceDetails
+                                                .map((doc) => partyLabel(doc.buyer))
+                                                .filter(Boolean)
+                                        ),
+                                    ];
+                                    if (receiverNames.length === 1) {
+                                        rowData.receiver = receiverNames[0];
+                                    } else if (receiverNames.length > 1) {
+                                        rowData.receiver = `${receiverNames.length} Receiver(s)\n${receiverNames.join('\n')}`;
                                     } else if (!rowData.receiver) {
                                         rowData.receiver = 'N/A';
                                     }
-                                } catch (e) { console.warn('Failed to compute receiver display', e); }
+
+                                    const total = file.invoiceDetails.reduce(
+                                        (sum, doc) => sum + (Number(doc.totalAmount) || 0),
+                                        0
+                                    );
+                                    if (total) rowData.totalAmount = total;
+                                } catch (e) {
+                                    console.warn('Failed to compute display from invoiceDetails', e);
+                                }
                             }
 
                             // Store the detailed data for modal access
@@ -3798,8 +3862,37 @@ class InvoiceTableManager {
                 }
             });
 
+            this.initializeQuickFilters();
+
         } catch (error) {
             console.error('Error initializing DataTable:', error);
+        }
+    }
+
+    initializeQuickFilters() {
+        document.querySelectorAll('.quick-filters .btn[data-filter]').forEach((button) => {
+            button.addEventListener('click', (e) => {
+                document.querySelectorAll('.quick-filters .btn').forEach((btn) =>
+                    btn.classList.remove('active')
+                );
+                e.currentTarget.classList.add('active');
+                const filterValue = e.currentTarget.dataset.filter;
+                this.applyQuickFilter(filterValue);
+            });
+        });
+    }
+
+    applyQuickFilter(filterValue) {
+        if (!this.table) return;
+
+        const globalSearch = document.getElementById('globalSearch');
+        if (globalSearch) globalSearch.value = '';
+
+        const statusColumnIndex = 10;
+        if (filterValue === 'all') {
+            this.table.column(statusColumnIndex).search('').draw();
+        } else {
+            this.table.column(statusColumnIndex).search(filterValue, false, false).draw();
         }
     }
 
@@ -4157,23 +4250,23 @@ class InvoiceTableManager {
     renderActions(row) {
         const actions = [];
 
-        // View Details action - show LHDN validation details
         actions.push(`
-            <button class="outbound-action-btn view" onclick="window.outboundManualExcel.showLHDNDetailsModal('${row.id}')" title="View Details">
-                <i class="fas fa-eye"></i>
+            <button type="button" class="outbound-row-action-btn outbound-row-action-btn--view"
+                onclick="window.outboundManualExcel.showLHDNDetailsModal('${row.id}')" title="View Details">
+                <i class="bi bi-eye"></i>
             </button>
         `);
 
-        // Delete action (only for non-submitted files)
         if (!['submitted', 'cancelled'].includes(row.status?.toLowerCase())) {
             actions.push(`
-                <button class="outbound-action-btn cancel" onclick="uploadedFilesManager.deleteFile('${row.id}')" title="Delete File">
-                    <i class="fas fa-trash"></i>
+                <button type="button" class="outbound-row-action-btn outbound-row-action-btn--delete"
+                    onclick="uploadedFilesManager.deleteFile('${row.id}')" title="Delete File">
+                    <i class="bi bi-trash"></i>
                 </button>
             `);
         }
 
-        return `<div class="d-flex gap-1">${actions.join('')}</div>`;
+        return `<div class="outbound-row-actions">${actions.join('')}</div>`;
     }
 
     renderFileName(data, type, row) {
@@ -5087,43 +5180,32 @@ class InvoiceTableManager {
                 modalTitle = 'LHDN Submission Results';
 
                 if (failedDocuments === 0) {
-                    statusInfo = `<div class="alert alert-success">
-                        <i class="bi bi-check-circle-fill me-2"></i>
-                        <strong>Success:</strong> All ${validDocuments} documents were successfully submitted to LHDN.
+                    statusInfo = `<div class="alert alert-success om-submission-alert">
+                        <i class="bi bi-check-circle-fill om-alert-icon"></i>
+                        <div class="om-alert-text"><strong>Success:</strong> All ${validDocuments} documents were successfully submitted to LHDN.</div>
                     </div>`;
                 } else if (validDocuments === 0) {
-                    statusInfo = `<div class="alert alert-danger">
-                        <i class="bi bi-exclamation-triangle-fill me-2"></i>
-                        <strong>Failed:</strong> All ${failedDocuments} documents failed validation.
-                    </div>`;
+                    statusInfo = buildFailedSubmissionStatusAlert(fileData, lhdnData);
                 } else {
-                    statusInfo = `<div class="alert alert-warning">
-                        <i class="bi bi-exclamation-circle me-2"></i>
-                        <strong>Partial Success:</strong> ${validDocuments} of ${totalDocuments} documents were submitted. ${failedDocuments} failed validation.
+                    statusInfo = `<div class="alert alert-warning om-submission-alert">
+                        <i class="bi bi-exclamation-circle om-alert-icon"></i>
+                        <div class="om-alert-text"><strong>Partial success:</strong> ${validDocuments} of ${totalDocuments} invoices were submitted. ${failedDocuments} need correction below.</div>
                     </div>`;
                 }
 
-                modalContent = this.generateValidationErrorsContent(lhdnData);
+                modalContent = this.generateValidationErrorsContent(lhdnData, fileData);
             } else if (lhdnData.status === 'success' || lhdnData.success === true) {
                 // Single document success
                 modalTitle = 'LHDN Submission Results';
-                statusInfo = `<div class="alert alert-success">
-                    <i class="bi bi-check-circle-fill me-2"></i>
-                    <strong>Success:</strong> Document was successfully submitted to LHDN.
+                statusInfo = `<div class="alert alert-success om-submission-alert">
+                    <i class="bi bi-check-circle-fill om-alert-icon"></i>
+                    <div class="om-alert-text"><strong>Success:</strong> Document was successfully submitted to LHDN.</div>
                 </div>`;
                 modalContent = this.generateSingleDocumentContent(lhdnData);
             } else if (isFailed && (lhdnData.error || lhdnData.details)) {
-                // Submission failure with error details
-                modalTitle = 'LHDN Submission Error';
-                const totalDocs = lhdnData.totalDocuments ? ` (${lhdnData.totalDocuments} documents)` : '';
-                const errorMsg = typeof lhdnData.error === 'string'
-                    ? lhdnData.error
-                    : (lhdnData.error?.message || 'Submission failed');
-                statusInfo = `<div class="alert alert-danger">
-                    <i class="bi bi-exclamation-triangle-fill me-2"></i>
-                    <strong>Failed:</strong> ${errorMsg}${totalDocs}
-                </div>`;
-                modalContent = this.generateSubmissionErrorContent(lhdnData);
+                modalTitle = 'Submission Not Completed';
+                statusInfo = buildFailedSubmissionStatusAlert(fileData, lhdnData);
+                modalContent = this.generateSubmissionErrorContent(lhdnData, fileData);
             } else if (isFailed) {
                 // Generic failure
                 modalTitle = 'LHDN Submission Error';
@@ -5162,7 +5244,7 @@ class InvoiceTableManager {
                             </div>
                             <div>
                                 <h4 class="mb-1 fw-semibold">${modalTitle}</h4>
-                                <p class="mb-0 small text-muted">${fileData.fileName || 'Unknown File'}</p>
+                                <p class="mb-0 small opacity-75">${fileData.fileName || 'Unknown File'}</p>
                             </div>
                         </div>
                         <button class="btn-close-custom" onclick="this.closest('.lhdn-details-modal').remove()">
@@ -5174,8 +5256,8 @@ class InvoiceTableManager {
                         ${modalContent}
                     </div>
                     <div class="lhdn-details-footer">
-                        <button class="btn btn-secondary" onclick="this.closest('.lhdn-details-modal').remove()">
-                            <i class="bi bi-x-circle me-2"></i>Close
+                        <button type="button" class="om-btn-close" onclick="this.closest('.lhdn-details-modal').remove()">
+                            <i class="bi bi-x-lg"></i>Close
                         </button>
                     </div>
                 </div>
@@ -5198,63 +5280,91 @@ class InvoiceTableManager {
     }
 
     // Generate content for submission results with accepted/rejected documents
-    generateValidationErrorsContent(lhdnData) {
+    generateValidationErrorsContent(lhdnData, fileData = null) {
         let content = '';
+        const invoiceLookup = buildInvoiceNumberLookup(fileData);
         const accepted = lhdnData.data?.acceptedDocuments || [];
         const rejected = lhdnData.data?.rejectedDocuments || [];
         const summary = lhdnData.summary;
 
         // Summary bar
         if (summary) {
-            content += `<div class="d-flex gap-3 mb-3 flex-wrap">
-                <div class="p-2 px-3 rounded" style="background: #f0fdf4; border: 1px solid #bbf7d0;">
+            content += `<div class="om-status-chips">
+                <div class="om-status-chip om-status-chip--success">
                     <strong style="color: #166534;">${summary.validDocuments}</strong>
                     <small class="text-muted ms-1">Accepted</small>
                 </div>
-                <div class="p-2 px-3 rounded" style="background: #fef2f2; border: 1px solid #fecaca;">
+                <div class="om-status-chip om-status-chip--danger">
                     <strong style="color: #991b1b;">${summary.failedDocuments}</strong>
                     <small class="text-muted ms-1">Rejected</small>
                 </div>
-                <div class="p-2 px-3 rounded" style="background: #f8fafc; border: 1px solid #e2e8f0;">
+                <div class="om-status-chip">
                     <strong>${summary.totalDocuments}</strong>
                     <small class="text-muted ms-1">Total</small>
                 </div>
             </div>`;
         }
 
-        // Rejected documents section
+        // Rejected documents section — expand nested LHDN errors per invoice
         if (rejected.length > 0) {
-            content += `<h6 class="mb-2 mt-3" style="color: #991b1b;"><i class="bi bi-x-circle me-2"></i>Rejected Documents (${rejected.length})</h6>`;
-            rejected.forEach((doc, index) => {
-                const invoiceNo = doc.invoiceCodeNumber || doc.codeNumber || `#${index + 1}`;
-                const errDetails = doc.error?.details || [];
-                const errMsg = doc.error?.message || 'Validation Error';
+            const rejectedIssues = collectAllSubmissionIssues(
+                { data: { rejectedDocuments: rejected } },
+                invoiceLookup
+            );
+            const issueCount = rejectedIssues.length || rejected.length;
+            content += `<h6 class="mb-2 mt-3 om-section-title om-section-title--danger"><i class="bi bi-x-circle me-2"></i>What to fix (${issueCount} issue${issueCount > 1 ? 's' : ''} across ${rejected.length} invoice${rejected.length > 1 ? 's' : ''})</h6>`;
 
-                content += `
-                    <div class="mb-3 p-3 border rounded" style="border-left: 4px solid #dc3545 !important; background: #fff5f5;">
-                        <div class="d-flex align-items-center mb-2">
-                            <span class="badge bg-danger me-2">${index + 1}</span>
-                            <strong>${invoiceNo}</strong>
-                            <span class="badge bg-light text-danger ms-auto">${errMsg}</span>
-                        </div>`;
-
-                errDetails.forEach(detail => {
+            if (rejectedIssues.length > 0) {
+                rejectedIssues.forEach((detail, index) => {
+                    const friendly = toEndUserFriendlyDetail(detail, invoiceLookup);
+                    const invoiceNo = friendly.invoiceNumber
+                        ? `Invoice No. ${escapeHtml(friendly.invoiceNumber)}`
+                        : (detail.invoiceRef ? `Invoice No. ${escapeHtml(detail.invoiceRef)}` : '');
+                    const lineHint = friendly.lineItemNum
+                        ? `<div class="om-error-where"><i class="bi bi-list-ol me-1"></i>Line item ${friendly.lineItemNum}</div>`
+                        : '';
                     content += `
-                        <div class="ms-4 mb-1">
-                            <div><small><i class="bi bi-arrow-right me-1"></i>${detail.message || 'Validation failed'}</small></div>
-                            ${detail.code ? `<small class="text-muted">Code: <code>${detail.code}</code></small>` : ''}
-                            ${detail.propertyPath ? `<small class="text-muted ms-2">Path: <code>${detail.propertyPath}</code></small>` : ''}
-                        </div>`;
+                    <div class="om-doc-panel om-doc-panel--danger">
+                        <div class="d-flex align-items-start gap-2 mb-2">
+                            <span class="om-issue-badge">${index + 1}</span>
+                            <div class="flex-grow-1">
+                                ${invoiceNo ? `<div class="om-error-title">${invoiceNo}</div>` : ''}
+                                ${lineHint}
+                            </div>
+                        </div>
+                        ${friendly.primaryField ? `<span class="om-error-field-name">${escapeHtml(friendly.primaryField)}</span>` : ''}
+                        <p class="om-error-message mb-2">${escapeHtml(friendly.message)}</p>
+                        <ul class="om-error-steps mb-0">
+                            ${friendly.guidance.map((g) => `<li>${escapeHtml(g)}</li>`).join('')}
+                        </ul>
+                    </div>`;
                 });
-
-                content += '</div>';
-            });
+            } else {
+                rejected.forEach((doc, index) => {
+                    const invoiceNo = doc.invoiceCodeNumber || doc.codeNumber || `Invoice ${index + 1}`;
+                    const friendly = toEndUserFriendlyDetail({
+                        userMessage: doc.error?.userFriendlyMessage,
+                        message: doc.error?.message,
+                        originalMessage: doc.error?.message,
+                        guidance: doc.error?.guidance,
+                        invoiceRef: doc.invoiceCodeNumber || doc.codeNumber,
+                    }, invoiceLookup);
+                    content += `
+                    <div class="om-doc-panel om-doc-panel--danger">
+                        <div class="d-flex align-items-start gap-2 mb-2">
+                            <span class="om-issue-badge">${index + 1}</span>
+                            <div class="flex-grow-1"><div class="om-error-title">${escapeHtml(invoiceNo)}</div></div>
+                        </div>
+                        <p class="om-error-message mb-2">${escapeHtml(friendly.message)}</p>
+                    </div>`;
+                });
+            }
         }
 
         // Accepted documents section (collapsible)
         if (accepted.length > 0) {
-            content += `<h6 class="mb-2 mt-3" style="color: #166534;"><i class="bi bi-check-circle me-2"></i>Accepted Documents (${accepted.length})</h6>`;
-            content += `<div class="p-3 border rounded" style="border-left: 4px solid #22c55e !important; background: #f0fdf4; max-height: 200px; overflow-y: auto;">`;
+            content += `<h6 class="mb-2 mt-3 om-section-title" style="color: #166534;"><i class="bi bi-check-circle me-2"></i>Successfully submitted (${accepted.length})</h6>`;
+            content += `<div class="om-doc-panel om-doc-panel--success" style="max-height: 200px; overflow-y: auto;">`;
             accepted.forEach((doc, index) => {
                 content += `<div class="d-flex align-items-center mb-1">
                     <i class="bi bi-check-circle-fill text-success me-2" style="font-size: 0.8rem;"></i>
@@ -5340,58 +5450,69 @@ class InvoiceTableManager {
     }
 
     // Generate content for submission errors (handles both old and new formats)
-    generateSubmissionErrorContent(lhdnData) {
+    generateSubmissionErrorContent(lhdnData, fileData = null) {
         let content = '<div class="submission-error-section">';
+        const invoiceLookup = buildInvoiceNumberLookup(fileData);
 
-        // Get error details from various possible locations
         const errorObj = typeof lhdnData.error === 'object' ? lhdnData.error : null;
         const errorStr = typeof lhdnData.error === 'string' ? lhdnData.error : null;
         const details = errorObj?.details || lhdnData.details || [];
 
         if (errorStr && !details.length) {
-            content += `<div class="alert alert-danger">
-                <strong>Error:</strong> ${errorStr}
-            </div>`;
+            const friendly = translateTechnicalLhdnMessage(errorStr, invoiceLookup);
+            content += `<p class="om-error-message">${escapeHtml(friendly)}</p>`;
+            content += `<ul class="om-error-steps">
+                <li>Review your Excel template for missing or invalid values.</li>
+                <li>Save the file and submit again from this page.</li>
+            </ul>`;
             content += '</div>';
             return content;
         }
 
-        if (Array.isArray(details) && details.length > 0) {
-            content += `<h6 class="mb-3"><i class="bi bi-exclamation-triangle me-2"></i>Validation Error Details (${details.length} issue${details.length > 1 ? 's' : ''})</h6>`;
+        const allIssues = collectAllSubmissionIssues(lhdnData, invoiceLookup);
 
-            details.forEach((detail, index) => {
-                const msg = detail.originalMessage || detail.userMessage || detail.message || 'Validation failed';
-                const errorCode = detail.errorCode || detail.code || '';
-                const field = detail.fieldDescription || detail.target || detail.propertyName || '';
-                const path = detail.propertyPath || detail._technical?.propertyPath || '';
-                const guidance = detail.guidance || [];
+        if (allIssues.length > 0) {
+            content += `<h6 class="mb-3 om-section-title om-section-title--danger">
+                <i class="bi bi-list-check me-2"></i>What to fix (${allIssues.length} issue${allIssues.length > 1 ? 's' : ''})
+            </h6>`;
 
+            allIssues.forEach((detail, index) => {
+                const friendly = toEndUserFriendlyDetail(detail, invoiceLookup);
+                const invoiceNo = friendly.invoiceNumber
+                    ? `Invoice No. ${escapeHtml(friendly.invoiceNumber)}`
+                    : (detail.invoiceRef ? `Invoice No. ${escapeHtml(detail.invoiceRef)}` : '');
+                const lineHint = friendly.lineItemNum
+                    ? `<div class="om-error-where"><i class="bi bi-list-ol me-1"></i>Line item ${friendly.lineItemNum}</div>`
+                    : '';
                 content += `
-                    <div class="error-card mb-3 p-3 border rounded" style="border-left: 4px solid #dc3545 !important; background: #fff5f5;">
-                        <div class="d-flex align-items-start mb-2">
-                            <span class="badge bg-danger me-2" style="min-width: 28px; text-align: center;">${index + 1}</span>
+                    <div class="om-doc-panel om-doc-panel--danger">
+                        <div class="d-flex align-items-start gap-2 mb-2">
+                            <span class="om-issue-badge">${index + 1}</span>
                             <div class="flex-grow-1">
-                                <div class="fw-semibold" style="color: #dc3545;">${msg}</div>
-                                ${errorCode ? `<small class="text-muted">Error Code: <code>${errorCode}</code></small>` : ''}
+                                ${invoiceNo ? `<div class="om-error-title">${invoiceNo}</div>` : ''}
+                                ${lineHint}
                             </div>
                         </div>
-                        ${field ? `<div class="mb-1"><small><strong>Field:</strong> ${field}</small></div>` : ''}
-                        ${path ? `<div class="mb-1"><small class="text-muted"><strong>Path:</strong> <code>${path}</code></small></div>` : ''}
-                        ${guidance.length > 0 ? `
-                            <div class="mt-2 p-2 rounded" style="background: #f0f9ff; border: 1px solid #bae6fd;">
-                                <small class="fw-semibold" style="color: #0369a1;"><i class="bi bi-lightbulb me-1"></i>Guidance:</small>
-                                <ul class="mb-0 mt-1 ps-3" style="font-size: 0.85rem;">
-                                    ${guidance.map(g => `<li>${g}</li>`).join('')}
-                                </ul>
-                            </div>
+                        ${friendly.primaryField ? `<span class="om-error-field-name">${escapeHtml(friendly.primaryField)}</span>` : ''}
+                        <p class="om-error-message mb-2">${escapeHtml(friendly.message)}</p>
+                        <div class="om-error-help-box">
+                            <div class="om-error-help-title"><i class="bi bi-lightbulb me-1"></i>What you can do</div>
+                            <ul class="om-error-steps mb-0">
+                                ${friendly.guidance.map((g) => `<li>${escapeHtml(g)}</li>`).join('')}
+                            </ul>
+                        </div>
+                        ${friendly.technicalRaw ? `
+                            <details class="om-error-tech-details mt-2">
+                                <summary>Technical details (for IT / support)</summary>
+                                <pre class="om-error-tech-pre">${escapeHtml(friendly.technicalRaw)}</pre>
+                            </details>
                         ` : ''}
                     </div>
                 `;
             });
         } else if (errorObj) {
-            content += `<div class="alert alert-danger">
-                <strong>Error:</strong> ${errorObj.message || 'Submission failed'}
-            </div>`;
+            const friendly = translateTechnicalLhdnMessage(errorObj.message, invoiceLookup);
+            content += `<p class="om-error-message">${escapeHtml(friendly)}</p>`;
         }
 
         content += '</div>';
@@ -5482,52 +5603,43 @@ class InvoiceTableManager {
                 }
 
                 .lhdn-details-header {
-                    background: #405189;
-                    color: white;
-                    padding: 20px 24px;
                     display: flex;
                     align-items: center;
                     justify-content: space-between;
                 }
 
                 .lhdn-details-header .header-icon-wrapper {
-                    width: 40px;
-                    height: 40px;
-                    background: rgba(255, 255, 255, 0.2);
-                    border-radius: 8px;
+                    width: 56px;
+                    height: 56px;
+                    min-width: 56px;
                     display: flex;
                     align-items: center;
                     justify-content: center;
-                    font-size: 18px;
                 }
 
-                .lhdn-details-header .btn-close-custom {
-                    background: rgba(255, 255, 255, 0.2);
-                    border: none;
-                    color: white;
-                    width: 32px;
-                    height: 32px;
-                    border-radius: 6px;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    cursor: pointer;
-                    transition: background 0.2s ease;
+                .lhdn-details-header .header-icon-wrapper i {
+                    font-size: 1.75rem;
                 }
 
-                .lhdn-details-header .btn-close-custom:hover {
-                    background: rgba(255, 255, 255, 0.3);
+                .lhdn-details-body .om-submission-alert {
+                    display: flex !important;
+                    align-items: flex-start;
+                    gap: 0.75rem;
+                    text-align: left;
+                }
+
+                .lhdn-details-body .om-submission-alert .om-alert-text {
+                    flex: 1;
+                    min-width: 0;
+                    line-height: 1.55;
                 }
 
                 .lhdn-details-body {
-                    padding: 24px;
                     flex: 1;
                     overflow-y: auto;
                 }
 
                 .lhdn-details-footer {
-                    padding: 16px 24px;
-                    border-top: 1px solid #e5e7eb;
                     display: flex;
                     justify-content: flex-end;
                     gap: 12px;
@@ -5624,36 +5736,6 @@ class InvoiceTableManager {
                     }
                 }
 
-                /* Action button styling */
-                .outbound-action-btn.view {
-                    background: #0d6efd;
-                    color: white;
-                    border: none;
-                    padding: 6px 10px;
-                    border-radius: 4px;
-                    cursor: pointer;
-                    transition: background 0.2s ease;
-                    font-size: 12px;
-                }
-
-                .outbound-action-btn.view:hover {
-                    background: #0b5ed7;
-                }
-
-                .outbound-action-btn.cancel {
-                    background: #dc3545;
-                    color: white;
-                    border: none;
-                    padding: 6px 10px;
-                    border-radius: 4px;
-                    cursor: pointer;
-                    transition: background 0.2s ease;
-                    font-size: 12px;
-                }
-
-                .outbound-action-btn.cancel:hover {
-                    background: #bb2d3b;
-                }
             </style>
         `;
 
@@ -5693,8 +5775,8 @@ class InvoiceTableManager {
                         </div>
                     </div>
                     <div class="lhdn-details-footer">
-                        <button class="btn btn-secondary" onclick="this.closest('.lhdn-details-modal').remove()">
-                            <i class="bi bi-x-circle me-2"></i>Close
+                        <button type="button" class="om-btn-close" onclick="this.closest('.lhdn-details-modal').remove()">
+                            <i class="bi bi-x-lg"></i>Close
                         </button>
                     </div>
                 </div>
@@ -5771,8 +5853,8 @@ class InvoiceTableManager {
                         <button class="btn btn-primary me-2" onclick="window.location.reload()">
                             <i class="bi bi-arrow-clockwise me-2"></i>Refresh Page
                         </button>
-                        <button class="btn btn-secondary" onclick="this.closest('.lhdn-details-modal').remove()">
-                            <i class="bi bi-x-circle me-2"></i>Close
+                        <button type="button" class="om-btn-close" onclick="this.closest('.lhdn-details-modal').remove()">
+                            <i class="bi bi-x-lg"></i>Close
                         </button>
                     </div>
                 </div>
@@ -7155,9 +7237,22 @@ class UploadedFilesManager {
                     guidance: [
                         'Check your Submission History in 5-10 minutes for processing results.',
                         'LHDN typically processes submissions within a few minutes during business hours.',
-                        'You can track status updates in Inbound Page.'
+                        'You can track status updates in Inbound Page.',
+                        'Your .xlsx file is kept on disk — use the Submitted filter to review it.'
                     ]
                 });
+                notifyInboundModule({
+                    fileId: String(fileId),
+                    submissionUid: result?.submissionUid || result?.submission_uid,
+                    source: 'outbound-manual'
+                });
+                if (window.toastNotification?.info) {
+                    window.toastNotification.info(
+                        'File kept',
+                        'Use the Submitted filter to review your uploaded file.',
+                        5000
+                    );
+                }
                 if (typeof refreshOutboundTable === 'function') refreshOutboundTable();
                 return;
             }
@@ -7202,9 +7297,22 @@ class UploadedFilesManager {
                 guidance: [
                     'Check your Submission History in 5-10 minutes for processing results.',
                     'LHDN typically processes submissions within a few minutes during business hours.',
-                    'You can track status updates in Outbound > Submission History.'
+                    'You can track status updates in Outbound > Submission History.',
+                    'Your .xlsx files are kept on disk — use the Submitted filter to review them.'
                 ]
             });
+
+            notifyInboundModule({
+                fileIds,
+                source: 'outbound-manual-bulk'
+            });
+            if (window.toastNotification?.info) {
+                window.toastNotification.info(
+                    'Files kept',
+                    'Use the Submitted filter to review submitted uploads.',
+                    5000
+                );
+            }
 
             this.selectedFiles.clear();
             this.updateBulkActionButtons();
@@ -8081,6 +8189,538 @@ function updateSubmissionFlow({ stage='validate', message='', progress=0, eta=nu
   }
 }
 
+
+const LHDN_PLAIN_ERROR_MAP = {
+    CF321: 'The invoice date is outside the allowed period. Submit within 7 days of the invoice date.',
+    CF364: 'An item classification code is not valid. Check each line item in your Excel file.',
+    CF401: 'Tax amounts do not match LHDN rules. Recalculate tax on affected invoices.',
+    CF404: 'A required field is missing. Fill in all mandatory columns in your template.',
+    CF406: 'One or more values are not in the correct format.',
+    CF410: 'Supplier phone number format is invalid. Use country code, e.g. +60123456789.',
+    CF414: 'Supplier phone number is too short (minimum 8 characters).',
+    CF415: 'Buyer phone number format is invalid. Use country code, e.g. +60123456789.',
+    DS302: 'This invoice was already submitted to LHDN.',
+    VALIDATION_ERROR: 'LHDN could not validate one or more invoices in your file.',
+    INVOICE_LINE_ERROR: 'A line item on your invoice has missing or incorrect data.',
+};
+
+const LHDN_FIELD_LABELS = {
+    Amount: 'Amount (item price)',
+    LineExtensionAmount: 'Line amount',
+    InvoicedQuantity: 'Quantity',
+    unitCode: 'Unit code',
+    PriceAmount: 'Unit price',
+    TaxAmount: 'Tax amount',
+    TaxableAmount: 'Taxable amount',
+    PayableAmount: 'Payable amount',
+    IdentificationCode: 'Country code',
+};
+
+const GENERIC_LHDN_USER_MESSAGES = [
+    /there is an issue with your invoice/i,
+    /there is an issue with one of your invoice/i,
+    /document validation failed/i,
+    /your invoice contains validation errors/i,
+    /a required field is missing from your invoice/i,
+    /lhdn could not validate/i,
+    /please review your invoice information/i,
+];
+
+function isGenericLhdnUserMessage(msg) {
+    if (!msg || isTechnicalLhdnText(msg)) return true;
+    return GENERIC_LHDN_USER_MESSAGES.some((re) => re.test(msg));
+}
+
+function humanizeLhdnFieldName(name) {
+    const key = String(name || '').replace(/\[\d+\]/g, '');
+    if (LHDN_FIELD_LABELS[key]) return LHDN_FIELD_LABELS[key];
+    return key.replace(/([A-Z])/g, ' $1').replace(/^\w/, (c) => c.toUpperCase()).trim() || 'Required field';
+}
+
+function buildInvoiceNumberLookup(fileData) {
+    const byIndex = new Map();
+    const add = (index1, num) => {
+        const n = String(num || '').trim();
+        if (n && index1 >= 1 && !byIndex.has(index1)) {
+            byIndex.set(index1, n);
+        }
+    };
+
+    const details = fileData?.invoiceDetails;
+    if (Array.isArray(details)) {
+        details.forEach((inv, i) => {
+            add(
+                i + 1,
+                inv.invoiceNumber ||
+                    inv.invoiceNo ||
+                    inv.invoice_number ||
+                    inv.codeNumber ||
+                    inv.invoiceCodeNumber
+            );
+        });
+    }
+
+    let meta = fileData?.metadata;
+    if (typeof meta === 'string') {
+        try {
+            meta = JSON.parse(meta);
+        } catch (_) {
+            meta = null;
+        }
+    }
+    if (meta && Array.isArray(meta.listInvoiceDetails)) {
+        meta.listInvoiceDetails.forEach((inv, i) => {
+            add(i + 1, inv.invoiceNumber || inv.invoiceNo || inv.invoice_number);
+        });
+    }
+
+    const invNumField = fileData?.invoiceNumber;
+    if (typeof invNumField === 'string' && invNumField.includes('\n')) {
+        invNumField
+            .split('\n')
+            .map((line) => line.trim())
+            .filter((line) => line && !/invoice\(s\)/i.test(line))
+            .forEach((num, i) => add(i + 1, num));
+    } else if (typeof invNumField === 'string' && invNumField.trim() && !/invoice\(s\)/i.test(invNumField)) {
+        add(1, invNumField.trim());
+    }
+
+    return byIndex;
+}
+
+function getInvoiceNumberForIndex(invoiceLookup, index1Based) {
+    if (!invoiceLookup || !index1Based) return null;
+    return invoiceLookup.get(index1Based) || null;
+}
+
+function formatInvoiceLocation(ctx, invoiceLookup, invoiceRef) {
+    if (invoiceRef) {
+        const ref = String(invoiceRef).trim();
+        if (/^invoice\s*no\.?/i.test(ref)) return ref;
+        return `Invoice No. ${ref}`;
+    }
+    const invNo = getInvoiceNumberForIndex(invoiceLookup, ctx?.invoiceNum);
+    if (invNo && ctx?.lineNum) {
+        return `Invoice No. ${invNo}, line item ${ctx.lineNum}`;
+    }
+    if (invNo) return `Invoice No. ${invNo}`;
+    if (ctx?.invoiceNum && ctx?.lineNum) {
+        return `Invoice row ${ctx.invoiceNum}, line item ${ctx.lineNum}`;
+    }
+    if (ctx?.invoiceNum) return `Invoice row ${ctx.invoiceNum}`;
+    return '';
+}
+
+function resolveInvoiceNumberForDetail(detail, invoiceLookup) {
+    if (detail?.invoiceRef) return String(detail.invoiceRef).trim();
+    const ctx = parseInvoiceContextFromText(
+        detail?.propertyPath || detail?.target || detail?.originalMessage || detail?.message || ''
+    );
+    return getInvoiceNumberForIndex(invoiceLookup, ctx.invoiceNum) || '';
+}
+
+function buildFailedSubmissionStatusAlert(fileData, lhdnData) {
+    const invoiceLookup = buildInvoiceNumberLookup(fileData);
+    const issues = collectAllSubmissionIssues(lhdnData, invoiceLookup);
+    const totalDocs =
+        lhdnData?.totalDocuments ||
+        lhdnData?.summary?.totalDocuments ||
+        invoiceLookup.size ||
+        0;
+
+    const affectedInvoiceNos = [];
+    issues.forEach((issue) => {
+        const no = resolveInvoiceNumberForDetail(issue, invoiceLookup);
+        if (no && !affectedInvoiceNos.includes(no)) {
+            affectedInvoiceNos.push(no);
+        }
+    });
+
+    let detailLine = '';
+    if (affectedInvoiceNos.length === 1) {
+        detailLine = `Please correct <strong>Invoice No. ${escapeHtml(affectedInvoiceNos[0])}</strong> in your Excel file (details below), then upload and submit again.`;
+    } else if (affectedInvoiceNos.length > 1) {
+        detailLine = `Please correct these invoice numbers: <strong>${affectedInvoiceNos.map((n) => escapeHtml(n)).join(', ')}</strong>, then resubmit the file.`;
+    } else if (issues.length > 0) {
+        detailLine = `Please fix the ${issues.length} issue${issues.length > 1 ? 's' : ''} below in your Excel file, then upload and submit again.`;
+    } else {
+        detailLine = 'Please review the details below, correct your Excel template, then upload and submit again.';
+    }
+
+    const countLine =
+        totalDocs > 0
+            ? `This file contains ${totalDocs} invoice${totalDocs === 1 ? '' : 's'}.`
+            : '';
+
+    return `<div class="alert alert-danger mb-0 om-submission-alert">
+        <i class="bi bi-exclamation-triangle-fill om-alert-icon"></i>
+        <div class="om-alert-text">
+            <p class="mb-1"><strong>MyInvois could not accept this file.</strong></p>
+            <p class="mb-0">${countLine ? `${countLine} ` : ''}${detailLine}</p>
+        </div>
+    </div>`;
+}
+
+function buildWhereFromContext(ctx, invoiceLookup, invoiceRef) {
+    return formatInvoiceLocation(ctx, invoiceLookup, invoiceRef);
+}
+
+function guidanceForLhdnField(fieldPath) {
+    const path = String(fieldPath || '');
+    if (path.includes('Amount') && path.includes('ItemPriceExtension')) {
+        return [
+            'In your Excel template, enter the Amount for this line item (item price extension column).',
+            'Use numbers only (e.g. 100.00) — do not leave the cell blank.',
+            'Save the file and submit again from this page.',
+        ];
+    }
+    if (path.includes('unitCode') || path.includes('InvoicedQuantity')) {
+        return [
+            'Check quantity and unit code columns for this line item (e.g. C62 for pieces).',
+            'Save the file and submit again.',
+        ];
+    }
+    if (path.includes('LineExtensionAmount')) {
+        return [
+            'Enter the line amount (total before tax) for this item in your Excel file.',
+            'Save and resubmit.',
+        ];
+    }
+    if (path.includes('Country') && path.includes('IdentificationCode')) {
+        return [
+            'Add country code MY (or the correct code) in the supplier/customer address section.',
+            'Save and resubmit.',
+        ];
+    }
+    return [
+        'Open your Excel template and correct the field mentioned above.',
+        'Save the file, then upload and submit again.',
+    ];
+}
+
+function buildMissingFieldMessage(fieldPath, ctx, invoiceLookup) {
+    const field = String(fieldPath || '').split('.').pop().replace(/\[\d+\]/g, '') || 'required information';
+    const label = humanizeLhdnFieldName(field);
+    const loc = formatInvoiceLocation(ctx, invoiceLookup, null);
+    if (loc && ctx.lineNum) {
+        return `MyInvois reports that "${label}" is missing on ${loc}.`;
+    }
+    if (loc) {
+        return `MyInvois reports that "${label}" is missing on ${loc}.`;
+    }
+    return `MyInvois reports that "${label}" is missing in your Excel data.`;
+}
+
+function extractNestedErrorsFromRaw(raw, invoiceLookup) {
+    const text = String(raw || '');
+    if (!text) return [];
+
+    const results = [];
+    const seen = new Set();
+
+    const propRe = /PropertyRequired:\s*([^\s,}]+)/gi;
+    let match;
+    while ((match = propRe.exec(text)) !== null) {
+        const fieldPath = match[1].trim();
+        const slice = text.substring(Math.max(0, match.index - 400), match.index + 120);
+        const ctx = parseInvoiceContextFromText(slice + ' ' + fieldPath);
+        const key = `${ctx.invoiceNum}|${ctx.lineNum}|${fieldPath}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const fieldName = fieldPath.split('.').pop().replace(/\[\d+\]/g, '');
+        results.push({
+            propertyPath: fieldPath,
+            fieldName,
+            userMessage: buildMissingFieldMessage(fieldPath, ctx, invoiceLookup),
+            fieldDescription: humanizeLhdnFieldName(fieldName),
+            guidance: guidanceForLhdnField(fieldPath),
+            where: buildWhereFromContext(ctx, invoiceLookup),
+            invoiceRef: getInvoiceNumberForIndex(invoiceLookup, ctx.invoiceNum) || undefined,
+        });
+    }
+
+    if (results.length) return results;
+
+    const strRe = /StringExpected:\s*([^\s}]+)/gi;
+    while ((match = strRe.exec(text)) !== null) {
+        const fieldPath = match[1].trim();
+        const slice = text.substring(Math.max(0, match.index - 400), match.index + 80);
+        const ctx = parseInvoiceContextFromText(slice + ' ' + fieldPath);
+        const key = `str|${ctx.invoiceNum}|${ctx.lineNum}|${fieldPath}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const label = humanizeLhdnFieldName(fieldPath.split('.').pop());
+        const loc = formatInvoiceLocation(ctx, invoiceLookup, null);
+        results.push({
+            propertyPath: fieldPath,
+            fieldName: fieldPath.split('.').pop(),
+            userMessage: loc && ctx.lineNum
+                ? `"${label}" has an invalid format on ${loc}.`
+                : `"${label}" has an invalid format in your Excel data.`,
+            fieldDescription: label,
+            guidance: guidanceForLhdnField(fieldPath),
+            where: buildWhereFromContext(ctx, invoiceLookup),
+            invoiceRef: getInvoiceNumberForIndex(invoiceLookup, ctx.invoiceNum) || undefined,
+        });
+    }
+
+    if (results.length) return results;
+
+    const invoiceIndices = [...text.matchAll(/#\/Invoice\[(\d+)\]/gi)].map((m) => parseInt(m[1], 10));
+    const uniqueInvoices = [...new Set(invoiceIndices)];
+    if (uniqueInvoices.length > 1) {
+        uniqueInvoices.forEach((idx) => {
+            const ctx = { invoiceNum: idx + 1, lineNum: null };
+            const lineMatch = text.match(new RegExp(`#/Invoice\\[${idx}\\][^#]*InvoiceLine\\[(\\d+)\\]`, 'i'));
+            if (lineMatch) ctx.lineNum = parseInt(lineMatch[1], 10) + 1;
+            const loc = formatInvoiceLocation(ctx, invoiceLookup, null);
+            results.push({
+                userMessage: loc
+                    ? `${loc} has invalid or incomplete data.`
+                    : 'Invoice data is invalid or incomplete.',
+                fieldDescription: 'Invoice data',
+                guidance: guidanceForLhdnField('InvoiceLine'),
+                where: buildWhereFromContext(ctx, invoiceLookup),
+                invoiceRef: getInvoiceNumberForIndex(invoiceLookup, ctx.invoiceNum) || undefined,
+            });
+        });
+    }
+
+    return results;
+}
+
+function collectAllSubmissionIssues(lhdnData, invoiceLookup) {
+    const items = [];
+
+    const pushDetail = (detail, extra = {}) => {
+        const raw =
+            detail.originalMessage ||
+            detail.message ||
+            detail.error ||
+            '';
+        const expanded = extractNestedErrorsFromRaw(raw, invoiceLookup);
+        if (expanded.length) {
+            expanded.forEach((ex) => {
+                const invoiceRef =
+                    extra.invoiceRef ||
+                    ex.invoiceRef ||
+                    getInvoiceNumberForIndex(invoiceLookup, parseInvoiceContextFromText(raw).invoiceNum);
+                items.push({ ...detail, ...ex, ...extra, ...(invoiceRef ? { invoiceRef } : {}) });
+            });
+        } else {
+            const ctx = parseInvoiceContextFromText(
+                detail.propertyPath || detail.target || raw
+            );
+            const invoiceRef =
+                extra.invoiceRef ||
+                getInvoiceNumberForIndex(invoiceLookup, ctx.invoiceNum);
+            items.push({
+                ...detail,
+                ...extra,
+                ...(invoiceRef ? { invoiceRef } : {}),
+            });
+        }
+    };
+
+    const rejected = lhdnData?.data?.rejectedDocuments;
+    if (Array.isArray(rejected) && rejected.length) {
+        rejected.forEach((doc, i) => {
+            const invoiceRef =
+                doc.invoiceCodeNumber ||
+                doc.codeNumber ||
+                getInvoiceNumberForIndex(invoiceLookup, i + 1) ||
+                null;
+            const errDetails = doc.error?.details;
+            if (Array.isArray(errDetails) && errDetails.length) {
+                errDetails.forEach((d) => pushDetail(d, invoiceRef ? { invoiceRef } : {}));
+            } else if (doc.error) {
+                pushDetail(doc.error, invoiceRef ? { invoiceRef } : {});
+            }
+        });
+        return dedupeSubmissionIssues(items, invoiceLookup);
+    }
+
+    const errorObj = typeof lhdnData?.error === 'object' ? lhdnData.error : null;
+    const details = errorObj?.details || lhdnData?.details || [];
+    if (Array.isArray(details) && details.length) {
+        details.forEach((d) => pushDetail(d));
+    } else if (errorObj?.message) {
+        pushDetail({
+            message: errorObj.message,
+            originalMessage: errorObj.message,
+            userMessage: errorObj.userFriendlyMessage,
+            guidance: errorObj.guidance,
+        });
+    } else if (typeof lhdnData?.error === 'string') {
+        pushDetail({ message: lhdnData.error, originalMessage: lhdnData.error });
+    }
+
+    return dedupeSubmissionIssues(items, invoiceLookup);
+}
+
+function dedupeSubmissionIssues(items, invoiceLookup) {
+    const seen = new Set();
+    return items.filter((item) => {
+        const friendly = toEndUserFriendlyDetail(item, invoiceLookup);
+        const key = `${friendly.invoiceNumber || item.invoiceRef || ''}|${friendly.lineItemNum || ''}|${friendly.message}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+function isTechnicalLhdnText(text) {
+    if (!text) return true;
+    const t = String(text);
+    return (
+        /#\/Invoice|ArrayItemNotValid|propertyPath|object\s*\{|^\s*\{/i.test(t) ||
+        (t.length > 140 && /[:#\/\[\]]/.test(t))
+    );
+}
+
+function parseInvoiceContextFromText(text) {
+    const src = String(text || '');
+    const inv = src.match(/Invoice\[(\d+)\]/i);
+    const line = src.match(/InvoiceLine\[(\d+)\]/i);
+    return {
+        invoiceNum: inv ? parseInt(inv[1], 10) + 1 : null,
+        lineNum: line ? parseInt(line[1], 10) + 1 : null,
+    };
+}
+
+function translateTechnicalLhdnMessage(raw, invoiceLookup) {
+    const text = String(raw || '').trim();
+    if (!text) {
+        return 'LHDN could not accept part of your submission. Please review your Excel file.';
+    }
+
+    const codeMatch = text.match(/\b(CF\d{3}|DS\d{3}|ERR\d+)\b/i);
+    if (codeMatch && LHDN_PLAIN_ERROR_MAP[codeMatch[1].toUpperCase()]) {
+        return LHDN_PLAIN_ERROR_MAP[codeMatch[1].toUpperCase()];
+    }
+
+    if (/PropertyRequired/i.test(text)) {
+        const nested = extractNestedErrorsFromRaw(text, invoiceLookup);
+        if (nested.length === 1) return nested[0].userMessage;
+        if (nested.length > 1) {
+            return `MyInvois found ${nested.length} missing or invalid fields. See each item below.`;
+        }
+    }
+
+    if (/ItemPriceExtension/i.test(text) && /Amount/i.test(text)) {
+        const ctx = parseInvoiceContextFromText(text);
+        const loc = formatInvoiceLocation(ctx, invoiceLookup, null);
+        if (loc) {
+            return `Amount (item price) is missing on ${loc}.`;
+        }
+        return 'Amount (item price) is missing for one of your line items.';
+    }
+
+    if (/ArrayItemNotValid|INVOICE_LINE|line item|InvoiceLine/i.test(text)) {
+        const ctx = parseInvoiceContextFromText(text);
+        const loc = formatInvoiceLocation(ctx, invoiceLookup, null);
+        if (loc && ctx.lineNum) {
+            return `Line item ${ctx.lineNum} on ${loc} is missing required information or has an invalid value.`;
+        }
+        if (loc) {
+            return `${loc} is missing required information or has an invalid value.`;
+        }
+        return 'One or more line items in your Excel file are incomplete or invalid.';
+    }
+
+    if (/TIN|BuyerTIN|SupplierTIN/i.test(text)) {
+        return 'A Tax Identification Number (TIN) may be wrong or missing. Verify buyer and supplier TIN in your file.';
+    }
+
+    if (isTechnicalLhdnText(text)) {
+        const ctx = parseInvoiceContextFromText(text);
+        const loc = formatInvoiceLocation(ctx, invoiceLookup, null);
+        if (loc && ctx.lineNum) {
+            return `Please check ${loc}, line item ${ctx.lineNum}, in your Excel file.`;
+        }
+        if (loc) {
+            return `Please check ${loc} in your Excel file.`;
+        }
+        return 'LHDN found a problem in your Excel data. Open the file, fix the affected invoice, and upload again.';
+    }
+
+    return text.length > 160 ? `${text.slice(0, 157)}…` : text;
+}
+
+function toEndUserFriendlyDetail(detail, invoiceLookup) {
+    const normalized = normalizeSubmissionError(detail || {});
+    const raw =
+        detail?.originalMessage ||
+        detail?.message ||
+        normalized.originalMessage ||
+        '';
+
+    const nestedFromRaw = extractNestedErrorsFromRaw(raw, invoiceLookup);
+    const nestedOne = nestedFromRaw.length === 1 ? nestedFromRaw[0] : null;
+
+    let message =
+        detail?.userMessage ||
+        nestedOne?.userMessage ||
+        detail?.userFriendlyMessage ||
+        normalized.userMessage ||
+        '';
+
+    const fieldDesc =
+        detail?.fieldDescription ||
+        nestedOne?.fieldDescription ||
+        normalized.fieldDescription ||
+        '';
+
+    if (isGenericLhdnUserMessage(message) && fieldDesc && !isGenericLhdnUserMessage(fieldDesc)) {
+        message = fieldDesc;
+    }
+
+    if (!message || isTechnicalLhdnText(message) || isGenericLhdnUserMessage(message)) {
+        message = translateTechnicalLhdnMessage(raw, invoiceLookup);
+    }
+
+    if (nestedOne && isGenericLhdnUserMessage(message)) {
+        message = nestedOne.userMessage;
+    }
+
+    let guidance = [
+        ...(detail?.guidance || nestedOne?.guidance || normalized.guidance || []),
+    ].filter((g) => g && !isTechnicalLhdnText(g));
+
+    if (!guidance.length) {
+        guidance = nestedOne?.guidance?.length
+            ? nestedOne.guidance
+            : guidanceForLhdnField(detail?.propertyPath || raw);
+    }
+
+    const ctx = parseInvoiceContextFromText(
+        detail?.propertyPath || detail?.target || raw
+    );
+    const invoiceNumber = resolveInvoiceNumberForDetail(detail, invoiceLookup);
+    const lineItemNum = ctx.lineNum || null;
+
+    const errorCode = detail?.errorCode || detail?.code || normalized.errorCode || '';
+    const plainCodeLabel =
+        errorCode && LHDN_PLAIN_ERROR_MAP[errorCode]
+            ? errorCode
+            : '';
+
+    const fieldName =
+        detail?.fieldName ||
+        nestedOne?.fieldName ||
+        (detail?.propertyPath ? String(detail.propertyPath).split('.').pop().replace(/\[\d+\]/g, '') : '');
+    const primaryField = fieldName ? humanizeLhdnFieldName(fieldName) : '';
+
+    return {
+        message,
+        guidance,
+        invoiceNumber,
+        lineItemNum,
+        primaryField,
+        errorCode: plainCodeLabel,
+        technicalRaw: isTechnicalLhdnText(raw) ? raw : '',
+    };
+}
 
 // Normalize error object into the requested structure
 function normalizeSubmissionError(err){

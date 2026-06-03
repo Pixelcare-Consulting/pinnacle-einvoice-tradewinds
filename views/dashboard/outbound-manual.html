@@ -76,8 +76,8 @@
 }
 
 #invoicePagination .page-item.active .page-link {
-    background-color: #1a365d;
-    border-color: #1a365d;
+    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+    border-color: transparent;
     color: #fff;
 }
 
@@ -2753,6 +2753,9 @@
                                                     <button class="btn outbound-action-btn submit active" data-filter="all">
                                                         <i class="bi bi-list me-1"></i>All List
                                                     </button>
+                                                    <button class="btn outbound-action-btn submit" data-filter="submitted">
+                                                        <i class="bi bi-check-circle me-1"></i>Submitted
+                                                    </button>
                                                     <!-- <button class="btn outbound-action-btn submit" data-filter="pending">
                                                         <i class="bi bi-clock-history me-1"></i>Pending
                                                     </button> -->
@@ -2843,8 +2846,9 @@
                                                     <th>INVOICE NO.</th>
                                                     <th>SUPPLIER</th>
                                                     <th>RECEIVER</th>
-                                                    <th>DATE</th>
-                                                    <th>INV. DATE INFO</th>
+                                                    <th>Uploaded</th>
+                                                    <th>Invoice date</th>
+                                                    <th>Submitted</th>
                                                     <th style="display:none"></th>
                                                     <th>STATUS</th>
                                                     <th>TOTAL AMOUNT</th>

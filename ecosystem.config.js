@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: "Pinnacle x Tradewinds eInvoice v3.2",
+      name: "Pinnacle x Tradewinds eInvoice v3.3",
       script: "./server.js",
       instances: 1, // Keep at 1 unless you have multi-core (avoid overhead of clustering on low RAM)
       autorestart: true, // Good — restarts on crash or stop (not on exit)
@@ -17,12 +17,22 @@ module.exports = {
         "AuthorizeToken.ini",
       ],
       max_memory_restart: "512M", // Reduce from 1G → 512M to prevent memory bloat
+      // Default profile is production. Use `pm2 start ecosystem.config.js --env development` for local PM2.
       env: {
+        NODE_ENV: "production",
+        SECURE_COOKIE: "true",
+        TRUST_PROXY: "false",
+        NODE_DIRECT_HTTPS: "true",
+        UV_THREADPOOL_SIZE: 2,
+        SSL_KEY_PATH: "./ssl/e-invoice_tradewindscorp-insbrok_com.key",
+        SSL_CERT_PATH: "./ssl/e-invoice_tradewindscorp-insbrok_com.crt",
+        SSL_CA_PATH: "./ssl/DigiCertCA.crt",
+      },
+      env_development: {
         NODE_ENV: "development",
         SECURE_COOKIE: "false",
         TRUST_PROXY: "true",
-        // Optional: Reduce worker threads if using Node.js >12
-        UV_THREADPOOL_SIZE: 2, // Reduce thread pool size
+        UV_THREADPOOL_SIZE: 2,
       },
       env_production: {
         NODE_ENV: "production",

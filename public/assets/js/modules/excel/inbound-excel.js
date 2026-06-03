@@ -942,6 +942,14 @@ class InvoiceTableManager {
 
   // Real-time status monitoring for LHDN validation updates
   setupRealTimeStatusMonitoring() {
+    /*
+     * Active timers / caches (inbound page):
+     * - statusMonitorInterval: 60s → POST /api/lhdn/status-check (LHDN details reconcile for non-terminal UUIDs)
+     * - submissionMonitorInterval: 60s → checkForNewSubmissions (localStorage newSubmissionNotification)
+     * - localStorage inboundTableData + lastDataUpdate: 5m TTL (2m if cached rows include Submitted/Processing/Pending)
+     * - Server getCachedDocuments / fetchRecentDocumentsImpl: 15m DB gate (5m when any non-terminal row in DB)
+     * - Node lhdnCache stdTTL: 900s (15m)
+     */
     console.log('🔍 Setting up real-time status monitoring...');
 
     // Monitor for status changes every 60 seconds (reduced frequency to avoid conflicts)
@@ -1021,6 +1029,9 @@ class InvoiceTableManager {
 
         if (result.success && result.changes && result.changes.length > 0) {
           console.log(`📊 Detected ${result.changes.length} status changes`);
+
+          localStorage.removeItem('inboundTableData');
+          localStorage.removeItem('lastDataUpdate');
 
           // Show status indicator
           this.showStatusUpdateIndicator(result.changes.length);
@@ -2291,9 +2302,21 @@ class InvoiceTableManager {
           // Check if we should use cached data on page load
           const lastUpdate = localStorage.getItem("lastDataUpdate");
           const cachedData = localStorage.getItem("inboundTableData");
-          const cacheValidTime = 15 * 60 * 1000; // 15 minutes
+          let cacheValidTime = 5 * 60 * 1000; // 5 minutes default
 
           if (lastUpdate && cachedData && !window.forceRefreshLHDN) {
+            try {
+              const parsed = JSON.parse(cachedData);
+              const hasNonTerminal = Array.isArray(parsed) && parsed.some((row) =>
+                ["Submitted", "Processing", "Pending"].includes(row.status)
+              );
+              if (hasNonTerminal) {
+                cacheValidTime = 2 * 60 * 1000; // 2 minutes when in-flight docs visible
+              }
+            } catch (_) {
+              /* ignore parse errors */
+            }
+
             const now = new Date().getTime();
             const lastUpdateTime = parseInt(lastUpdate);
 

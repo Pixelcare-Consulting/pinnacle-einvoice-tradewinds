@@ -376,7 +376,12 @@ const fetchRecentDocumentsImpl = async (req) => {
       });
 
       const currentTime = new Date();
-      const syncThreshold = 15 * 60 * 1000; // 15 minutes in milliseconds
+      const hasNonTerminalRows = dbDocuments.some((d) =>
+        isNonTerminalInboundStatus(d.status)
+      );
+      const syncThreshold = hasNonTerminalRows
+        ? INBOUND_NON_TERMINAL_SYNC_MS
+        : INBOUND_DEFAULT_SYNC_MS;
 
       // Only fetch from API if forced or if last sync is older than threshold
       if (
@@ -783,9 +788,7 @@ const fetchRecentDocumentsImpl = async (req) => {
       );
 
       // If we have submission UIDs, poll their status
-      const uniquesubmissionuids = [
-        ...new Set(documents.map((doc) => doc.submissionuid).filter(Boolean)),
-      ];
+      const uniquesubmissionuids = extractUniqueSubmissionUids(documents);
        if (uniquesubmissionuids.length > 0) {
          // console.log(
          //   `found ${uniquesubmissionuids.length} unique submission uids to poll`
@@ -1153,6 +1156,13 @@ const formatInboundDateField = (date) => {
 
 /** Max detail calls per recent sync (LHDN rate limits; details is heavier than list). */
 const MAX_INBOUND_DETAILS_ENRICH = 35;
+const INBOUND_NON_TERMINAL_SYNC_MS = 5 * 60 * 1000;
+const INBOUND_DEFAULT_SYNC_MS = 15 * 60 * 1000;
+const {
+  getSubmissionUidFromDoc,
+  extractUniqueSubmissionUids,
+  isNonTerminalInboundStatus,
+} = require("../../src/lib/inbound-sync-helpers");
 
 /**
  * List `/documents/recent` does not include validation steps or full reasons.
@@ -1176,10 +1186,19 @@ async function enrichInboundDocumentsFromLhdnDetails(documents, req) {
   }
 
   const lhdnConfig = await getLHDNConfig();
+  const enrichableStatuses = new Set([
+    "invalid",
+    "cancelled",
+    "rejected",
+    "submitted",
+    "processing",
+    "pending",
+  ]);
   const toEnrich = documents
-    .filter((d) => {
-      const st = (d.status || "").toLowerCase();
-      return st === "invalid" || st === "cancelled" || st === "rejected";
+    .filter((d) => enrichableStatuses.has((d.status || "").toLowerCase()))
+    .sort((a, b) => {
+      const prio = (st) => (isNonTerminalInboundStatus(st) ? 0 : 1);
+      return prio(a.status) - prio(b.status);
     })
     .slice(0, MAX_INBOUND_DETAILS_ENRICH);
 
@@ -4329,48 +4348,6 @@ async function processDocumentData(documentData, detailsData, uuid) {
       parsedDocument = safeJsonParse(documentData.document);
     }
 
-    // Fallback: return basic info if parsing fails
-    function getBasicInfo() {
-      return {
-        uuid: uuid,
-        status: detailsData.status || "Unknown",
-        submissionUid: detailsData.submissionUid || "N/A",
-        longId: detailsData.longId || "N/A",
-        internalId: detailsData.internalId || "N/A",
-        typeName: detailsData.typeName || "Unknown",
-        typeVersionName: detailsData.typeVersionName || "Unknown",
-        issuerTin: detailsData.issuerTin || "N/A",
-        issuerName: detailsData.issuerName || "N/A",
-        receiverTin: detailsData.receiverTin || "N/A",
-        receiverName: detailsData.receiverName || "N/A",
-        dateTimeIssued: detailsData.dateTimeIssued || "N/A",
-        dateTimeReceived: detailsData.dateTimeReceived || "N/A",
-        dateTimeValidated: detailsData.dateTimeValidated || "N/A",
-        totalSales: detailsData.totalSales || 0,
-        totalPayableAmount: detailsData.totalPayableAmount || 0,
-        totalExcludingTax: detailsData.totalExcludingTax || 0,
-        taxAmount:
-          (detailsData.totalSales || 0) - (detailsData.totalExcludingTax || 0),
-        irbmUniqueNo: uuid,
-        irbmlongId: detailsData.longId || "N/A",
-        lineItems: [],
-        supplierInfo: {
-          tin: null,
-          registrationNo: null,
-          taxRegNo: null,
-          idType: "NA",
-          idNumber: "NA",
-        },
-        customerInfo: {
-          tin: null,
-          registrationNo: null,
-          taxRegNo: null,
-          idType: "NA",
-          idNumber: "NA",
-        },
-      };
-    }
-
     // Extract party identification with enhanced error handling
     function getPartyIdentification(partyIdentification) {
       const idTypes = ["TIN", "BRN", "NRIC", "Passport", "Army", "SST", "TTX"];
@@ -7081,67 +7058,85 @@ router.post("/status-check", async (req, res) => {
 
     console.log(`[Status Check] Checking status for ${uuids.length} documents`);
 
-    // Get current status from database
     const currentStatuses = await prisma.wP_INBOUND_STATUS.findMany({
       where: {
-        uuid: { in: uuids }
+        uuid: { in: uuids },
       },
       select: {
         uuid: true,
         status: true,
         dateTimeValidated: true,
         documentStatusReason: true,
-        updated_at: true
-      }
+        updated_at: true,
+      },
     });
 
-    // Check if any documents have been updated in the last 2 minutes
-    const recentlyUpdated = currentStatuses.filter(doc => {
-      if (!doc.updated_at) return false;
-      const updateTime = new Date(doc.updated_at).getTime();
-      const twoMinutesAgo = Date.now() - (2 * 60 * 1000);
-      return updateTime > twoMinutesAgo;
-    });
+    const toReconcile = currentStatuses.filter((doc) =>
+      isNonTerminalInboundStatus(doc.status)
+    );
 
-    // If we have recently updated documents, fetch fresh data from LHDN
-    let changes = [];
-    if (recentlyUpdated.length > 0) {
-      console.log(`[Status Check] Found ${recentlyUpdated.length} recently updated documents`);
+    const beforeByUuid = new Map(
+      currentStatuses.map((doc) => [doc.uuid, doc])
+    );
 
-      // Trigger a background refresh to get latest data
-      try {
-        const freshData = await fetchRecentDocuments(req);
-        if (freshData && freshData.result) {
-          // Save the fresh data to database
-          await saveInboundStatus(freshData);
+    if (toReconcile.length > 0) {
+      await enrichInboundDocumentsFromLhdnDetails(toReconcile, req).catch(
+        (err) =>
+          console.warn(
+            "[Status Check] LHDN details reconcile skipped:",
+            err.message
+          )
+      );
+    }
 
-          // Identify actual changes
-          changes = recentlyUpdated.map(doc => ({
-            uuid: doc.uuid,
-            oldStatus: doc.status,
-            newStatus: doc.status, // Will be updated after save
-            timestamp: doc.updated_at
-          }));
-        }
-      } catch (error) {
-        console.error("[Status Check] Error fetching fresh data:", error);
+    const afterStatuses =
+      toReconcile.length > 0
+        ? await prisma.wP_INBOUND_STATUS.findMany({
+            where: { uuid: { in: toReconcile.map((d) => d.uuid) } },
+            select: {
+              uuid: true,
+              status: true,
+              dateTimeValidated: true,
+              updated_at: true,
+            },
+          })
+        : [];
+
+    const changes = [];
+    for (const after of afterStatuses) {
+      const before = beforeByUuid.get(after.uuid);
+      if (!before) continue;
+
+      const statusChanged =
+        (after.status || "").toLowerCase() !== (before.status || "").toLowerCase();
+      const validatedChanged =
+        (after.dateTimeValidated || null) !== (before.dateTimeValidated || null);
+
+      if (statusChanged || validatedChanged) {
+        changes.push({
+          uuid: after.uuid,
+          oldStatus: before.status,
+          newStatus: after.status,
+          oldDateTimeValidated: before.dateTimeValidated,
+          newDateTimeValidated: after.dateTimeValidated,
+          timestamp: after.updated_at,
+        });
       }
     }
 
     res.json({
       success: true,
-      changes: changes,
+      changes,
       checkedCount: uuids.length,
-      recentlyUpdatedCount: recentlyUpdated.length,
-      timestamp: new Date().toISOString()
+      reconciledCount: toReconcile.length,
+      timestamp: new Date().toISOString(),
     });
-
   } catch (error) {
     console.error("[Status Check] Error:", error);
     res.status(500).json({
       success: false,
       message: "Error checking document status",
-      error: error.message
+      error: error.message,
     });
   }
 });
