@@ -1,6 +1,12 @@
 const prisma = require('../src/lib/prisma');
 const moment = require('moment');
 
+function isDatabaseUnreachableError(error) {
+  if (!error || typeof error.message !== 'string') return false;
+  if (error.code === 'P1001') return true;
+  return error.message.includes("Can't reach database server");
+}
+
 // Error handling middleware
 const errorMiddleware = async (err, req, res, next) => {
   // Check if headers have already been sent
@@ -17,22 +23,23 @@ const errorMiddleware = async (err, req, res, next) => {
   const clientIP = req.ip;
   const userAgent = req.headers['user-agent'];
 
-  try {
-    // Log error to database
-    await prisma.wP_LOGS.create({
-      data: {
-        Description: `Error - ${err.message || 'Unknown error'}`,
-        CreateTS: moment().format('YYYY-MM-DD HH:mm:ss'),
-        LoggedUser: username || 'System',
-        LogType: 'ERROR',
-        Module: 'SYSTEM',
-        Action: 'ERROR',
-        Status: 'ERROR',
-        IPAddress: clientIP
-      }
-    });
-  } catch (logError) {
-    console.error('Error logging to database:', logError);
+  if (!isDatabaseUnreachableError(err)) {
+    try {
+      await prisma.wP_LOGS.create({
+        data: {
+          Description: `Error - ${err.message || 'Unknown error'}`,
+          CreateTS: moment().format('YYYY-MM-DD HH:mm:ss'),
+          LoggedUser: username || 'System',
+          LogType: 'ERROR',
+          Module: 'SYSTEM',
+          Action: 'ERROR',
+          Status: 'ERROR',
+          IPAddress: clientIP
+        }
+      });
+    } catch (logError) {
+      console.error('Error logging to database:', logError);
+    }
   }
 
   // Handle specific error types

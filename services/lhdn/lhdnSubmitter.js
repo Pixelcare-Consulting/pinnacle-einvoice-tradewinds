@@ -14,6 +14,13 @@ const { getActiveSAPConfig } = require('../../config/paths');
 const { processExcelData } = require('./processExcelData');
 const { parseStringPromise } = require('xml2js');
 const { getTokenSession, getConfig } = require('../token.service');
+const jsonminify = require('jsonminify');
+
+const LHDN_LIMITS = {
+  MAX_DOCS_PER_BATCH: 100,
+  MAX_SUBMISSION_SIZE_BYTES: 5 * 1024 * 1024,   // 5 MB
+  MAX_DOCUMENT_SIZE_BYTES: 300 * 1024,           // 300 KB
+};
 
 async function getLHDNConfig() {
     const config = await prisma.wP_CONFIGURATION.findFirst({
@@ -171,17 +178,28 @@ class LHDNSubmitter {
         }
       }
 
-      // Create payload
+      // Minify JSON for consistent hashing and smaller payload (LHDN recommended practice)
+      const minifiedJson = jsonminify(JSON.stringify(lhdnJson));
+      const documentBase64 = Buffer.from(minifiedJson).toString('base64');
+
+      // Enforce 300 KB per-document limit
+      const docSizeBytes = Buffer.byteLength(documentBase64, 'utf8');
+      if (docSizeBytes > LHDN_LIMITS.MAX_DOCUMENT_SIZE_BYTES) {
+        throw new Error(
+          `Document ${invoiceNumber} exceeds LHDN 300 KB limit (${(docSizeBytes / 1024).toFixed(1)} KB). Reduce line items or simplify the invoice.`
+        );
+      }
+
       const payload = {
         "documents": [
           {
             "format": "JSON",
             "documentHash": require('crypto')
               .createHash('sha256')
-              .update(JSON.stringify(lhdnJson))
+              .update(minifiedJson)
               .digest('hex'),
             "codeNumber": invoiceNumber,
-            "document": Buffer.from(JSON.stringify(lhdnJson)).toString('base64')
+            "document": documentBase64
           }
         ]
       };
@@ -545,6 +563,52 @@ class LHDNSubmitter {
       console.error('Error constructing file path:', error);
       throw new Error(`Failed to construct file path: ${error.message}`);
     }
+  }
+
+  /**
+   * Submit documents in batches of up to 100, merging results.
+   * Called automatically when document count exceeds LHDN limit.
+   */
+  async _submitInBatches(docs, token) {
+    const batchSize = LHDN_LIMITS.MAX_DOCS_PER_BATCH;
+    const allAccepted = [];
+    const allRejected = [];
+    let lastSubmissionUid = null;
+
+    for (let i = 0; i < docs.length; i += batchSize) {
+      const batch = docs.slice(i, i + batchSize);
+      const batchNum = Math.floor(i / batchSize) + 1;
+      const totalBatches = Math.ceil(docs.length / batchSize);
+      console.log(`Submitting batch ${batchNum}/${totalBatches} (${batch.length} docs)`);
+
+      const result = await submitDocument(batch, token);
+
+      if (result.status === 'success' && result.data) {
+        if (result.data.acceptedDocuments) allAccepted.push(...result.data.acceptedDocuments);
+        if (result.data.rejectedDocuments) allRejected.push(...result.data.rejectedDocuments);
+        if (result.data.submissionUid) lastSubmissionUid = result.data.submissionUid;
+      } else if (result.status === 'failed') {
+        console.error(`Batch ${batchNum} failed entirely:`, result.error?.message);
+        batch.forEach(doc => {
+          allRejected.push({
+            invoiceCodeNumber: doc.codeNumber,
+            error: result.error || { code: 'BATCH_FAILED', message: 'Batch submission failed' }
+          });
+        });
+      }
+    }
+
+    console.log(`Batch submission complete: ${allAccepted.length} accepted, ${allRejected.length} rejected`);
+
+    return {
+      status: 'success',
+      submissionUid: lastSubmissionUid,
+      data: {
+        submissionUid: lastSubmissionUid,
+        acceptedDocuments: allAccepted,
+        rejectedDocuments: allRejected
+      }
+    };
   }
 
   /**
@@ -1322,6 +1386,12 @@ class LHDNSubmitter {
       }
 
 
+      // Auto batch-split if > 100 docs (LHDN limit: 100 per submission)
+      if (docs.length > LHDN_LIMITS.MAX_DOCS_PER_BATCH) {
+        console.log(`Batch splitting: ${docs.length} docs into batches of ${LHDN_LIMITS.MAX_DOCS_PER_BATCH}`);
+        return await this._submitInBatches(docs, token);
+      }
+
       const result = await submitDocument(docs, token);
       console.log('Submission result:', JSON.stringify(result, null, 2));
 
@@ -1359,9 +1429,20 @@ class LHDNSubmitter {
 
       // Check if there are rejected documents
       if (result.data?.rejectedDocuments?.length > 0) {
-        const rejectedDoc = result.data.rejectedDocuments[0];
+        const accepted = result.data.acceptedDocuments || [];
+        const rejected = result.data.rejectedDocuments;
 
-        // Parse the complex validation error structure
+        // If some documents were accepted, return full result for partial success handling
+        if (accepted.length > 0) {
+          console.log(`Partial success: ${accepted.length} accepted, ${rejected.length} rejected`);
+          if (result.status === 'success' && result.data?.submissionUid) {
+            result.submissionUid = result.data.submissionUid;
+          }
+          return result;
+        }
+
+        // All documents rejected — return as failed with the first error
+        const rejectedDoc = rejected[0];
         const enhancedError = this.parseLHDNValidationError(rejectedDoc);
 
         return {

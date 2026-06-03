@@ -1,8 +1,8 @@
 const request = require('supertest');
 const app = require('../../app');
-const { PrismaClient } = require('@prisma/client');
+const { createPrismaClient } = require('../../src/lib/prisma');
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 describe('Outbound Manual API Tests', () => {
     let authToken;

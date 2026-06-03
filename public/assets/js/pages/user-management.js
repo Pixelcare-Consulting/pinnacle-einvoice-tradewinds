@@ -17,7 +17,7 @@ document.addEventListener('DOMContentLoaded', function() {
 let currentUserId = null;
 let usersTable = null;
 let currentPage = 1;
-let itemsPerPage = 10;
+let itemsPerPage = 999;
 let totalUsers = 0;
 
 function initializeEventListeners() {

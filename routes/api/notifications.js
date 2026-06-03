@@ -1,13 +1,12 @@
 const express = require('express');
 const router = express.Router();
+const prisma = require('../../src/lib/prisma');
 const { NotificationService, NOTIFICATION_TYPES, PRIORITY_LEVELS } = require('../../services/notification.service');
 const { auth } = require('../../middleware');
 const axios = require('axios');
 
 // Get LHDN configuration helper
 async function getLHDNConfig() {
-    const { PrismaClient } = require('../../src/generated/prisma');
-    const prisma = new PrismaClient();
 
     const config = await prisma.wP_CONFIGURATION.findFirst({
         where: {
@@ -248,9 +247,6 @@ router.get('/lhdn-direct', auth.middleware, async (req, res) => {
 // Get notifications from WP_LOGS for current user
 router.get('/logs', auth.middleware, async (req, res) => {
     try {
-        const { PrismaClient } = require('../../src/generated/prisma');
-        const prisma = new PrismaClient();
-
         const userId = req.session.user.id;
         const username = req.session.user.username;
 
@@ -352,9 +348,6 @@ router.get('/combined', auth.middleware, async (req, res) => {
 
         // Get log notifications if requested
         if (includeLogNotifications === 'true') {
-            const { PrismaClient } = require('../../src/generated/prisma');
-            const prisma = new PrismaClient();
-
             const username = req.session.user.username;
             const logs = await prisma.wP_LOGS.findMany({
                 where: {

@@ -1,6 +1,5 @@
-const { PrismaClient } = require('../src/generated/prisma');
+const prisma = require('../src/lib/prisma');
 const { NotificationService, NOTIFICATION_TYPES, PRIORITY_LEVELS } = require('./notification.service');
-const prisma = new PrismaClient();
 
 // Announcement types
 const ANNOUNCEMENT_TYPES = {

@@ -27,11 +27,12 @@ module.exports = {
       env_production: {
         NODE_ENV: "production",
         SECURE_COOKIE: "true",
-        TRUST_PROXY: "true",
+        TRUST_PROXY: "false",
+        NODE_DIRECT_HTTPS: "true",
         UV_THREADPOOL_SIZE: 2,
-        HTTPS_ENABLED: "true",
-        SSL_KEY_PATH: "./ssl/server.key",
-        SSL_CERT_PATH: "./ssl/server.crt",
+        SSL_KEY_PATH: "./ssl/e-invoice_tradewindscorp-insbrok_com.key",
+        SSL_CERT_PATH: "./ssl/e-invoice_tradewindscorp-insbrok_com.crt",
+        SSL_CA_PATH: "./ssl/DigiCertCA.crt",
       },      
 
       // === Logging: Reduce I/O impact ===

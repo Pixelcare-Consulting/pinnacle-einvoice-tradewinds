@@ -314,7 +314,7 @@ function getPortalUrl(environment) {
 }
 
 // Enhanced document fetching function with smart caching and incremental sync
-const fetchRecentDocuments = async (req) => {
+const fetchRecentDocumentsImpl = async (req) => {
   // console.log("Starting enhanced document fetch process...");
 
   try {
@@ -336,7 +336,6 @@ const fetchRecentDocuments = async (req) => {
       orderBy: {
         dateTimeReceived: "desc",
       },
-      take: 9999, // Limit to latest 1000 records
     });
 
     // Get the most recent document timestamp for incremental sync
@@ -551,14 +550,17 @@ const fetchRecentDocuments = async (req) => {
             //   `Mapped ${mappedDocuments.length} documents from API response`
             // );
 
-            // Smart pagination control for incremental sync
+            // Always upsert every document on this page. Incremental sync must NOT filter
+            // what we save: same UUID can change Invalid → Valid with the same or older
+            // dateTimeValidated vs DB "last sync" time; filtering by timestamp skipped those upserts
+            // and left stale status in WP_INBOUND_STATUS.
+            documents.push(...mappedDocuments);
+
+            // Incremental heuristics: only decide when to stop requesting further pages
             let newDocumentsFound = 0;
             let existingDocumentsFound = 0;
 
             if (incrementalSync && lastSyncTimestamp) {
-              // Filter out documents that are older than our last sync timestamp
-              const newDocuments = [];
-
               for (const doc of mappedDocuments) {
                 const docTimestamp =
                   doc.dateTimeValidated || doc.dateTimeReceived;
@@ -567,43 +569,22 @@ const fetchRecentDocuments = async (req) => {
                   docTimestamp &&
                   new Date(docTimestamp) > new Date(lastSyncTimestamp)
                 ) {
-                  newDocuments.push(doc);
                   newDocumentsFound++;
                 } else {
                   existingDocumentsFound++;
-                  // If we're finding old documents, we can stop pagination early
                   if (existingDocumentsFound >= 10) {
-                    // Stop if we find 10 consecutive old documents
-                    // console.log(
-                    //   `Found ${existingDocumentsFound} existing documents, stopping pagination early`
-                    // );
                     hasMorePages = false;
                     break;
                   }
                 }
               }
 
-              documents.push(...newDocuments);
-              // console.log(
-              //   `Incremental sync: ${newDocumentsFound} new documents, ${existingDocumentsFound} existing documents from page ${pageNo}`
-              // );
-
-              // If we found mostly existing documents, stop pagination
               if (
                 existingDocumentsFound > newDocumentsFound &&
                 existingDocumentsFound >= 5
               ) {
-                // console.log(
-                //   "Mostly existing documents found, stopping incremental sync"
-                // );
                 hasMorePages = false;
               }
-            } else {
-              // Full sync - add all documents
-              documents.push(...mappedDocuments);
-              // console.log(
-              //   `Full sync: Added ${mappedDocuments.length} documents from page ${pageNo}`
-              // );
             }
 
             // Limit incremental sync to maxIncrementalPages to prevent excessive API calls
@@ -796,6 +777,11 @@ const fetchRecentDocuments = async (req) => {
       // Save the fetched documents to database
       await saveInboundStatus({ result: documents }, req);
 
+      // List API omits validation steps; details API is authoritative for status/reasons.
+      await enrichInboundDocumentsFromLhdnDetails(documents, req).catch((err) =>
+        console.warn("[Inbound enrich] Skipped:", err.message)
+      );
+
       // If we have submission UIDs, poll their status
       const uniquesubmissionuids = [
         ...new Set(documents.map((doc) => doc.submissionuid).filter(Boolean)),
@@ -836,10 +822,19 @@ const fetchRecentDocuments = async (req) => {
         details: { count: documents.length },
       });
 
+      // Return ALL DB records (not just the API batch) so existing data is preserved.
+      const allDbRecords = await prisma.wP_INBOUND_STATUS.findMany({
+        orderBy: { dateTimeReceived: "desc" },
+      });
+      console.log(
+        `[fetchRecentDocuments] API synced ${documents.length} docs, returning ${allDbRecords.length} total from DB`
+      );
+
       return {
-        result: documents,
+        result: allDbRecords,
         cached: false,
         fromApi: true,
+        fromDatabase: true,
       };
     } catch (error) {
       console.error("Error fetching from LHDN API:", error.message);
@@ -881,13 +876,70 @@ const fetchRecentDocuments = async (req) => {
     };
   }
 };
+
+/**
+ * Run at most one inbound LHDN /documents/recent sync at a time. Overlapping calls (e.g. force
+ * refresh + background sync from getCachedDocuments) used to interleave saveInboundStatus and
+ * could apply API page batches out of order, flipping the same UUID Valid ↔ Invalid.
+ */
+let inboundRecentSyncChain = Promise.resolve();
+const fetchRecentDocuments = async (req) => {
+  const p = inboundRecentSyncChain.then(() => fetchRecentDocumentsImpl(req));
+  inboundRecentSyncChain = p.catch(() => {});
+  return p;
+};
+
 // Function to get documents - no caching, direct fetch
 async function getCachedDocuments(req) {
   const useDatabase = req.query.useDatabase === "true";
   const incremental = req.query.incremental === "true";
+  const forceRefresh = req.query.forceRefresh === "true";
   let data;
 
   try {
+    // Explicit refresh: wait for LHDN /documents/recent sync first, then return fresh rows.
+    // Without this, we only returned WP_INBOUND_STATUS immediately and fetched LHDN in the background
+    // (user never saw new invoices until a later request).
+    if (forceRefresh) {
+      try {
+        console.log(
+          "[getCachedDocuments] forceRefresh=true — awaiting fetchRecentDocuments"
+        );
+        await fetchRecentDocuments(req);
+      } catch (frErr) {
+        console.error(
+          "[getCachedDocuments] forceRefresh fetchRecentDocuments failed:",
+          frErr.message
+        );
+      }
+
+      // After sync (success or fail), return ALL records from DB so we never
+      // replace 1000 existing rows with only the ~100 the API page returned.
+      try {
+        const allDocuments = await prisma.wP_INBOUND_STATUS.findMany({
+          orderBy: { dateTimeReceived: "desc" },
+        });
+        if (allDocuments && allDocuments.length > 0) {
+          console.log(
+            `[getCachedDocuments] forceRefresh done — returning ${allDocuments.length} records from DB`
+          );
+          return {
+            result: allDocuments,
+            cached: false,
+            fromDatabase: true,
+            fromApi: true,
+            timestamp: new Date().toISOString(),
+          };
+        }
+      } catch (dbErr) {
+        console.error(
+          "[getCachedDocuments] DB read after forceRefresh failed:",
+          dbErr.message
+        );
+      }
+      // Fall through to DB-first path if both API and post-sync DB read failed
+    }
+
     // If useDatabase is true OR incremental is true, try to get from database first
     if (useDatabase || incremental) {
       try {
@@ -899,7 +951,6 @@ async function getCachedDocuments(req) {
           orderBy: {
             dateTimeReceived: "desc",
           },
-          take: 9999, // Limit to latest 1000 records
         });
 
         if (dbDocuments && dbDocuments.length > 0) {
@@ -1093,6 +1144,124 @@ async function withDbRetry(fn, { retries = 5, baseDelay = 200 } = {}) {
   }
 }
 
+const formatInboundDateField = (date) => {
+  if (!date) return null;
+  if (typeof date === "string") return date;
+  if (date instanceof Date) return date.toISOString();
+  return null;
+};
+
+/** Max detail calls per recent sync (LHDN rate limits; details is heavier than list). */
+const MAX_INBOUND_DETAILS_ENRICH = 35;
+
+/**
+ * List `/documents/recent` does not include validation steps or full reasons.
+ * For Invalid rows (and list/ details status mismatch), call GET .../documents/{uuid}/details
+ * to persist validationResults + documentStatusReason and reconcile status with the authoritative details API.
+ */
+async function enrichInboundDocumentsFromLhdnDetails(documents, req) {
+  if (!documents?.length) return;
+
+  let token = req.session?.accessToken;
+  if (!token) {
+    try {
+      token = await readTokenFromFile();
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  if (!token) {
+    console.warn("[Inbound enrich] No access token; skipping details enrichment");
+    return;
+  }
+
+  const lhdnConfig = await getLHDNConfig();
+  const toEnrich = documents
+    .filter((d) => {
+      const st = (d.status || "").toLowerCase();
+      return st === "invalid" || st === "cancelled" || st === "rejected";
+    })
+    .slice(0, MAX_INBOUND_DETAILS_ENRICH);
+
+  if (toEnrich.length === 0) return;
+
+  console.log(
+    `[Inbound enrich] Fetching LHDN details for ${toEnrich.length} document(s) (validation + status reconcile)`
+  );
+
+  for (const doc of toEnrich) {
+    const uuid = doc.uuid;
+    if (!uuid) continue;
+
+    try {
+      const { data: details } = await axios.get(
+        `${lhdnConfig.baseUrl}/api/v1.0/documents/${uuid}/details`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          timeout: lhdnConfig.timeout || 30000,
+        }
+      );
+
+      const data = {
+        updated_at: new Date().toISOString(),
+      };
+
+      if (details.validationResults) {
+        data.validationResults = JSON.stringify({
+          status: details.status,
+          validationResults: details.validationResults,
+          enrichedAt: new Date().toISOString(),
+        });
+      }
+      if (details.documentStatusReason !== undefined) {
+        data.documentStatusReason = details.documentStatusReason || null;
+      }
+      if (details.status) {
+        data.status = details.status;
+      }
+      if (details.dateTimeValidated) {
+        data.dateTimeValidated = formatInboundDateField(details.dateTimeValidated);
+      }
+
+      await prisma.wP_INBOUND_STATUS.update({
+        where: { uuid },
+        data,
+      });
+
+      const idx = documents.findIndex((d) => d.uuid === uuid);
+      if (idx !== -1) {
+        documents[idx] = {
+          ...documents[idx],
+          status: data.status ?? documents[idx].status,
+          documentStatusReason:
+            data.documentStatusReason !== undefined
+              ? data.documentStatusReason
+              : documents[idx].documentStatusReason,
+          dateTimeValidated:
+            data.dateTimeValidated ?? documents[idx].dateTimeValidated,
+        };
+      }
+
+      if (details.status && doc.status && details.status !== doc.status) {
+        console.log(
+          `[Inbound enrich] Status reconciled for ${uuid}: list had "${doc.status}" → details API "${details.status}"`
+        );
+      }
+    } catch (e) {
+      console.warn(
+        `[Inbound enrich] GET details failed for ${uuid}:`,
+        e.response?.status || e.message
+      );
+    }
+
+    await wait(450);
+  }
+}
+
 // Enhanced transaction wrapper for database operations
 async function withTransaction(fn, { retries = 3, baseDelay = 300 } = {}) {
   let attempt = 0;
@@ -1172,8 +1341,9 @@ const saveInboundStatus = async (data, req = null) => {
 
   // Process batches sequentially to reduce concurrency
   for (const batch of batches) {
-    // Process documents in smaller chunks to reduce deadlock probability
-    const chunkSize = 5; // Reduced from 10 to 5 to minimize transaction conflicts
+    // One upsert at a time: parallel chunks (previously 5) exhausted the Prisma pool
+    // (default connection_limit=5) when combined with sessions and other routes → P2024.
+    const chunkSize = 1;
     for (let i = 0; i < batch.length; i += chunkSize) {
       const chunk = batch.slice(i, i + chunkSize);
       const results = await Promise.all(
@@ -1200,7 +1370,9 @@ const saveInboundStatus = async (data, req = null) => {
               existingRecord.documentStatusReason !== item.documentStatusReason
             );
 
-            // Use transaction wrapper for WP_INBOUND_STATUS upsert
+            // WP_INBOUND_STATUS.uuid is the LHDN document identifier (PK). LHDN returns it for all
+            // outcomes so we can call getDocument/details/validation; only Valid docs have an official
+            // IRBM Unique Identifier No. for display purposes (see documents/recent: irbmUniqueIdentifierNo).
             await withTransaction(async (tx) => {
               return await tx.wP_INBOUND_STATUS.upsert({
                 where: { uuid: item.uuid },
@@ -1220,9 +1392,6 @@ const saveInboundStatus = async (data, req = null) => {
                   status: item.status,
                   documentStatusReason: item.documentStatusReason,
                   updated_at: new Date().toISOString(),
-                  // Add status change tracking
-                  statusChangeDetected: isStatusChange,
-                  lastStatusChange: isStatusChange ? new Date().toISOString() : existingRecord?.lastStatusChange,
                   totalSales:
                     item.totalSales || item.total || item.netAmount || 0,
                   totalExcludingTax: item.totalExcludingTax || 0,
@@ -1337,7 +1506,7 @@ const saveInboundStatus = async (data, req = null) => {
 
             // Log status changes for monitoring
             if (isStatusChange) {
-              console.log(`📊 Status change detected for ${item.uuid}: ${existingRecord?.status} → ${item.status}`);
+              //console.log(`📊 Status change detected for ${item.uuid}: ${existingRecord?.status} → ${item.status}`);
 
               // Log status change for analytics
               await LoggingService.log({
@@ -1819,7 +1988,6 @@ router.get("/documents/recent", async (req, res) => {
           orderBy: {
             dateTimeReceived: "desc",
           },
-          take: 9999, // Limit to latest 1000 records
         });
 
         if (dbDocuments && dbDocuments.length > 0) {
@@ -1901,7 +2069,6 @@ router.get("/documents/recent", async (req, res) => {
             orderBy: {
               dateTimeReceived: "desc",
             },
-            take: 9999, // Limit to latest 1000 records
           });
 
           if (dbDocuments && dbDocuments.length > 0) {
@@ -2029,8 +2196,16 @@ router.get("/documents/recent", async (req, res) => {
             processingTimeMinutes = null;
           }
         }
+        const statusNorm = (doc.status || "").toLowerCase();
+        const isValidDoc = statusNorm === "valid";
+        const isInvalidDoc = statusNorm === "invalid";
+
         return {
+          // Always present: LHDN technical document id (DB PK, detail API path). Not the same as
+          // showing the IRBM Unique Identifier No. in the UI when status !== Valid.
           uuid: doc.uuid,
+          // Official IRBM Unique Identifier No. for display (MyInvois): only when LHDN accepted the doc.
+          irbmUniqueIdentifierNo: isValidDoc ? doc.uuid : null,
           submissionUid: doc.submissionUid,
           longId: doc.longId,
           internalId: doc.internalId,
@@ -2044,10 +2219,21 @@ router.get("/documents/recent", async (req, res) => {
           validatedDateFormatted: formatDateForUI(validatedDate),
           dateInfo: {
             date: formatDateForUI(validatedDate || receivedDate),
-            type: validatedDate ? "Validated" : "Submitted",
-            tooltip: validatedDate
+            type:
+              isValidDoc && validatedDate
+                ? "Validated"
+                : isInvalidDoc && validatedDate
+                  ? "Invalid"
+                  : validatedDate
+                    ? "Processed"
+                    : "Submitted",
+            tooltip: isValidDoc && validatedDate
               ? "LHDN Validation Date"
-              : "LHDN Submission Date",
+              : isInvalidDoc && validatedDate
+                ? "LHDN response timestamp (document not valid)"
+                : validatedDate
+                  ? "LHDN timestamp"
+                  : "LHDN Submission Date",
           },
           status: doc.status,
           totalSales: doc.totalSales || 0,
@@ -2066,6 +2252,7 @@ router.get("/documents/recent", async (req, res) => {
           documentCurrency:
             doc.documentCurrency || doc.currency || doc.currencyCode || "MYR",
           processingTimeMinutes,
+          ...extractInboundSstFromRow(doc),
         };
       });
 
@@ -2073,6 +2260,15 @@ router.get("/documents/recent", async (req, res) => {
         "Sending response with formatted documents:",
         formattedDocuments.length
       );
+
+      // Suggest full sync when the result set hits a full LHDN page — there may
+      // be more documents beyond the first page. Do NOT use "<= page size":
+      // small tenants with fewer than 100 invoices would loop forever because
+      // every /documents/recent load would set needsFullSync and the client
+      // auto-triggers /documents/search after each reload.
+      const LHDN_PAGE_SIZE = 100;
+      const needsFullSync =
+        formattedDocuments.length === LHDN_PAGE_SIZE;
 
       res.json({
         success: true,
@@ -2083,6 +2279,7 @@ router.get("/documents/recent", async (req, res) => {
           fromDatabase: fetchResult.fromDatabase,
           fromApi: fetchResult.fromApi,
           fallback: fetchResult.fallback,
+          needsFullSync,
           error: fetchResult.error
             ? { message: fetchResult.error.message }
             : undefined,
@@ -3699,6 +3896,103 @@ router.get("/test/config", async (req, res) => {
   }
 });
 
+/** Parse JSON safely for inbound DB columns */
+function safeJsonParseInboundColumn(str) {
+  if (!str || typeof str !== "string") return null;
+  try {
+    return JSON.parse(str);
+  } catch {
+    return null;
+  }
+}
+
+/** Supplier / buyer SST registration for inbound list rows and CSV export */
+function extractInboundSstFromRow(doc) {
+  let issuer =
+    doc.issuerTaxRegNo ||
+    doc.supplierSstNo ||
+    doc.supplierSST ||
+    doc.SupplierSST ||
+    "";
+  let receiver =
+    doc.receiverTaxRegNo ||
+    doc.receiverSstNo ||
+    doc.buyerSstNo ||
+    doc.BuyerSST ||
+    "";
+
+  if (doc.documentDetails) {
+    const parsed = safeJsonParseInboundColumn(doc.documentDetails);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const di = parsed.documentInfo || parsed;
+      if (!issuer) {
+        issuer =
+          parsed.supplierSstNo ||
+          di.supplierSstNo ||
+          parsed.supplierInfo?.taxRegNo ||
+          di.supplierInfo?.taxRegNo ||
+          "";
+      }
+      if (!receiver) {
+        receiver =
+          parsed.receiverSstNo ||
+          di.receiverSstNo ||
+          parsed.customerInfo?.taxRegNo ||
+          di.customerInfo?.taxRegNo ||
+          "";
+      }
+    }
+  }
+
+  return {
+    issuerTaxRegNo: issuer ? String(issuer) : null,
+    receiverTaxRegNo: receiver ? String(receiver) : null,
+  };
+}
+
+/**
+ * When LHDN /raw or /details returns 404 (e.g. env mismatch, retention, or API drift),
+ * still allow View if we have a row in WP_INBOUND_STATUS.
+ */
+function buildDetailsDataFromInboundRow(row) {
+  const parsed = row.documentDetails
+    ? safeJsonParseInboundColumn(row.documentDetails)
+    : null;
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return parsed;
+  }
+  return {
+    status: row.status,
+    submissionUid: row.submissionUid,
+    longId: row.longId,
+    internalId: row.internalId,
+    typeName: row.typeName,
+    typeVersionName: row.typeVersionName,
+    issuerTin: row.issuerTin,
+    issuerName: row.issuerName,
+    receiverTin: row.receiverId,
+    receiverName: row.receiverName,
+    dateTimeIssued: row.dateTimeIssued,
+    dateTimeReceived: row.dateTimeReceived,
+    dateTimeValidated: row.dateTimeValidated,
+    documentStatusReason: row.documentStatusReason,
+    totalSales: row.totalSales != null ? Number(row.totalSales) : 0,
+    totalExcludingTax:
+      row.totalExcludingTax != null ? Number(row.totalExcludingTax) : 0,
+    totalPayableAmount:
+      row.totalPayableAmount != null ? Number(row.totalPayableAmount) : 0,
+    totalDiscount: row.totalDiscount != null ? Number(row.totalDiscount) : 0,
+    totalNetAmount: row.totalNetAmount != null ? Number(row.totalNetAmount) : 0,
+  };
+}
+
+function buildDocumentDataFromInboundRow(row) {
+  if (row.document && typeof row.document === "string" && row.document.trim()) {
+    return { document: row.document };
+  }
+  return { document: null };
+}
+
 // Enhanced display-details endpoint with intelligent caching
 router.get("/documents/:uuid/display-details", async (req, res) => {
   const lhdnConfig = await getLHDNConfig();
@@ -3925,6 +4219,53 @@ router.get("/documents/:uuid/display-details", async (req, res) => {
       }
     }
 
+    // LHDN 404: row may exist locally even when /raw or /details no longer resolve
+    if (error.response?.status === 404) {
+      try {
+        const row = await prisma.wP_INBOUND_STATUS.findUnique({
+          where: { uuid },
+        });
+        if (row) {
+          const detailsData = buildDetailsDataFromInboundRow(row);
+          const documentData = buildDocumentDataFromInboundRow(row);
+          const processedData = await processDocumentData(
+            documentData,
+            detailsData,
+            uuid
+          );
+          if (row.validationResults) {
+            try {
+              processedData.validationResults = JSON.parse(
+                row.validationResults
+              );
+            } catch {
+              /* keep without parsed validation */
+            }
+          }
+          console.log(
+            `[Inbound View] LHDN 404 for ${uuid}; returning WP_INBOUND_STATUS fallback`
+          );
+          return res.json({
+            success: true,
+            documentInfo: processedData,
+            supplierInfo: processedData.supplierInfo,
+            customerInfo: processedData.customerInfo,
+            paymentInfo: processedData.paymentInfo,
+            cached: false,
+            fallback: true,
+            source: "database",
+            warning:
+              "LHDN did not return this document (404). Showing last data stored locally.",
+          });
+        }
+      } catch (dbFallbackErr) {
+        console.error(
+          `[Inbound View] DB fallback after LHDN 404 failed for ${uuid}:`,
+          dbFallbackErr.message
+        );
+      }
+    }
+
     // Determine error type and provide appropriate message
     let errorMessage = "Failed to fetch document details";
     let statusCode = 500;
@@ -4108,6 +4449,8 @@ async function processDocumentData(documentData, detailsData, uuid) {
     function getBasicInfo() {
       return {
         uuid: uuid,
+        document:
+          typeof documentData?.document === "string" ? documentData.document : null,
         status: detailsData.status || "Unknown",
         submissionUid: detailsData.submissionUid || "N/A",
         longId: detailsData.longId || "N/A",
@@ -4314,6 +4657,9 @@ async function processDocumentData(documentData, detailsData, uuid) {
     // Final structured response
     return {
       uuid: documentData.uuid || uuid,
+      // Preserve UBL JSON string for PDF generation (POST /documents/:uuid/pdf)
+      document:
+        typeof documentData.document === "string" ? documentData.document : null,
       submissionUid: detailsData.submissionUid || "N/A",
       longId: detailsData.longId || "N/A",
       irbmlongId: detailsData.longId || "N/A",
@@ -5020,20 +5366,129 @@ async function processDocumentData(documentData, detailsData, uuid) {
 //   }
 // });
 
+/** Build LHDN-shaped /raw payload from the JSON body the client sends to POST /pdf */
+function buildPdfRawDataFromClientBody(clientBody, uuid) {
+  if (!clientBody || typeof clientBody !== "object") return null;
+  const di = clientBody.documentInfo;
+  if (!di || typeof di !== "object") return null;
+  if (typeof di.document === "string" && di.document.trim()) {
+    return {
+      document: di.document,
+      longId: di.longId ?? di.irbmlongId,
+      uuid: di.uuid || uuid,
+      internalId: di.internalId,
+      typeVersionName: di.typeVersionName,
+      dateTimeValidated: di.dateTimeValidated,
+      totalNetAmount: di.totalNetAmount,
+      digitalSignature: di.digitalSignature,
+    };
+  }
+  if (di.parsedDocument && typeof di.parsedDocument === "object") {
+    try {
+      return {
+        document: JSON.stringify(di.parsedDocument),
+        longId: di.longId ?? di.irbmlongId,
+        uuid: di.uuid || uuid,
+        internalId: di.internalId,
+        typeVersionName: di.typeVersionName,
+        dateTimeValidated: di.dateTimeValidated,
+        totalNetAmount: di.totalNetAmount,
+        digitalSignature: di.digitalSignature,
+      };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Same shape as LHDN GET /documents/{uuid}/raw — offline fallbacks when LHDN
+ * cannot be used (404 Not Found, 429 Too Many Requests, etc.).
+ */
+async function fetchRawDataForPdf(uuid, accessToken, lhdnConfig, options = {}) {
+  try {
+    const response = await axios.get(
+      `${lhdnConfig.baseUrl}/api/v1.0/documents/${uuid}/raw`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 30000,
+      }
+    );
+    return response.data;
+  } catch (err) {
+    const status = err.response?.status;
+    const useOfflineFallback = status === 404 || status === 429;
+    if (!useOfflineFallback) {
+      throw err;
+    }
+
+    const reason = status === 429 ? "429 rate limit" : "404 not found";
+    const fromBody = buildPdfRawDataFromClientBody(options.clientBody, uuid);
+    if (fromBody?.document) {
+      console.log(
+        `[PDF] LHDN /raw ${reason}; using document payload from client body for ${uuid}`
+      );
+      return fromBody;
+    }
+    const row = await prisma.wP_INBOUND_STATUS.findUnique({
+      where: { uuid },
+      select: {
+        document: true,
+        longId: true,
+        uuid: true,
+        internalId: true,
+        typeVersionName: true,
+        dateTimeValidated: true,
+        totalNetAmount: true,
+      },
+    });
+    const dbDoc =
+      row?.document != null && String(row.document).trim()
+        ? String(row.document).trim()
+        : null;
+    if (dbDoc) {
+      console.log(
+        `[PDF] LHDN /raw ${reason}; using WP_INBOUND_STATUS.document for ${uuid}`
+      );
+      return {
+        document: dbDoc,
+        longId: row.longId,
+        uuid: row.uuid,
+        internalId: row.internalId,
+        typeVersionName: row.typeVersionName,
+        dateTimeValidated: row.dateTimeValidated,
+        totalNetAmount:
+          row.totalNetAmount != null ? Number(row.totalNetAmount) : undefined,
+        digitalSignature: null,
+      };
+    }
+
+    console.warn(
+      `[PDF] LHDN /raw ${reason} for ${uuid}: no UBL in request body and WP_INBOUND_STATUS.document is empty — cannot build PDF`
+    );
+    const noSource = new Error(
+      "Cannot generate PDF: MyInvois did not return the raw document and no full invoice (UBL) is stored for this row. The list view only keeps summary fields unless document JSON is saved. Retry when the API is available, or sync in a way that persists the document payload."
+    );
+    noSource.statusCode = 422;
+    noSource.code = "PDF_NO_SOURCE";
+    throw noSource;
+  }
+}
+
 // Helper function to get template data
-async function getTemplateData(uuid, accessToken, user) {
+async function getTemplateData(uuid, accessToken, user, options = {}) {
   // Get LHDN configuration
   const lhdnConfig = await getLHDNConfig();
 
-  // Get raw document data
-  const response = await axios.get(
-    `${lhdnConfig.baseUrl}/api/v1.0/documents/${uuid}/raw`,
-    {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    }
+  const rawData = await fetchRawDataForPdf(
+    uuid,
+    accessToken,
+    lhdnConfig,
+    options
   );
 
   // Get company data using Prisma
@@ -5058,7 +5513,6 @@ async function getTemplateData(uuid, accessToken, user) {
   }
 
   // Parse document data
-  const rawData = response.data;
   const documentData = JSON.parse(rawData.document);
   const invoice = documentData.Invoice[0];
 
@@ -5430,11 +5884,20 @@ async function getTemplateData(uuid, accessToken, user) {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }),
-    TotalNetAmount:
-      parseFloat(rawData.totalNetAmount).toLocaleString("en-MY", {
+    TotalNetAmount: (() => {
+      const fromRaw =
+        rawData.totalNetAmount != null && rawData.totalNetAmount !== ""
+          ? parseFloat(rawData.totalNetAmount)
+          : NaN;
+      const fromInvoice = parseFloat(
+        invoice.LegalMonetaryTotal?.[0]?.TaxExclusiveAmount?.[0]._ || 0
+      );
+      const n = !Number.isNaN(fromRaw) ? fromRaw : fromInvoice;
+      return n.toLocaleString("en-MY", {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
-      }) || "0.00",
+      });
+    })(),
     Subtotal: parseFloat(
       invoice.LegalMonetaryTotal?.[0]?.LineExtensionAmount?.[0]._ || 0
     ).toLocaleString("en-MY", {
@@ -5537,7 +6000,13 @@ async function getTemplateData(uuid, accessToken, user) {
     qrCode: qrCodeDataUrl,
     QRLink: qrCodeUrl,
     DigitalSignature: rawData.digitalSignature || "-",
-    validationDateTime: new Date(rawData.dateTimeValidated).toLocaleString(),
+    validationDateTime: (() => {
+      if (!rawData.dateTimeValidated) return "N/A";
+      const d = new Date(rawData.dateTimeValidated);
+      return Number.isNaN(d.getTime())
+        ? String(rawData.dateTimeValidated)
+        : d.toLocaleString();
+    })(),
   };
 
   return templateData;
@@ -5624,6 +6093,43 @@ router.post("/documents/:uuid/pdf", async (req, res) => {
     const forceRegenerate = req.query.force === "true";
     console.log(`[${requestId}] Force regenerate:`, forceRegenerate);
 
+    // Reuse PDF/HTML already on disk (e.g. generated earlier when LHDN worked).
+    // Without this, a 404/429 from /raw blocks preview even when the file exists.
+    if (!forceRegenerate) {
+      try {
+        await fsPromises.access(pdfPath);
+        console.log(
+          `[${requestId}] Existing PDF on disk for ${uuid} — returning without calling LHDN`
+        );
+        return res.json({
+          success: true,
+          url: `/temp/${uuid}.pdf`,
+          cached: true,
+          fromDisk: true,
+          message: "Loading existing PDF from server temp",
+        });
+      } catch {
+        /* no pdf */
+      }
+      const htmlFallbackPath = path.join(tempDir, `${uuid}.html`);
+      try {
+        await fsPromises.access(htmlFallbackPath);
+        console.log(
+          `[${requestId}] Existing HTML fallback on disk for ${uuid} — returning without calling LHDN`
+        );
+        return res.json({
+          success: true,
+          url: `/temp/${uuid}.html`,
+          cached: true,
+          fromDisk: true,
+          isEmergencyFallback: true,
+          message: "Loading existing HTML preview from server temp",
+        });
+      } catch {
+        /* no html */
+      }
+    }
+
     // Check cache for template data first
     let templateData = lhdnCache.get('pdf-template', uuid, req.session.user.id);
 
@@ -5632,7 +6138,8 @@ router.post("/documents/:uuid/pdf", async (req, res) => {
       templateData = await getTemplateData(
         uuid,
         req.session.accessToken,
-        req.session.user
+        req.session.user,
+        { clientBody: req.body }
       );
 
       // Cache the template data
@@ -5807,6 +6314,14 @@ router.post("/documents/:uuid/pdf", async (req, res) => {
         success: false,
         message: "Server is busy. Please try again later.",
         retryAfter: error.response.headers["retry-after"] || 30,
+      });
+    }
+
+    if (error.statusCode === 422 || error.code === "PDF_NO_SOURCE") {
+      return res.status(422).json({
+        success: false,
+        code: "PDF_NO_SOURCE",
+        message: error.message,
       });
     }
 

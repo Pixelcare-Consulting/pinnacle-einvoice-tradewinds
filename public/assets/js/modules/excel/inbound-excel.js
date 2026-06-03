@@ -551,8 +551,9 @@ class InvoiceTableManager {
     }
     this.currentDataSource = "live"; // Use live LHDN data as the only data source
     this.table = null;
-    this.isRefreshing = false; // Add refresh state tracking
-    this.lastRefreshTime = 0; // Track last refresh time for rate limiting
+    this.isRefreshing = false;
+    this.isFullSyncing = false;
+    this.lastRefreshTime = 0;
     this.refreshCooldown = 3000; // 3 second cooldown between refreshes (optimized)
     this.cacheTimeout = 30000; // 30 seconds cache timeout (optimized from default)
 
@@ -1304,6 +1305,13 @@ class InvoiceTableManager {
       }
     });
 
+    // Handle Full Sync button
+    $("#fullSyncBtn").on("click", async function (e) {
+      e.preventDefault();
+      if (self.isFullSyncing || $(this).prop("disabled")) return;
+      await self.fullSync();
+    });
+
     // Handle refresh button with enhanced functionality
     $("#refreshDataSource").on("click", async function (e) {
       e.preventDefault();
@@ -1382,9 +1390,11 @@ class InvoiceTableManager {
 
       // Queue the request to manage concurrency
       await this.requestQueue.add(async () => {
-        // Update the table's AJAX URL to new search endpoint
+        // Use /documents/recent (MyInvois recent list), not /documents/search (heavy audit search + lock)
         if (this.table) {
-          this.table.ajax.url("/api/lhdn/documents/search").load(() => {
+          window.forceRefreshLHDN = true;
+          this.table.ajax.url("/api/lhdn/documents/recent").load(() => {
+            window.forceRefreshLHDN = false;
             this.hideLoadingBackdrop();
             this.updateCardTotals();
           });
@@ -1413,8 +1423,88 @@ class InvoiceTableManager {
     }
   }
 
-  // Archive and outbound data sources have been removed for simplicity
-  // Only live LHDN data is now supported
+  async fullSync() {
+    if (this.isFullSyncing) {
+      console.log("[FullSync] Already in progress, ignoring");
+      return;
+    }
+
+    this.isFullSyncing = true;
+    const btn = $("#fullSyncBtn");
+    const originalHtml = btn.html();
+
+    try {
+      btn.prop("disabled", true);
+      btn.html('<i class="bi bi-cloud-download me-1 spin"></i>Syncing...');
+
+      this.showLoadingBackdrop(
+        "Full Sync — Fetching All Documents",
+        "Searching LHDN for the last 30 days of documents..."
+      );
+
+      const response = await fetch("/api/lhdn/documents/search", {
+        method: "GET",
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => null);
+        throw new Error(
+          errData?.error?.message ||
+            `Search API returned status ${response.status}`
+        );
+      }
+
+      const data = await response.json();
+      const count = data?.result?.length || data?.metadata?.total || 0;
+
+      console.log(`[FullSync] Search API returned ${count} documents`);
+
+      localStorage.removeItem("inboundTableData");
+      localStorage.removeItem("lastDataUpdate");
+
+      if (this.table) {
+        this.table.ajax.url("/api/lhdn/documents/recent").load(() => {
+          // Clear only after reload so dataFilter does not see needsFullSync
+          // while fullSyncTriggered is already gone (avoids auto-sync loops).
+          localStorage.removeItem("fullSyncTriggered");
+          this.hideLoadingBackdrop();
+          this.updateCardTotals();
+          updateCharts();
+        });
+      } else {
+        localStorage.removeItem("fullSyncTriggered");
+      }
+
+      ToastManager.show(
+        `Full sync complete — ${count} documents synced from LHDN`,
+        "success",
+        5000
+      );
+    } catch (error) {
+      console.error("[FullSync] Error:", error);
+      this.hideLoadingBackdrop();
+
+      if (error.message.includes("already in progress") || error.message.includes("locked")) {
+        ToastManager.show(
+          "A search is already running. Please wait for it to finish.",
+          "warning",
+          5000
+        );
+      } else {
+        ToastManager.show(
+          `Full sync failed: ${error.message}`,
+          "error",
+          5000
+        );
+      }
+    } finally {
+      this.isFullSyncing = false;
+      btn.prop("disabled", false);
+      btn.html(originalHtml);
+    }
+  }
 
   // Enhanced incremental refresh with state preservation
   async refreshCurrentDataSource(options = {}) {
@@ -1510,19 +1600,20 @@ class InvoiceTableManager {
       // Show subtle loading indicator without blocking UI
       this.showIncrementalLoadingIndicator();
 
-      // Get current table data for comparison
       const currentData = this.table.data().toArray();
-      const currentUUIDs = new Set(currentData.map(row => row.uuid));
 
-      // Fetch fresh data from new search endpoint
-      const response = await fetch("/api/lhdn/documents/search", {
-        method: "GET",
-        credentials: 'include',
-        headers: {
-          "Accept": "application/json",
-          "Content-Type": "application/json"
+      // Await LHDN recent sync (forceRefresh) — same list as the inbound grid, not /documents/search
+      const response = await fetch(
+        "/api/lhdn/documents/recent?useDatabase=true&forceRefresh=true&fallbackOnly=false",
+        {
+          method: "GET",
+          credentials: "include",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
         }
-      });
+      );
 
       if (!response.ok) {
         throw new Error(`API request failed: ${response.status}`);
@@ -1530,54 +1621,25 @@ class InvoiceTableManager {
 
       const data = await response.json();
       const newData = data.result || [];
+      const prevCount = currentData.length;
 
-      // Track changes
-      let addedCount = 0;
-      let updatedCount = 0;
-      const updatedRows = [];
+      // Replace rows so ordering and new invoices match the server (merge was tied to wrong endpoint)
+      this.table.clear();
+      this.table.rows.add(newData);
+      this.table.draw(false);
 
-      // Process new/updated records
-      for (const newRow of newData) {
-        const existingRowIndex = currentData.findIndex(row => row.uuid === newRow.uuid);
-
-        if (existingRowIndex === -1) {
-          // New record - add to table
-          this.table.row.add(newRow);
-          addedCount++;
-        } else {
-          // Existing record - check if status changed
-          const existingRow = currentData[existingRowIndex];
-          if (this.hasStatusChanged(existingRow, newRow)) {
-            // Update the row data
-            this.table.row(existingRowIndex).data(newRow);
-            updatedRows.push(newRow);
-            updatedCount++;
-          }
-        }
+      try {
+        localStorage.setItem("inboundTableData", JSON.stringify(newData));
+        localStorage.setItem("lastDataUpdate", String(Date.now()));
+      } catch (e) {
+        console.warn("[Inbound] Failed to update cache after refresh:", e);
       }
 
-      // Redraw table if changes were made
-      if (addedCount > 0 || updatedCount > 0) {
-        this.table.draw(false); // false = don't reset paging
-
-        // Highlight updated rows briefly
-        if (updatedRows.length > 0) {
-          this.highlightUpdatedRows(updatedRows);
-        }
-
-        // Show summary of changes
-        const changeMessage = [];
-        if (addedCount > 0) changeMessage.push(`${addedCount} new`);
-        if (updatedCount > 0) changeMessage.push(`${updatedCount} updated`);
-
-        ToastManager.show(
-          `Refresh complete: ${changeMessage.join(', ')} records`,
-          "success",
-          3000
-        );
-      } else {
-        ToastManager.show("No changes detected", "info", 2000);
-      }
+      ToastManager.show(
+        `Synced ${newData.length} invoice(s) from LHDN`,
+        "success",
+        3000
+      );
 
       // Update totals and charts
       this.updateCardTotals();
@@ -1585,7 +1647,9 @@ class InvoiceTableManager {
         updateCharts();
       }
 
-      console.log(`✅ Incremental refresh complete: +${addedCount} new, ~${updatedCount} updated`);
+      console.log(
+        `✅ Incremental refresh complete: ${newData.length} rows (was ${prevCount})`
+      );
 
     } catch (error) {
       console.error("❌ Incremental refresh failed:", error);
@@ -1796,49 +1860,12 @@ class InvoiceTableManager {
         },
         {
           data: "uuid",
-          render: function (data) {
-            return `
-                            <div class="flex flex-col">
-                                <div class="overflow-hidden text-ellipsis  flex items-center gap-2">
-                                    <a href="#" class="inbound-badge-status copy-uuid"
-                                       data-bs-toggle="tooltip"
-                                       data-bs-placement="top"
-                                       title="${data}"
-                                       data-uuid="${data}"
-                                         style="
-                                            max-width: 100px;
-                                            line-height: 1.2;
-                                            display: inline-flex;
-                                            align-items: center;
-                                            gap: 6px;
-                                            padding: 6px 10px;
-                                            border-radius: 6px;
-                                            font-family: 'SF Mono', SFMono-Regular, ui-monospace, monospace;
-                                            font-size: 0.813rem;
-                                            background: rgba(13, 110, 253, 0.08);
-                                            color: #0d6efd;
-                                            border: 1px solid rgba(13, 110, 253, 0.1);
-                                            transition: all 0.2s ease;
-                                            cursor: pointer;
-                                            white-space: nowrap;
-                                            text-decoration: none;
-                                            ">
-                                        <i class="bi bi-fingerprint" style="font-size: 0.875rem;"></i>
-                                        <span style="
-                                            max-width: 80px;
-                                            overflow: hidden;
-                                            text-overflow: ellipsis;
-                                            display: inline-block;
-                                        ">${data}</span>
-                                        <i class="bi bi-clipboard" style="
-                                            font-size: 0.875rem;
-                                            opacity: 0.6;
-                                            margin-left: auto;
-                                            transition: opacity 0.2s ease;
-                                        "></i>
-                                    </a>
-                                </div>
-                            </div>`;
+          render: (data, type, row) => {
+            if (type === "sort" || type === "filter") {
+              const st = (row?.status || "").toLowerCase();
+              return st === "invalid" ? "" : data || "";
+            }
+            return this.renderInboundUuidCell(data, type, row);
           },
         },
         {
@@ -2085,6 +2112,7 @@ class InvoiceTableManager {
       scrollCollapse: true,
       autoWidth: false,
       pageLength: 10,
+      lengthMenu: [[10, 25, 50, 100, -1], [10, 25, 50, 100, "All"]],
       order: [[6, "desc"]], // The 6 should be the index of your date column
       columnDefs: [
         {
@@ -2276,10 +2304,11 @@ class InvoiceTableManager {
             }
           }
 
-          // Default to database-only mode for initial load (no live API calls)
+          // useDatabase + fallbackOnly=false so the server runs getCachedDocuments (token + LHDN background sync).
+          // fallbackOnly=true skipped LHDN entirely and only read WP_INBOUND_STATUS — no recent sync on load.
           d.forceRefresh = window.forceRefreshLHDN || false;
           d.useDatabase = true;
-          d.fallbackOnly = !window.forceRefreshLHDN; // Use database-only unless explicitly refreshing
+          d.fallbackOnly = false;
 
           console.log("[Inbound] Request parameters (Database-first mode):", d);
           return d;
@@ -2351,6 +2380,19 @@ class InvoiceTableManager {
           console.log("[Inbound] Final processed results:", result);
           // Reset the force refresh flag
           window.forceRefreshLHDN = false;
+
+          // Auto-trigger full sync when the server signals incomplete data
+          if (
+            json?.metadata?.needsFullSync &&
+            !self.isFullSyncing &&
+            !localStorage.getItem("fullSyncTriggered")
+          ) {
+            console.log(
+              "[Inbound] Server flagged needsFullSync — auto-triggering Full Sync"
+            );
+            localStorage.setItem("fullSyncTriggered", "1");
+            setTimeout(() => self.fullSync(), 500);
+          }
 
           // Update totals and charts after data load
           setTimeout(() => {
@@ -2527,49 +2569,12 @@ class InvoiceTableManager {
         },
         {
           data: "uuid",
-          render: function (data) {
-            return `
-                            <div class="flex flex-col">
-                                <div class="overflow-hidden text-ellipsis  flex items-center gap-2">
-                                    <a href="#" class="inbound-badge-status copy-uuid"
-                                       data-bs-toggle="tooltip"
-                                       data-bs-placement="top"
-                                       title="${data}"
-                                       data-uuid="${data}"
-                                         style="
-                                            max-width: 100px;
-                                            line-height: 1.2;
-                                            display: inline-flex;
-                                            align-items: center;
-                                            gap: 6px;
-                                            padding: 6px 10px;
-                                            border-radius: 6px;
-                                            font-family: 'SF Mono', SFMono-Regular, ui-monospace, monospace;
-                                            font-size: 0.813rem;
-                                            background: rgba(13, 110, 253, 0.08);
-                                            color: #0d6efd;
-                                            border: 1px solid rgba(13, 110, 253, 0.1);
-                                            transition: all 0.2s ease;
-                                            cursor: pointer;
-                                            white-space: nowrap;
-                                            text-decoration: none;
-                                            ">
-                                        <i class="bi bi-fingerprint" style="font-size: 0.875rem;"></i>
-                                        <span style="
-                                            max-width: 80px;
-                                            overflow: hidden;
-                                            text-overflow: ellipsis;
-                                            display: inline-block;
-                                        ">${data}</span>
-                                        <i class="bi bi-clipboard" style="
-                                            font-size: 0.875rem;
-                                            opacity: 0.6;
-                                            margin-left: auto;
-                                            transition: opacity 0.2s ease;
-                                        "></i>
-                                    </a>
-                                </div>
-                            </div>`;
+          render: (data, type, row) => {
+            if (type === "sort" || type === "filter") {
+              const st = (row?.status || "").toLowerCase();
+              return st === "invalid" ? "" : data || "";
+            }
+            return this.renderInboundUuidCell(data, type, row);
           },
         },
         {
@@ -2805,6 +2810,7 @@ class InvoiceTableManager {
       scrollCollapse: true,
       autoWidth: false,
       pageLength: 10,
+      lengthMenu: [[10, 25, 50, 100, -1], [10, 25, 50, 100, "All"]],
       order: [[6, "desc"]], // The 6 should be the index of your date column
       columnDefs: [
         {
@@ -3059,12 +3065,112 @@ class InvoiceTableManager {
     return this.createSourceBadge(data);
   }
 
+  /**
+   * IRBM Unique Identifier No. is only shown for documents accepted as Valid by LHDN.
+   * Invalid submissions must not display a UUID in the UI (MyInvois / LHDN rules).
+   */
+  renderInboundUuidCell(data, type, row) {
+    const statusLower = (row?.status || "").toLowerCase();
+    if (statusLower === "invalid") {
+      return `
+                            <div class="flex flex-col">
+                                <div class="overflow-hidden text-ellipsis flex items-center gap-2">
+                                    <span class="text-muted"
+                                          data-bs-toggle="tooltip"
+                                          data-bs-placement="top"
+                                          title="IRBM Unique Identifier No. is not issued for Invalid documents (LHDN MyInvois)."
+                                          style="font-size: 0.813rem; padding: 6px 0;">—</span>
+                                </div>
+                            </div>`;
+    }
+    const uuid = data || "";
+    return `
+                            <div class="flex flex-col">
+                                <div class="overflow-hidden text-ellipsis  flex items-center gap-2">
+                                    <a href="#" class="inbound-badge-status copy-uuid"
+                                       data-bs-toggle="tooltip"
+                                       data-bs-placement="top"
+                                       title="${uuid}"
+                                       data-uuid="${uuid}"
+                                         style="
+                                            max-width: 100px;
+                                            line-height: 1.2;
+                                            display: inline-flex;
+                                            align-items: center;
+                                            gap: 6px;
+                                            padding: 6px 10px;
+                                            border-radius: 6px;
+                                            font-family: 'SF Mono', SFMono-Regular, ui-monospace, monospace;
+                                            font-size: 0.813rem;
+                                            background: rgba(13, 110, 253, 0.08);
+                                            color: #0d6efd;
+                                            border: 1px solid rgba(13, 110, 253, 0.1);
+                                            transition: all 0.2s ease;
+                                            cursor: pointer;
+                                            white-space: nowrap;
+                                            text-decoration: none;
+                                            ">
+                                        <i class="bi bi-fingerprint" style="font-size: 0.875rem;"></i>
+                                        <span style="
+                                            max-width: 80px;
+                                            overflow: hidden;
+                                            text-overflow: ellipsis;
+                                            display: inline-block;
+                                        ">${uuid}</span>
+                                        <i class="bi bi-clipboard" style="
+                                            font-size: 0.875rem;
+                                            opacity: 0.6;
+                                            margin-left: auto;
+                                            transition: opacity 0.2s ease;
+                                        "></i>
+                                    </a>
+                                </div>
+                            </div>`;
+  }
+
   renderDateInfo(validatedDate, row) {
     // console.log(validatedDate);
     const validatedFormatted = validatedDate
       ? this.formatDate(validatedDate)
       : null;
-    const showCountdown = row?.status === "Valid";
+    const statusLower = (row?.status || "").toLowerCase();
+    const showCountdown = statusLower === "valid";
+
+    const dateRowTooltip =
+      statusLower === "valid"
+        ? `LHDN validation completed on ${validatedFormatted}`
+        : statusLower === "invalid"
+          ? `LHDN response timestamp: ${validatedFormatted} (document not valid)`
+          : `LHDN timestamp: ${validatedFormatted}`;
+
+    const statusBadgeHtml = !validatedFormatted
+      ? ""
+      : statusLower === "valid"
+        ? `<span class="badge bg-success bg-opacity-10 text-success py-1 px-2"
+                                      style="font-size: 0.55rem; border: 1px solid rgba(25, 135, 84, 0.15);">
+                                    Validated
+                                </span>`
+        : statusLower === "invalid"
+          ? `<span class="badge bg-danger bg-opacity-10 text-danger py-1 px-2"
+                                      style="font-size: 0.55rem; border: 1px solid rgba(220, 53, 69, 0.2);">
+                                    Invalid
+                                </span>`
+          : `<span class="badge bg-secondary bg-opacity-10 text-secondary py-1 px-2"
+                                      style="font-size: 0.55rem; border: 1px solid rgba(108, 117, 125, 0.2);">
+                                    Recorded
+                                </span>`;
+
+    const dateLabelText =
+      statusLower === "valid"
+        ? "LHDN Validation Date"
+        : "LHDN response date";
+
+    const rowIconClass =
+      statusLower === "valid"
+        ? "bi-shield-check text-success"
+        : statusLower === "invalid"
+          ? "bi-exclamation-triangle text-danger"
+          : "bi-clock-history text-secondary";
 
     return `
             <div class="date-info" style="position: relative;">
@@ -3074,22 +3180,19 @@ class InvoiceTableManager {
                     <div class="date-row validated"
                          data-bs-toggle="tooltip"
                          data-bs-placement="top"
-                         title="LHDN validation completed on ${validatedFormatted}"
+                         title="${dateRowTooltip}"
                          style="position: relative; padding-left: 28px;">
-                        <i class="bi bi-shield-check text-success"
+                        <i class="bi ${rowIconClass}"
                            style="position: absolute; left: 0; top: 3px; font-size: 1.1rem;"></i>
                         <div class="date-content">
                             <div class="d-flex align-items-center gap-2">
                                 <span class="date-value text-dark fw-medium">
                                     ${validatedFormatted}
                                 </span>
-                                <span class="badge bg-success bg-opacity-10 text-success py-1 px-2"
-                                      style="font-size: 0.55rem; border: 1px solid rgba(25, 135, 84, 0.15);">
-                                    Validated
-                                </span>
+                                ${statusBadgeHtml}
                             </div>
                             <div class="date-label text-muted" style="font-size: 0.65rem;">
-                                LHDN Validation Date
+                                ${dateLabelText}
                             </div>
                             ${
                               showCountdown
@@ -3417,20 +3520,26 @@ class InvoiceTableManager {
       // Add a small delay to show the loading state
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      // Prepare export data
-      const exportData = selectedRows.map((row) => ({
-        UUID: row.uuid,
-        LONGID: row.longId,
-        "Internal ID": row.internalId,
-        Type: row.typeName,
-        Supplier: row.issuerName || row.supplierName || "",
-        Receiver: row.receiverName,
-        "Issue Date": new Date(row.dateTimeIssued).toLocaleString(),
-        "Received Date": new Date(row.dateTimeReceived).toLocaleString(),
-        "Validated Date": new Date(row.dateTimeValidated).toLocaleString(),
-        Status: row.status,
-        "Total Sales": `RM ${parseFloat(row.totalSales).toFixed(2)}`,
-      }));
+      // Prepare export data (no IRBM UUID for Invalid — aligns with LHDN / table display)
+      const exportData = selectedRows.map((row) => {
+        const sst = getInboundSstForExport(row);
+        return {
+          UUID:
+            (row.status || "").toLowerCase() === "invalid" ? "" : row.uuid,
+          LONGID: row.longId,
+          "Internal ID": row.internalId,
+          Type: row.typeName,
+          Supplier: row.issuerName || row.supplierName || "",
+          "Supplier SST": sst.supplierSst,
+          Receiver: row.receiverName,
+          "Receiver SST": sst.receiverSst,
+          "Issue Date": new Date(row.dateTimeIssued).toLocaleString(),
+          "Received Date": new Date(row.dateTimeReceived).toLocaleString(),
+          "Validated Date": new Date(row.dateTimeValidated).toLocaleString(),
+          Status: row.status,
+          "Total Sales": `RM ${parseFloat(row.totalSales).toFixed(2)}`,
+        };
+      });
 
       // Convert to CSV
       const csvContent = this.convertToCSV(exportData);
@@ -6061,15 +6170,29 @@ async function openValidationResultsModal(uuid) {
         }
         validationResultsDiv.innerHTML = "";
 
-        // Extract validation results from the response
-        const validationResults = result.validationResults;
+        // Extract validation results from the response. Database-enriched rows store
+        // LHDN payload under validationResults.validationResults (see enrichInboundDocumentsFromLhdnDetails).
+        let validationResults = result.validationResults;
+        if (
+            validationResults &&
+            !validationResults.validationSteps &&
+            validationResults.validationResults?.validationSteps
+        ) {
+            validationResults = {
+                ...validationResults,
+                validationSteps: validationResults.validationResults.validationSteps,
+            };
+        }
 
         console.log('API Response:', result);
         console.log('Validation Results:', validationResults);
 
         // Log the raw structure of validation steps and errors
-        if (result.validationResults?.validationSteps) {
-            result.validationResults.validationSteps.forEach((step, index) => {
+        const rawSteps =
+            result.validationResults?.validationSteps ||
+            result.validationResults?.validationResults?.validationSteps;
+        if (rawSteps) {
+            rawSteps.forEach((step, index) => {
                 console.log(`Raw Step ${index}:`, JSON.stringify(step, null, 2));
                 if (step.error) {
                     console.log(`Raw Error for Step ${index}:`, JSON.stringify(step.error, null, 2));
@@ -6863,6 +6986,48 @@ function handleSettingsAction(action) {
   }
 }
 
+/** Resolve supplier / receiver SST for export (list fields + documentDetails JSON fallback) */
+function getInboundSstForExport(row) {
+  if (!row || typeof row !== "object") {
+    return { supplierSst: "", receiverSst: "" };
+  }
+  let supplierSst =
+    row.issuerTaxRegNo || row.supplierSstNo || "";
+  let receiverSst =
+    row.receiverTaxRegNo || row.receiverSstNo || "";
+  if ((!supplierSst || !receiverSst) && row.documentDetails) {
+    try {
+      const raw = row.documentDetails;
+      const p = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (p && typeof p === "object" && !Array.isArray(p)) {
+        const di = p.documentInfo || p;
+        if (!supplierSst) {
+          supplierSst =
+            p.supplierSstNo ||
+            di.supplierSstNo ||
+            (p.supplierInfo && p.supplierInfo.taxRegNo) ||
+            (di.supplierInfo && di.supplierInfo.taxRegNo) ||
+            "";
+        }
+        if (!receiverSst) {
+          receiverSst =
+            p.receiverSstNo ||
+            di.receiverSstNo ||
+            (p.customerInfo && p.customerInfo.taxRegNo) ||
+            (di.customerInfo && di.customerInfo.taxRegNo) ||
+            "";
+        }
+      }
+    } catch (_) {
+      /* ignore invalid JSON */
+    }
+  }
+  return {
+    supplierSst: supplierSst || "",
+    receiverSst: receiverSst || "",
+  };
+}
+
 // Helper function to export data to Excel with loading state management
 function exportToExcel(data, filename, buttonElement = null) {
   let originalButtonHtml = null;
@@ -6885,25 +7050,30 @@ function exportToExcel(data, filename, buttonElement = null) {
           "Long ID",
           "Internal ID",
           "Supplier",
+          "Supplier SST",
           "Receiver",
+          "Receiver SST",
           "Date Issued",
           "Status",
           "Total Amount",
         ];
         const csvContent = [
           headers.join(","),
-          ...data.map((row) =>
-            [
+          ...data.map((row) => {
+            const sst = getInboundSstForExport(row);
+            return [
               row.uuid || "",
               row.longId || "",
               row.internalId || "",
               row.issuerName || row.supplierName || "",
+              sst.supplierSst,
               row.receiverName || "",
+              sst.receiverSst,
               formatDate(row.dateTimeIssued) || "",
               row.status || "",
               formatCurrency(row.totalSales) || "",
-            ].join(",")
-          ),
+            ].join(",");
+          }),
         ].join("\n");
 
         // Create and trigger download

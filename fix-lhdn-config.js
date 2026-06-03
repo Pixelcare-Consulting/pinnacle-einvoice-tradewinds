@@ -1,10 +1,8 @@
 require('dotenv').config();
-const { PrismaClient } = require('./src/generated/prisma');
+const { createPrismaClient } = require('./src/lib/prisma');
 
 async function fixLHDNConfiguration() {
-    const prisma = new PrismaClient({
-        log: ['error', 'warn']
-    });
+    const prisma = createPrismaClient();
     
     try {
         console.log('🔍 Checking current LHDN configuration...');

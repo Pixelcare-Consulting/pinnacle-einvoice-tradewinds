@@ -117,6 +117,14 @@ const processMultipleInvoices = (rawData, options = {}) => {
     logStep(result, `Batch processing failed: ${error.message}`, 'ERROR');
   }
 
+  // Always convert Sets to Arrays before returning (even on error path)
+  if (result.batchSummary.currencies instanceof Set) {
+    result.batchSummary.currencies = Array.from(result.batchSummary.currencies);
+  }
+  if (result.batchSummary.invoiceTypes instanceof Set) {
+    result.batchSummary.invoiceTypes = Array.from(result.batchSummary.invoiceTypes);
+  }
+
   return result;
 };
 

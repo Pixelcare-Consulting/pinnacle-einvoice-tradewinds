@@ -1,6 +1,7 @@
 // 1. Environment and Core Dependencies
 require("dotenv").config();
 const express = require("express");
+const http = require("http");
 const https = require("https"); 
 const session = require("express-session");
 const cors = require("cors");
@@ -15,6 +16,7 @@ const PrismaSessionStore = require("./src/lib/prisma-session-store");
 
 // 2. Local Dependencies
 const serverConfig = require("./config/server.config");
+const sslConfig = require("./config/ssl.config");
 const authConfig = require("./config/auth.config");
 const {
   auth,
@@ -38,8 +40,8 @@ const passport = require("./config/passport-prisma.config");
 // 3. Initialize Express
 const app = express();
 
-// Trust proxy headers from IIS
-app.set("trust proxy", "loopback");
+// Trust X-Forwarded-* from IIS/ARR when TRUST_PROXY=true
+app.set("trust proxy", process.env.TRUST_PROXY === "true" ? 1 : false);
 
 // Version Header middleware
 app.use(versionHeader);
@@ -156,9 +158,9 @@ const staticCacheConfig = {
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
     }
-    // JavaScript and CSS files - cache with validation
+    // JavaScript and CSS files - short cache with revalidation so updates are seen quickly
     else if (filePath.endsWith('.js') || filePath.endsWith('.css')) {
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
     }
     // Images and fonts - long cache
     else if (/\.(jpg|jpeg|png|gif|svg|ico|woff|woff2|ttf|eot)$/i.test(filePath)) {
@@ -194,7 +196,6 @@ app.use(
     ...serverConfig.sessionConfig,
     cookie: {
       ...serverConfig.sessionConfig.cookie,
-      secure: process.env.SECURE_COOKIE === "true",
       sameSite: "lax",
       maxAge: authConfig.session.timeout,
       rolling: true,
@@ -420,19 +421,36 @@ const startServer = async () => {
     jsreportInstance = await initJsReport();
 
     const port = serverConfig.port;
-    
-    // Create HTTPS server with proper SSL configuration
-    const httpsOptions = {
-      key: fs.readFileSync(path.join(__dirname, 'ssl', 'client.key')),
-      cert: fs.readFileSync(path.join(__dirname, 'ssl', 'client.crt')),
-      requestCert: false,
-      rejectUnauthorized: false
-    };
+    const sslPaths = sslConfig.getSslPaths();
+    const useDirectHttps = sslConfig.shouldUseDirectHttps();
+    const behindProxy = process.env.TRUST_PROXY === "true";
 
-    server = https.createServer(httpsOptions, app);
+    if (useDirectHttps) {
+      const httpsOptions = sslConfig.buildHttpsOptions();
+      server = https.createServer(httpsOptions, app);
+      console.log("Starting in HTTPS mode (direct Node SSL)");
+      console.log(`  key:  ${sslPaths.keyPath}`);
+      console.log(`  cert: ${sslPaths.certPath}`);
+      if (fs.existsSync(sslPaths.caPath)) {
+        console.log(`  ca:   ${sslPaths.caPath}`);
+      }
+    } else {
+      server = http.createServer(app);
+      if (behindProxy) {
+        console.log("Starting in HTTP mode (IIS/reverse proxy terminates TLS)");
+        console.log("  Ensure IIS site has HTTPS binding + cert imported from ssl/");
+      } else if (sslConfig.hasSslCertificates()) {
+        console.log("Starting in HTTP mode (set TRUST_PROXY=false for direct Node HTTPS)");
+      } else {
+        console.log("Starting in HTTP mode (no SSL certificates found)");
+        console.log(`  expected key:  ${sslPaths.keyPath}`);
+        console.log(`  expected cert: ${sslPaths.certPath}`);
+      }
+    }
 
     server.listen(port, () => {
-      console.log(`✅ HTTPS Server started on https://localhost:${port}`);
+      const protocol = useDirectHttps ? "https" : "http";
+      console.log(`Server started on ${protocol}://localhost:${port}`);
     }).on('error', (err) => {
       console.error('Server error:', err);
       if (err.code === 'EACCES') {

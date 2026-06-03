@@ -355,3 +355,23 @@ model WP_UPLOADED_EXCEL_FILES {
   @@index([uploaded_by_user_id], map: "idx_uploaded_excel_user")
   @@index([submission_uid], map: "idx_uploaded_excel_submission")
 }
+
+model WP_INVOICE_SUBMISSIONS {
+  id                Int       @id @default(autoincrement())
+  excel_file_id     Int
+  invoice_number    String    @db.VarChar(100)
+  lhdn_uuid         String?   @db.VarChar(100)
+  submission_uid    String?   @db.VarChar(100)
+  status            String    @default("pending") @db.VarChar(50)
+  error_code        String?   @db.VarChar(50)
+  error_message     String?   @db.VarChar(500)
+  submitted_by      Int
+  submitted_at      DateTime  @default(now()) @db.DateTime
+  updated_at        DateTime  @default(now()) @updatedAt @db.DateTime
+
+  @@unique([invoice_number, submitted_by], map: "UQ_invoice_submission_user")
+  @@index([excel_file_id], map: "idx_invoice_sub_file")
+  @@index([lhdn_uuid], map: "idx_invoice_sub_uuid")
+  @@index([invoice_number], map: "idx_invoice_sub_number")
+  @@index([status], map: "idx_invoice_sub_status")
+}

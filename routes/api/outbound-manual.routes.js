@@ -2824,12 +2824,9 @@ router.post(
         });
       }
 
-      // Check document count limitation
+      // Log if documents exceed batch size — auto-splitting handles the rest
       if (totalDocuments > 100) {
-        return res.status(400).json({
-          success: false,
-          error: `Total document count (${totalDocuments}) exceeds LHDN limit of 100 documents per submission`,
-        });
+        console.log(`Bulk submit: ${totalDocuments} total documents — will auto-split into batches of 100`);
       }
 
       // Update files status to submitting
@@ -3128,10 +3125,7 @@ router.post(
 
       const invoiceCount = parseInt(file.invoice_count || 0, 10) || 0;
       if (invoiceCount > 100) {
-        return res.status(400).json({
-          success: false,
-          error: `This file contains ${invoiceCount} documents which exceeds LHDN limit of 100 per submission.`,
-        });
+        console.log(`File has ${invoiceCount} documents — will auto-split into batches of 100`);
       }
 
       if (!fs.existsSync(file.file_path)) {
@@ -3790,12 +3784,45 @@ async function processBulkSubmissionEnhanced(files, user, sessionId) {
         const allDocuments = [];
         const documentDetails = [];
 
-        // Prepare all documents for validation
+        // Check for already-submitted invoices to prevent duplicates
+        const invoiceNumbers = processedData
+          .map(inv => inv.invoiceNumber || inv.invoice_number)
+          .filter(Boolean);
+
+        let alreadySubmitted = [];
+        if (invoiceNumbers.length > 0) {
+          try {
+            alreadySubmitted = await prisma.wP_INVOICE_SUBMISSIONS.findMany({
+              where: {
+                invoice_number: { in: invoiceNumbers },
+                submitted_by: user.id,
+                status: { in: ['accepted', 'valid'] },
+              },
+              select: { invoice_number: true, lhdn_uuid: true }
+            });
+          } catch (e) {
+            console.warn('Invoice submission tracking table not available yet:', e.message);
+          }
+        }
+
+        const submittedSet = new Set(alreadySubmitted.map(s => s.invoice_number));
+        if (submittedSet.size > 0) {
+          console.log(`⚠️ Skipping ${submittedSet.size} already-accepted invoices: ${[...submittedSet].join(', ')}`);
+        }
+
+        // Prepare all documents for validation (skip already-accepted ones)
         for (let i = 0; i < processedData.length; i++) {
           const invoiceData = processedData[i];
           try {
             // Map to LHDN format
             const lhdnJson = mapToLHDNFormat([invoiceData], "1.0");
+
+            // Skip invoices already accepted by LHDN
+            const invNum = lhdnJson?.Invoice?.[0]?.ID?.[0]?._ || invoiceData.invoiceNumber || invoiceData.invoice_number;
+            if (submittedSet.has(invNum)) {
+              console.log(`⏭️ Skipping already-accepted invoice: ${invNum}`);
+              continue;
+            }
             if (!lhdnJson) {
               throw new Error(`Failed to map invoice ${i + 1} to LHDN format`);
             }
@@ -3970,6 +3997,57 @@ async function processBulkSubmissionEnhanced(files, user, sessionId) {
           };
 
           console.log(`📊 Submission summary for ${file.filename}: ${validDocuments}/${totalDocuments} successful, ${failedDocuments} failed`);
+
+          // Store per-invoice submission results for duplicate prevention
+          try {
+            const invoiceRecords = [];
+            for (const doc of acceptedDocs) {
+              invoiceRecords.push({
+                excel_file_id: file.id,
+                invoice_number: doc.invoiceCodeNumber || doc.codeNumber,
+                lhdn_uuid: doc.uuid || null,
+                submission_uid: submissionUid,
+                status: 'accepted',
+                submitted_by: user.id,
+              });
+            }
+            for (const doc of rejectedDocs) {
+              invoiceRecords.push({
+                excel_file_id: file.id,
+                invoice_number: doc.invoiceCodeNumber || doc.codeNumber,
+                lhdn_uuid: null,
+                submission_uid: submissionUid,
+                status: 'rejected',
+                error_code: doc.error?.code || null,
+                error_message: (doc.error?.message || '').substring(0, 500),
+                submitted_by: user.id,
+              });
+            }
+            if (invoiceRecords.length > 0) {
+              for (const record of invoiceRecords) {
+                await prisma.wP_INVOICE_SUBMISSIONS.upsert({
+                  where: {
+                    UQ_invoice_submission_user: {
+                      invoice_number: record.invoice_number,
+                      submitted_by: record.submitted_by,
+                    }
+                  },
+                  update: {
+                    lhdn_uuid: record.lhdn_uuid || undefined,
+                    submission_uid: record.submission_uid,
+                    status: record.status,
+                    error_code: record.error_code || null,
+                    error_message: record.error_message || null,
+                    excel_file_id: record.excel_file_id,
+                  },
+                  create: record,
+                });
+              }
+              console.log(`📝 Stored ${invoiceRecords.length} invoice submission records`);
+            }
+          } catch (trackErr) {
+            console.warn('Failed to store invoice submission tracking (table may not exist yet):', trackErr.message);
+          }
         } else {
           // Complete failure
           failedDocuments = totalDocuments;
@@ -4086,6 +4164,23 @@ async function processBulkSubmissionEnhanced(files, user, sessionId) {
             status: "validation_failed",
             phase: "completed_with_errors",
             finalResult: "validation_failed",
+          });
+        } else if (fileError.code === "SUBMISSION_FAILED") {
+          errorResponse = {
+            status: "failed",
+            error: {
+              code: fileError.code,
+              message: fileError.message || "LHDN submission failed",
+              details: fileError.details || [],
+            },
+            totalDocuments: fileError.totalDocuments,
+            timestamp: new Date(),
+          };
+
+          updateStatus(file.id, {
+            status: "error",
+            phase: "completed_with_errors",
+            finalResult: "error",
           });
         } else {
           // Update global status for other errors

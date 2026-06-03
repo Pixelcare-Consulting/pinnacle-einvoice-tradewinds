@@ -8,6 +8,7 @@
     "test:outbound-manual": "node test/integration/test-outbound-manual.js",
     "test:frontend": "node test/frontend/outbound-manual-table.test.js",
     "test:api": "jest test/api/outbound-manual-api.test.js",
+    "test:inbound-wp": "node scripts/test-wp-inbound-status-conflict.js",
     "verify": "node test/verify-implementation.js",
     "dev": "cross-env NODE_ENV=development EXCEL_DEBUG=false nodemon server.js",
     "start": "nodemon server.js",

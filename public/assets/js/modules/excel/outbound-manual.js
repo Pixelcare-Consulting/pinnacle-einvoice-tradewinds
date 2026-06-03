@@ -80,6 +80,38 @@ const dataCache = {
     }
 };
 
+function formatManualInvoiceDateForDisplay(data) {
+    if (!data) return null;
+
+    const value = String(data).trim();
+    const dmyMatch = value.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (dmyMatch) {
+        const [, day, month, year] = dmyMatch;
+        const date = new Date(Number(year), Number(month) - 1, Number(day));
+        const isValidDate =
+            date.getFullYear() === Number(year) &&
+            date.getMonth() === Number(month) - 1 &&
+            date.getDate() === Number(day);
+
+        return isValidDate ? `${day}/${month}/${year}` : null;
+    }
+
+    const isoMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s]|$)/);
+    if (isoMatch) {
+        const [, year, month, day] = isoMatch;
+        return `${day}/${month}/${year}`;
+    }
+
+    const date = new Date(value);
+    if (isNaN(date.getTime())) return null;
+
+    return date.toLocaleDateString('en-MY', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+    });
+}
+
 class ValidationError extends Error {
     constructor(message, validationErrors = [], fileName = null) {
         super(message);
@@ -3617,7 +3649,7 @@ class InvoiceTableManager {
                                 submittedDate: file.submittedDate,
                                 submissionUid: file.submissionUid,
                                 metadata: file.metadata,
-                                lhdnResponse: file.lhdn_response
+                                lhdnResponse: file.lhdnResponse || file.lhdn_response
                             };
 
                             // Status priority mapping for custom sort
@@ -3856,9 +3888,12 @@ class InvoiceTableManager {
                 </div>
             `;
 
-            // Store invoice data for modal access
+            // Store invoice data + LHDN response for modal access
             if (!window.invoiceModalData) window.invoiceModalData = {};
             window.invoiceModalData[uniqueId] = invoiceNumbers;
+
+            if (!window.invoiceLhdnData) window.invoiceLhdnData = {};
+            window.invoiceLhdnData[uniqueId] = row.lhdnResponse || row.lhdn_response || null;
 
             return `
                 <div class="cell-group">
@@ -4457,7 +4492,8 @@ class InvoiceTableManager {
         if (!data || data === 'N/A') return '<span class="text-muted">N/A</span>';
 
         // Handle multi-line date info
-        const lines = data.split('\n');
+        const value = String(data);
+        const lines = value.split('\n');
         if (lines.length > 1) {
             const countLine = lines[0]; // e.g., "3 Dates"
             const dateList = lines.slice(1).map(date => date.trim()).join(', ');
@@ -4476,29 +4512,19 @@ class InvoiceTableManager {
         }
 
         // Single date - format like the Date column
-        try {
-            const date = new Date(data);
-            if (!isNaN(date.getTime())) {
-                const formattedDate = date.toLocaleDateString('en-MY', {
-                    day: '2-digit',
-                    month: '2-digit',
-                    year: 'numeric'
-                });
-
-                return `
-                    <div class="cell-group">
-                        <div class="cell-main">
-                            <i class="bi bi-calendar-event me-1"></i>
-                            <span class="date-value">${formattedDate}</span>
-                        </div>
-                        <div class="cell-sub">
-                            <i class="bi bi-calendar-date me-1"></i>
-                            <span class="reg-text">Invoice Date</span>
-                        </div>
-                    </div>`;
-            }
-        } catch (e) {
-            // If date parsing fails, show as-is
+        const formattedDate = formatManualInvoiceDateForDisplay(value);
+        if (formattedDate) {
+            return `
+                <div class="cell-group">
+                    <div class="cell-main">
+                        <i class="bi bi-calendar-event me-1"></i>
+                        <span class="date-value">${formattedDate}</span>
+                    </div>
+                    <div class="cell-sub">
+                        <i class="bi bi-calendar-date me-1"></i>
+                        <span class="reg-text">Invoice Date</span>
+                    </div>
+                </div>`;
         }
 
         // Fallback for non-date strings
@@ -4506,7 +4532,7 @@ class InvoiceTableManager {
             <div class="cell-group">
                 <div class="cell-main">
                     <i class="bi bi-calendar-event me-1"></i>
-                    <span>${data}</span>
+                    <span>${value}</span>
                 </div>
                 <div class="cell-sub">
                     <i class="bi bi-calendar-date me-1"></i>
@@ -4533,7 +4559,33 @@ class InvoiceTableManager {
         return `${fileSize.toFixed(1)} ${units[unitIndex]}`;
     }
 
-    // Show invoice modal with all invoice numbers
+    // Build a status map from LHDN response: invoiceNumber → { status, error }
+    _buildInvoiceStatusMap(lhdnResponse) {
+        const statusMap = {};
+        if (!lhdnResponse) return statusMap;
+
+        try {
+            const parsed = typeof lhdnResponse === 'string' ? JSON.parse(lhdnResponse) : lhdnResponse;
+            const accepted = parsed?.data?.acceptedDocuments || parsed?.acceptedDocuments || [];
+            const rejected = parsed?.data?.rejectedDocuments || parsed?.rejectedDocuments || [];
+
+            for (const doc of accepted) {
+                const num = doc.invoiceCodeNumber || doc.codeNumber;
+                if (num) statusMap[num] = { status: 'accepted', uuid: doc.uuid };
+            }
+            for (const doc of rejected) {
+                const num = doc.invoiceCodeNumber || doc.codeNumber;
+                const errDetails = doc.error?.details || [];
+                const errMsg = errDetails.map(d => d.message).filter(Boolean).join('; ') || doc.error?.message || 'Rejected';
+                if (num) statusMap[num] = { status: 'rejected', error: errMsg, code: doc.error?.code };
+            }
+        } catch (e) {
+            console.warn('Could not parse LHDN response for status map:', e);
+        }
+        return statusMap;
+    }
+
+    // Show invoice modal with all invoice numbers and their LHDN status
     showInvoiceModal(uniqueId) {
         const invoiceNumbers = window.invoiceModalData?.[uniqueId];
         if (!invoiceNumbers || !Array.isArray(invoiceNumbers)) {
@@ -4541,7 +4593,14 @@ class InvoiceTableManager {
             return;
         }
 
-        // Create modal HTML
+        const lhdnResponse = window.invoiceLhdnData?.[uniqueId];
+        const statusMap = this._buildInvoiceStatusMap(lhdnResponse);
+        const hasStatusData = Object.keys(statusMap).length > 0;
+
+        const acceptedCount = Object.values(statusMap).filter(s => s.status === 'accepted').length;
+        const rejectedCount = Object.values(statusMap).filter(s => s.status === 'rejected').length;
+        const pendingCount = invoiceNumbers.length - acceptedCount - rejectedCount;
+
         const modalId = 'invoiceNumbersModal';
         let modal = document.getElementById(modalId);
 
@@ -4555,146 +4614,216 @@ class InvoiceTableManager {
             document.body.appendChild(modal);
         }
 
-        // Create invoice list with search and pagination
         const itemsPerPage = 50;
         const totalPages = Math.ceil(invoiceNumbers.length / itemsPerPage);
+        const totalCount = invoiceNumbers.length;
+        const validPct = totalCount > 0 ? Math.round((acceptedCount / totalCount) * 100) : 0;
+        const rejectedPct = totalCount > 0 ? Math.round((rejectedCount / totalCount) * 100) : 0;
+
+        const getStatusBadge = (invoiceNum) => {
+            const info = statusMap[invoiceNum.trim()];
+            if (!info) return hasStatusData
+                ? '<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-weight:600;letter-spacing:0.3px;white-space:nowrap;">PENDING</span>'
+                : '';
+            if (info.status === 'accepted') {
+                return `<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:#dcfce7;color:#166534;font-weight:600;letter-spacing:0.3px;white-space:nowrap;">
+                    <i class="bi bi-check-circle-fill me-1"></i>VALID</span>`;
+            }
+            return `<span style="font-size:10px;padding:3px 8px;border-radius:10px;background:#fee2e2;color:#991b1b;font-weight:600;letter-spacing:0.3px;white-space:nowrap;cursor:help;"
+                title="${(info.error || '').replace(/"/g, '&quot;')}">
+                <i class="bi bi-x-circle-fill me-1"></i>REJECTED</span>`;
+        };
+
+        const getBorderColor = (invoiceNum) => {
+            const info = statusMap[invoiceNum.trim()];
+            if (!info) return '#cbd5e1';
+            return info.status === 'accepted' ? '#22c55e' : '#ef4444';
+        };
 
         const createInvoiceList = (filteredInvoices, currentPage = 1) => {
             const startIndex = (currentPage - 1) * itemsPerPage;
             const endIndex = startIndex + itemsPerPage;
             const pageInvoices = filteredInvoices.slice(startIndex, endIndex);
 
-            return pageInvoices.map((invoice, index) => `
-                <div class="invoice-item" style="
-                    padding: 8px 12px;
-                    margin: 2px 0;
-                    background: ${(startIndex + index) % 2 === 0 ? '#f8fafc' : '#ffffff'};
-                    border-radius: 6px;
-                    border-left: 4px solid #1a365d;
-                    font-family: 'SF Mono', SFMono-Regular, ui-monospace, monospace;
-                    font-size: 13px;
-                    color: #1e293b;
-                    font-weight: 500;
-                    transition: all 0.2s ease;
-                    cursor: pointer;
-                "
-                onmouseover="this.style.background='#e0f2fe'; this.style.transform='translateX(4px)'"
-                onmouseout="this.style.background='${(startIndex + index) % 2 === 0 ? '#f8fafc' : '#ffffff'}'; this.style.transform='translateX(0)'"
-                onclick="window.outboundManualExcel.copyInvoiceNumber('${invoice.trim()}', this, ${(startIndex + index) % 2 === 0})">
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <span style="
-                            background: #1a365d;
-                            color: white;
-                            padding: 2px 6px;
-                            border-radius: 4px;
-                            font-size: 10px;
-                            font-weight: 600;
-                            min-width: 30px;
-                            text-align: center;
-                        ">${startIndex + index + 1}</span>
-                        <span>${invoice.trim()}</span>
-                        <i class="bi bi-clipboard" style="margin-left: auto; color: #6b7280; font-size: 12px;" title="Click to copy"></i>
+            if (pageInvoices.length === 0) {
+                return '<div style="text-align:center;padding:30px 0;color:#94a3b8;"><i class="bi bi-inbox" style="font-size:28px;display:block;margin-bottom:8px;"></i>No invoices match this filter</div>';
+            }
+
+            return pageInvoices.map((invoice, index) => {
+                const info = statusMap[invoice.trim()];
+                const borderColor = getBorderColor(invoice);
+                const isRejected = info?.status === 'rejected';
+                const isAccepted = info?.status === 'accepted';
+                const bg = isRejected ? '#fef2f2' : (isAccepted ? '#f0fdf4' : '#f8fafc');
+                const hoverBg = isRejected ? '#fee2e2' : (isAccepted ? '#dcfce7' : '#e0f2fe');
+
+                let errorRow = '';
+                if (isRejected && info.error) {
+                    errorRow = `<div style="margin:6px 0 2px 38px;padding:6px 10px;background:#fee2e2;border-radius:4px;font-size:11px;color:#991b1b;font-family:system-ui,sans-serif;line-height:1.4;">
+                        <i class="bi bi-exclamation-triangle-fill me-1" style="font-size:10px;"></i>${info.error}
+                    </div>`;
+                }
+
+                return `
+                <div class="invoice-item" style="padding:10px 12px;margin-bottom:4px;background:${bg};border-radius:8px;border-left:4px solid ${borderColor};transition:all 0.15s ease;cursor:pointer;"
+                    onmouseover="this.style.background='${hoverBg}';this.style.transform='translateX(3px)'"
+                    onmouseout="this.style.background='${bg}';this.style.transform='none'"
+                    onclick="window.outboundManualExcel.copyInvoiceNumber('${invoice.trim()}', this, true)">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <span style="background:${borderColor};color:white;padding:2px 0;border-radius:4px;font-size:10px;font-weight:700;min-width:28px;text-align:center;display:inline-block;font-family:system-ui,sans-serif;">${startIndex + index + 1}</span>
+                        <span style="flex:1;font-family:'SF Mono',SFMono-Regular,ui-monospace,monospace;font-size:13px;font-weight:500;color:#1e293b;">${invoice.trim()}</span>
+                        ${getStatusBadge(invoice)}
+                        <i class="bi bi-clipboard" style="color:#94a3b8;font-size:12px;flex-shrink:0;" title="Click to copy"></i>
                     </div>
-                </div>
-            `).join('');
+                    ${errorRow}
+                </div>`;
+            }).join('');
         };
 
         const createPagination = (totalPages, currentPage, filteredCount) => {
             if (totalPages <= 1) return '';
-
             let pagination = '<nav aria-label="Invoice pagination"><ul class="pagination pagination-sm justify-content-center mb-0">';
-
-            // Previous button
-            pagination += `
-                <li class="page-item ${currentPage === 1 ? 'disabled' : ''}">
-                    <a class="page-link" href="#" onclick="window.outboundManualExcel.updateInvoiceModal('${uniqueId}', ${currentPage - 1}); return false;">
-                        <i class="bi bi-chevron-left"></i>
-                    </a>
-                </li>
-            `;
-
-            // Page numbers (show max 5 pages)
+            pagination += `<li class="page-item ${currentPage === 1 ? 'disabled' : ''}">
+                <a class="page-link" href="#" onclick="window.outboundManualExcel.updateInvoiceModal('${uniqueId}', ${currentPage - 1}); return false;">
+                    <i class="bi bi-chevron-left"></i></a></li>`;
             const startPage = Math.max(1, currentPage - 2);
             const endPage = Math.min(totalPages, startPage + 4);
-
             for (let i = startPage; i <= endPage; i++) {
-                pagination += `
-                    <li class="page-item ${i === currentPage ? 'active' : ''}">
-                        <a class="page-link" href="#" onclick="window.outboundManualExcel.updateInvoiceModal('${uniqueId}', ${i}); return false;">
-                            ${i}
-                        </a>
-                    </li>
-                `;
+                pagination += `<li class="page-item ${i === currentPage ? 'active' : ''}">
+                    <a class="page-link" href="#" onclick="window.outboundManualExcel.updateInvoiceModal('${uniqueId}', ${i}); return false;">${i}</a></li>`;
             }
-
-            // Next button
-            pagination += `
-                <li class="page-item ${currentPage === totalPages ? 'disabled' : ''}">
-                    <a class="page-link" href="#" onclick="window.outboundManualExcel.updateInvoiceModal('${uniqueId}', ${currentPage + 1}); return false;">
-                        <i class="bi bi-chevron-right"></i>
-                    </a>
-                </li>
-            `;
-
+            pagination += `<li class="page-item ${currentPage === totalPages ? 'disabled' : ''}">
+                <a class="page-link" href="#" onclick="window.outboundManualExcel.updateInvoiceModal('${uniqueId}', ${currentPage + 1}); return false;">
+                    <i class="bi bi-chevron-right"></i></a></li>`;
             pagination += '</ul></nav>';
             return pagination;
         };
 
+        // Filter tabs + progress bar
+        const filterSection = hasStatusData ? `
+            <div style="display:flex;gap:0;margin-bottom:6px;background:#f1f5f9;border-radius:8px;padding:3px;border:1px solid #e2e8f0;">
+                <button class="inv-filter-btn active" style="flex:1;padding:6px 12px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.2s;background:#fff;color:#1a365d;box-shadow:0 1px 2px rgba(0,0,0,0.08);"
+                    onclick="window.outboundManualExcel.filterInvoicesByStatus('${uniqueId}', 'all', this)">
+                    All <span style="opacity:0.6;margin-left:2px;">${totalCount}</span></button>
+                <button class="inv-filter-btn" style="flex:1;padding:6px 12px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.2s;background:transparent;color:#64748b;"
+                    onclick="window.outboundManualExcel.filterInvoicesByStatus('${uniqueId}', 'accepted', this)">
+                    <i class="bi bi-check-circle-fill me-1" style="color:#22c55e;"></i>Valid <span style="opacity:0.6;margin-left:2px;">${acceptedCount}</span></button>
+                ${rejectedCount > 0 ? `<button class="inv-filter-btn" style="flex:1;padding:6px 12px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.2s;background:transparent;color:#64748b;"
+                    onclick="window.outboundManualExcel.filterInvoicesByStatus('${uniqueId}', 'rejected', this)">
+                    <i class="bi bi-x-circle-fill me-1" style="color:#ef4444;"></i>Rejected <span style="opacity:0.6;margin-left:2px;">${rejectedCount}</span></button>` : ''}
+                ${pendingCount > 0 ? `<button class="inv-filter-btn" style="flex:1;padding:6px 12px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.2s;background:transparent;color:#64748b;"
+                    onclick="window.outboundManualExcel.filterInvoicesByStatus('${uniqueId}', 'pending', this)">
+                    <i class="bi bi-hourglass-split me-1" style="color:#94a3b8;"></i>Pending <span style="opacity:0.6;margin-left:2px;">${pendingCount}</span></button>` : ''}
+            </div>
+            <div style="margin-bottom:14px;">
+                <div style="height:6px;background:#e2e8f0;border-radius:3px;overflow:hidden;display:flex;">
+                    ${acceptedCount > 0 ? `<div style="width:${validPct}%;background:linear-gradient(90deg,#22c55e,#16a34a);transition:width 0.5s ease;"></div>` : ''}
+                    ${rejectedCount > 0 ? `<div style="width:${rejectedPct}%;background:linear-gradient(90deg,#ef4444,#dc2626);transition:width 0.5s ease;"></div>` : ''}
+                    ${pendingCount > 0 ? `<div style="flex:1;background:#cbd5e1;"></div>` : ''}
+                </div>
+                <div style="display:flex;justify-content:space-between;margin-top:3px;">
+                    <span style="font-size:10px;color:#64748b;">${validPct}% valid</span>
+                    ${rejectedCount > 0 ? `<span style="font-size:10px;color:#64748b;">${rejectedPct}% rejected</span>` : ''}
+                </div>
+            </div>` : '';
+
         modal.innerHTML = `
-            <div class="modal-dialog modal-lg">
-                <div class="modal-content">
-                    <div class="modal-header text-white" style="background-color: #1a365d;">
-                        <h5 class="modal-title" id="invoiceNumbersModalLabel">
-                            <i class="bi bi-receipt me-2"></i>
-                            Invoice Numbers (${invoiceNumbers.length} total)
+            <div class="modal-dialog modal-lg modal-dialog-centered">
+                <div class="modal-content" style="border:none;border-radius:14px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.15);">
+                    <div class="modal-header" style="background:linear-gradient(135deg,#1a365d 0%,#2d4a7c 100%);padding:18px 24px;border:none;">
+                        <h5 class="modal-title text-white" id="invoiceNumbersModalLabel" style="font-size:16px;font-weight:600;">
+                            <i class="bi bi-receipt me-2" style="opacity:0.8;"></i>
+                            Invoice Numbers
+                            <span style="font-weight:400;opacity:0.8;font-size:14px;margin-left:6px;">(${invoiceNumbers.length} total)</span>
                         </h5>
-                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close" style="opacity:0.8;"></button>
                     </div>
-                    <div class="modal-body">
-                        <div class="mb-3">
-                            <div class="input-group">
-                                <span class="input-group-text">
-                                    <i class="bi bi-search"></i>
-                                </span>
+                    <div class="modal-body" style="padding:20px 24px;">
+                        <div style="margin-bottom:12px;">
+                            <div class="input-group" style="border-radius:8px;overflow:hidden;border:1px solid #e2e8f0;">
+                                <span class="input-group-text" style="background:#f8fafc;border:none;padding-left:14px;"><i class="bi bi-search" style="color:#94a3b8;"></i></span>
                                 <input type="text" class="form-control" id="invoiceSearch" placeholder="Search invoice numbers..."
+                                    style="border:none;box-shadow:none;font-size:13px;"
                                     oninput="window.outboundManualExcel.filterInvoices('${uniqueId}')">
                             </div>
-                            <small class="text-muted mt-1 d-block">
-                                <i class="bi bi-info-circle me-1"></i>
-                                Click any invoice number to copy it to clipboard
-                            </small>
                         </div>
-                        <div id="invoiceListContainer" style="max-height: 400px; overflow-y: auto; scrollbar-width: none; -ms-overflow-style: none;" class="hide-scrollbar">
+                        ${filterSection}
+                        <div id="invoiceListContainer" style="max-height:420px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#cbd5e1 transparent;padding-right:4px;">
                             ${createInvoiceList(invoiceNumbers, 1)}
                         </div>
                         <div id="invoicePagination" class="mt-3">
                             ${createPagination(totalPages, 1, invoiceNumbers.length)}
                         </div>
                         <div class="mt-2 text-center">
-                            <small id="invoiceCountDisplay" class="text-muted">
+                            <small id="invoiceCountDisplay" style="color:#94a3b8;font-size:12px;">
                                 Showing 1-${Math.min(itemsPerPage, invoiceNumbers.length)} of ${invoiceNumbers.length} invoices
                             </small>
                         </div>
                     </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-lhdn-cancel" data-bs-dismiss="modal">Close</button>
+                    <div class="modal-footer" style="border-top:1px solid #f1f5f9;padding:12px 24px;">
+                        <button type="button" class="btn btn-lhdn-cancel" data-bs-dismiss="modal" style="border-radius:8px;padding:8px 20px;">Close</button>
                     </div>
                 </div>
             </div>
         `;
 
-        // Store current state for filtering and pagination
+        // Store state for filtering/pagination/status
         if (!window.invoiceModalState) window.invoiceModalState = {};
         window.invoiceModalState[uniqueId] = {
             allInvoices: invoiceNumbers,
             filteredInvoices: invoiceNumbers,
             currentPage: 1,
-            itemsPerPage: itemsPerPage
+            itemsPerPage: itemsPerPage,
+            statusMap: statusMap,
+            createInvoiceList,
+            createPagination
         };
 
-        // Show modal
         const bootstrapModal = new bootstrap.Modal(modal);
         bootstrapModal.show();
+    }
+
+    // Filter invoices by LHDN status (all / accepted / rejected / pending)
+    filterInvoicesByStatus(uniqueId, status, btn) {
+        const state = window.invoiceModalState?.[uniqueId];
+        if (!state) return;
+
+        // Update active tab style
+        if (btn) {
+            btn.closest('div').querySelectorAll('.inv-filter-btn, .btn').forEach(b => {
+                b.style.background = 'transparent';
+                b.style.color = '#64748b';
+                b.style.boxShadow = 'none';
+                b.classList.remove('active');
+            });
+            btn.style.background = '#fff';
+            btn.style.color = '#1a365d';
+            btn.style.boxShadow = '0 1px 2px rgba(0,0,0,0.08)';
+            btn.classList.add('active');
+        }
+
+        let filtered;
+        if (status === 'all') {
+            filtered = state.allInvoices;
+        } else if (status === 'accepted') {
+            filtered = state.allInvoices.filter(inv => state.statusMap[inv.trim()]?.status === 'accepted');
+        } else if (status === 'rejected') {
+            filtered = state.allInvoices.filter(inv => state.statusMap[inv.trim()]?.status === 'rejected');
+        } else if (status === 'pending') {
+            filtered = state.allInvoices.filter(inv => !state.statusMap[inv.trim()]);
+        }
+
+        state.filteredInvoices = filtered;
+        state.currentPage = 1;
+
+        const container = document.getElementById('invoiceListContainer');
+        const pagination = document.getElementById('invoicePagination');
+        const countDisplay = document.getElementById('invoiceCountDisplay');
+
+        if (container) container.innerHTML = state.createInvoiceList(filtered, 1);
+        const totalPages = Math.ceil(filtered.length / state.itemsPerPage);
+        if (pagination) pagination.innerHTML = state.createPagination(totalPages, 1, filtered.length);
+        if (countDisplay) countDisplay.textContent = `Showing 1-${Math.min(state.itemsPerPage, filtered.length)} of ${filtered.length} invoices`;
     }
 
     // Update invoice modal with pagination
@@ -4708,50 +4837,18 @@ class InvoiceTableManager {
         state.currentPage = page;
 
         const startIndex = (page - 1) * state.itemsPerPage;
-        const endIndex = startIndex + state.itemsPerPage;
-        const pageInvoices = state.filteredInvoices.slice(startIndex, endIndex);
+        const endIndex = Math.min(startIndex + state.itemsPerPage, state.filteredInvoices.length);
 
-        const invoiceList = pageInvoices.map((invoice, index) => `
-            <div class="invoice-item" style="
-                padding: 8px 12px;
-                margin: 2px 0;
-                background: ${(startIndex + index) % 2 === 0 ? '#f8fafc' : '#ffffff'};
-                border-radius: 6px;
-                border-left: 4px solid #1a365d;
-                font-family: 'SF Mono', SFMono-Regular, ui-monospace, monospace;
-                font-size: 13px;
-                color: #1e293b;
-                font-weight: 500;
-                transition: all 0.2s ease;
-                cursor: pointer;
-            "
-            onmouseover="this.style.background='#e0f2fe'; this.style.transform='translateX(4px)'"
-            onmouseout="this.style.background='${(startIndex + index) % 2 === 0 ? '#f8fafc' : '#ffffff'}'; this.style.transform='translateX(0)'"
-            onclick="window.outboundManualExcel.copyInvoiceNumber('${invoice.trim()}', this, ${(startIndex + index) % 2 === 0})">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <span style="
-                        background: #1a365d;
-                        color: white;
-                        padding: 2px 6px;
-                        border-radius: 4px;
-                        font-size: 10px;
-                        font-weight: 600;
-                        min-width: 30px;
-                        text-align: center;
-                    ">${startIndex + index + 1}</span>
-                    <span>${invoice.trim()}</span>
-                    <i class="bi bi-clipboard" style="margin-left: auto; color: #6b7280; font-size: 12px;" title="Click to copy"></i>
-                </div>
-            </div>
-        `).join('');
+        if (state.createInvoiceList) {
+            document.getElementById('invoiceListContainer').innerHTML = state.createInvoiceList(state.filteredInvoices, page);
+        }
 
-        document.getElementById('invoiceListContainer').innerHTML = invoiceList;
+        if (state.createPagination) {
+            document.getElementById('invoicePagination').innerHTML = state.createPagination(totalPages, page, state.filteredInvoices.length);
+        } else {
+            this.updatePagination(uniqueId, totalPages, page);
+        }
 
-        // Update pagination
-        this.updatePagination(uniqueId, totalPages, page);
-
-        // Update the "Showing X of Y invoices" text
-        console.log(`Updating invoice count: startIndex=${startIndex}, endIndex=${endIndex}, total=${state.filteredInvoices.length}`);
         this.updateInvoiceCount(startIndex, endIndex, state.filteredInvoices.length);
     }
 
@@ -4853,7 +4950,7 @@ class InvoiceTableManager {
             // Find the file data from the current table data or fetch fresh data
             let tableData = dataCache.getCachedData();
             console.log('📊 Cache data available:', !!tableData, 'Files count:', tableData?.length || 0);
-            let fileData = tableData?.find(file => file.id === fileId);
+            let fileData = tableData?.find(file => String(file.id) === String(fileId));
             console.log('🔍 File found in cache:', !!fileData, 'Looking for ID:', fileId);
 
             // If not found in cache, try to refresh the table data
@@ -4864,19 +4961,19 @@ class InvoiceTableManager {
                     if (this.table && this.table.ajax) {
                         await new Promise((resolve, reject) => {
                             this.table.ajax.reload((json) => {
-                                if (json && json.data) {
-                                    // Update cache with fresh data
-                                    dataCache.updateCache(json.data);
+                                const data = json?.data || json?.files;
+                                if (data) {
+                                    dataCache.updateCache(data);
                                     resolve();
                                 } else {
-                                    reject(new Error('No data received'));
+                                    resolve();
                                 }
                             }, false);
                         });
 
                         // Try to find the file again after refresh
                         tableData = dataCache.getCachedData();
-                        fileData = tableData?.find(file => file.id === fileId);
+                        fileData = tableData?.find(file => String(file.id) === String(fileId));
                     }
                 } catch (refreshError) {
                     console.warn('Failed to refresh table data:', refreshError);
@@ -4899,7 +4996,19 @@ class InvoiceTableManager {
                     if (response.ok) {
                         const result = await response.json();
                         if (result.success && result.data) {
-                            fileData = result.data;
+                            const d = result.data;
+                            fileData = {
+                                ...d,
+                                id: d.id,
+                                fileName: d.fileName || d.filename || d.original_filename,
+                                uploadDate: d.uploadDate || d.upload_date,
+                                status: d.status || d.processing_status,
+                                lhdnResponse: d.lhdnResponse || d.lhdn_response,
+                                submissionUid: d.submissionUid || d.submission_uid,
+                                processedDate: d.processedDate || d.processed_date,
+                                submittedDate: d.submittedDate || d.submitted_date,
+                                invoiceNumber: d.invoiceNumber || d.invoice_count,
+                            };
                             console.log('File data retrieved directly from API');
                         }
                     } else if (response.status === 404) {
@@ -4970,6 +5079,8 @@ class InvoiceTableManager {
         let statusInfo = '';
 
         if (lhdnData) {
+            const isFailed = lhdnData.status === 'failed' || lhdnData.success === false;
+
             if (lhdnData.summary) {
                 // Multi-document submission with summary
                 const { totalDocuments, validDocuments, failedDocuments } = lhdnData.summary;
@@ -4993,7 +5104,7 @@ class InvoiceTableManager {
                 }
 
                 modalContent = this.generateValidationErrorsContent(lhdnData);
-            } else if (lhdnData.status === 'success') {
+            } else if (lhdnData.status === 'success' || lhdnData.success === true) {
                 // Single document success
                 modalTitle = 'LHDN Submission Results';
                 statusInfo = `<div class="alert alert-success">
@@ -5001,9 +5112,21 @@ class InvoiceTableManager {
                     <strong>Success:</strong> Document was successfully submitted to LHDN.
                 </div>`;
                 modalContent = this.generateSingleDocumentContent(lhdnData);
-            } else if (lhdnData.status === 'failed') {
-                // Single document failure
-                modalTitle = 'LHDN Submission Results';
+            } else if (isFailed && (lhdnData.error || lhdnData.details)) {
+                // Submission failure with error details
+                modalTitle = 'LHDN Submission Error';
+                const totalDocs = lhdnData.totalDocuments ? ` (${lhdnData.totalDocuments} documents)` : '';
+                const errorMsg = typeof lhdnData.error === 'string'
+                    ? lhdnData.error
+                    : (lhdnData.error?.message || 'Submission failed');
+                statusInfo = `<div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                    <strong>Failed:</strong> ${errorMsg}${totalDocs}
+                </div>`;
+                modalContent = this.generateSubmissionErrorContent(lhdnData);
+            } else if (isFailed) {
+                // Generic failure
+                modalTitle = 'LHDN Submission Error';
                 statusInfo = `<div class="alert alert-danger">
                     <i class="bi bi-exclamation-triangle-fill me-2"></i>
                     <strong>Failed:</strong> Document submission failed.
@@ -5074,43 +5197,93 @@ class InvoiceTableManager {
         }, 10);
     }
 
-    // Generate content for validation errors
+    // Generate content for submission results with accepted/rejected documents
     generateValidationErrorsContent(lhdnData) {
-        if (!lhdnData.validationErrors || lhdnData.validationErrors.length === 0) {
-            return '<div class="alert alert-info">No detailed validation errors available.</div>';
+        let content = '';
+        const accepted = lhdnData.data?.acceptedDocuments || [];
+        const rejected = lhdnData.data?.rejectedDocuments || [];
+        const summary = lhdnData.summary;
+
+        // Summary bar
+        if (summary) {
+            content += `<div class="d-flex gap-3 mb-3 flex-wrap">
+                <div class="p-2 px-3 rounded" style="background: #f0fdf4; border: 1px solid #bbf7d0;">
+                    <strong style="color: #166534;">${summary.validDocuments}</strong>
+                    <small class="text-muted ms-1">Accepted</small>
+                </div>
+                <div class="p-2 px-3 rounded" style="background: #fef2f2; border: 1px solid #fecaca;">
+                    <strong style="color: #991b1b;">${summary.failedDocuments}</strong>
+                    <small class="text-muted ms-1">Rejected</small>
+                </div>
+                <div class="p-2 px-3 rounded" style="background: #f8fafc; border: 1px solid #e2e8f0;">
+                    <strong>${summary.totalDocuments}</strong>
+                    <small class="text-muted ms-1">Total</small>
+                </div>
+            </div>`;
         }
 
-        let content = '<div class="validation-errors-section">';
-        content += '<h6 class="mb-3"><i class="bi bi-exclamation-triangle me-2"></i>Validation Errors</h6>';
+        // Rejected documents section
+        if (rejected.length > 0) {
+            content += `<h6 class="mb-2 mt-3" style="color: #991b1b;"><i class="bi bi-x-circle me-2"></i>Rejected Documents (${rejected.length})</h6>`;
+            rejected.forEach((doc, index) => {
+                const invoiceNo = doc.invoiceCodeNumber || doc.codeNumber || `#${index + 1}`;
+                const errDetails = doc.error?.details || [];
+                const errMsg = doc.error?.message || 'Validation Error';
 
-        lhdnData.validationErrors.forEach((errorGroup, index) => {
-            content += `
-                <div class="error-group mb-4">
-                    <div class="error-group-header">
-                        <strong>Invoice ${errorGroup.invoiceNumber || `#${index + 1}`}</strong>
-                        <span class="badge bg-danger ms-2">${errorGroup.errors.length} error(s)</span>
-                    </div>
-                    <div class="error-list mt-2">
-            `;
-
-            errorGroup.errors.forEach(error => {
                 content += `
-                    <div class="error-item">
-                        <div class="error-field">
-                            <i class="bi bi-arrow-right me-2"></i>
-                            <strong>${error.field || 'Unknown Field'}</strong>
-                        </div>
-                        <div class="error-message">${error.userFriendlyMessage || error.message || 'Validation failed'}</div>
-                        ${error.value ? `<div class="error-value">Current value: <code>${error.value}</code></div>` : ''}
-                        ${error.code ? `<div class="error-code">Error code: ${error.code}</div>` : ''}
-                    </div>
-                `;
+                    <div class="mb-3 p-3 border rounded" style="border-left: 4px solid #dc3545 !important; background: #fff5f5;">
+                        <div class="d-flex align-items-center mb-2">
+                            <span class="badge bg-danger me-2">${index + 1}</span>
+                            <strong>${invoiceNo}</strong>
+                            <span class="badge bg-light text-danger ms-auto">${errMsg}</span>
+                        </div>`;
+
+                errDetails.forEach(detail => {
+                    content += `
+                        <div class="ms-4 mb-1">
+                            <div><small><i class="bi bi-arrow-right me-1"></i>${detail.message || 'Validation failed'}</small></div>
+                            ${detail.code ? `<small class="text-muted">Code: <code>${detail.code}</code></small>` : ''}
+                            ${detail.propertyPath ? `<small class="text-muted ms-2">Path: <code>${detail.propertyPath}</code></small>` : ''}
+                        </div>`;
+                });
+
+                content += '</div>';
             });
+        }
 
-            content += '</div></div>';
-        });
+        // Accepted documents section (collapsible)
+        if (accepted.length > 0) {
+            content += `<h6 class="mb-2 mt-3" style="color: #166534;"><i class="bi bi-check-circle me-2"></i>Accepted Documents (${accepted.length})</h6>`;
+            content += `<div class="p-3 border rounded" style="border-left: 4px solid #22c55e !important; background: #f0fdf4; max-height: 200px; overflow-y: auto;">`;
+            accepted.forEach((doc, index) => {
+                content += `<div class="d-flex align-items-center mb-1">
+                    <i class="bi bi-check-circle-fill text-success me-2" style="font-size: 0.8rem;"></i>
+                    <small><strong>${doc.invoiceCodeNumber || doc.codeNumber || `#${index + 1}`}</strong></small>
+                    ${doc.uuid ? `<small class="text-muted ms-auto" style="font-size: 0.75rem;">${doc.uuid.substring(0, 12)}...</small>` : ''}
+                </div>`;
+            });
+            content += '</div>';
+        }
 
-        content += '</div>';
+        // Fallback for old format with validationErrors
+        if (!accepted.length && !rejected.length && lhdnData.validationErrors) {
+            content += '<div class="validation-errors-section">';
+            lhdnData.validationErrors.forEach((errorGroup, index) => {
+                content += `<div class="error-group mb-3">
+                    <strong>Invoice ${errorGroup.invoiceNumber || `#${index + 1}`}</strong>
+                    <span class="badge bg-danger ms-2">${errorGroup.errors?.length || 0} error(s)</span>`;
+                (errorGroup.errors || []).forEach(error => {
+                    content += `<div class="ms-3 mt-1"><small>${error.userFriendlyMessage || error.message || 'Validation failed'}</small></div>`;
+                });
+                content += '</div>';
+            });
+            content += '</div>';
+        }
+
+        if (!content) {
+            return '<div class="alert alert-info">No detailed submission results available.</div>';
+        }
+
         return content;
     }
 
@@ -5160,6 +5333,65 @@ class InvoiceTableManager {
                     </div>`;
                 });
             }
+        }
+
+        content += '</div>';
+        return content;
+    }
+
+    // Generate content for submission errors (handles both old and new formats)
+    generateSubmissionErrorContent(lhdnData) {
+        let content = '<div class="submission-error-section">';
+
+        // Get error details from various possible locations
+        const errorObj = typeof lhdnData.error === 'object' ? lhdnData.error : null;
+        const errorStr = typeof lhdnData.error === 'string' ? lhdnData.error : null;
+        const details = errorObj?.details || lhdnData.details || [];
+
+        if (errorStr && !details.length) {
+            content += `<div class="alert alert-danger">
+                <strong>Error:</strong> ${errorStr}
+            </div>`;
+            content += '</div>';
+            return content;
+        }
+
+        if (Array.isArray(details) && details.length > 0) {
+            content += `<h6 class="mb-3"><i class="bi bi-exclamation-triangle me-2"></i>Validation Error Details (${details.length} issue${details.length > 1 ? 's' : ''})</h6>`;
+
+            details.forEach((detail, index) => {
+                const msg = detail.originalMessage || detail.userMessage || detail.message || 'Validation failed';
+                const errorCode = detail.errorCode || detail.code || '';
+                const field = detail.fieldDescription || detail.target || detail.propertyName || '';
+                const path = detail.propertyPath || detail._technical?.propertyPath || '';
+                const guidance = detail.guidance || [];
+
+                content += `
+                    <div class="error-card mb-3 p-3 border rounded" style="border-left: 4px solid #dc3545 !important; background: #fff5f5;">
+                        <div class="d-flex align-items-start mb-2">
+                            <span class="badge bg-danger me-2" style="min-width: 28px; text-align: center;">${index + 1}</span>
+                            <div class="flex-grow-1">
+                                <div class="fw-semibold" style="color: #dc3545;">${msg}</div>
+                                ${errorCode ? `<small class="text-muted">Error Code: <code>${errorCode}</code></small>` : ''}
+                            </div>
+                        </div>
+                        ${field ? `<div class="mb-1"><small><strong>Field:</strong> ${field}</small></div>` : ''}
+                        ${path ? `<div class="mb-1"><small class="text-muted"><strong>Path:</strong> <code>${path}</code></small></div>` : ''}
+                        ${guidance.length > 0 ? `
+                            <div class="mt-2 p-2 rounded" style="background: #f0f9ff; border: 1px solid #bae6fd;">
+                                <small class="fw-semibold" style="color: #0369a1;"><i class="bi bi-lightbulb me-1"></i>Guidance:</small>
+                                <ul class="mb-0 mt-1 ps-3" style="font-size: 0.85rem;">
+                                    ${guidance.map(g => `<li>${g}</li>`).join('')}
+                                </ul>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            });
+        } else if (errorObj) {
+            content += `<div class="alert alert-danger">
+                <strong>Error:</strong> ${errorObj.message || 'Submission failed'}
+            </div>`;
         }
 
         content += '</div>';

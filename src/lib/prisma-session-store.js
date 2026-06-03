@@ -1,6 +1,16 @@
 const session = require('express-session');
 const prisma = require('./prisma');
 
+/** True when Prisma cannot reach SQL Server (wrong host, firewall, SQL stopped, etc.). */
+function isDatabaseUnreachableError(error) {
+  if (!error || typeof error.message !== 'string') return false;
+  if (error.code === 'P1001') return true;
+  return (
+    error.message.includes("Can't reach database server") ||
+    error.message.includes('Server has closed the connection')
+  );
+}
+
 class PrismaSessionStore extends session.Store {
   constructor(options = {}) {
     super(options);
@@ -39,6 +49,13 @@ class PrismaSessionStore extends session.Store {
       console.log(`[Session Store] Session found for SID: ${sid}, has user: ${!!session.user}`);
       return callback(null, session);
     } catch (error) {
+      if (isDatabaseUnreachableError(error)) {
+        console.error(
+          '[Session Store] Database unreachable (check DATABASE_URL, SQL Server TCP, firewall). Treating as no session for:',
+          sid
+        );
+        return callback(null, null);
+      }
       console.error(`[Session Store] Error getting session for SID: ${sid}`, error);
       return callback(error);
     }
