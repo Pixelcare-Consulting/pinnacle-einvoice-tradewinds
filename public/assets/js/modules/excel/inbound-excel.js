@@ -181,10 +181,11 @@ class CustomModal {
 document.addEventListener("DOMContentLoaded", () => {
   console.log("DOM loaded, initializing managers...");
   try {
-    // Initialize invoice table using singleton
-    const invoiceManager = InvoiceTableManager.getInstance();
+    if (typeof initializeCharts === "function") {
+      initializeCharts();
+    }
 
-    // Initialize date/time display
+    InvoiceTableManager.getInstance();
     DateTimeManager.updateDateTime();
 
     console.log("Managers initialized successfully");
@@ -561,16 +562,86 @@ class InvoiceTableManager {
     this.rateLimiter = new RateLimiter();
     this.requestQueue = new RequestQueue();
     this.loadingStates = new Map(); // Track loading states for different operations
+    this.statusFilter = "all";
+    this.inboundSummary = null;
+    this._liveLoadTimeout = null;
+    this._inboundAjaxXhr = null;
+    this.syncRequestId = this.newInboundSyncRequestId();
 
-    const cachedRows = this.getValidInboundCache();
-    if (cachedRows) {
-      this.bootstrapFromLocalCache(cachedRows);
-    } else {
-      this.initializeTable();
-      this.finishInboundConstructorSetup();
-    }
+    this.initializeTable();
+    this.finishInboundConstructorSetup();
 
     InvoiceTableManager.instance = this;
+  }
+
+  newInboundSyncRequestId() {
+    return `sync-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  }
+
+  buildInboundAjaxParams(d) {
+    const params = {
+      start: d.start,
+      length: d.length,
+      "search[value]": d.search?.value || "",
+      statusFilter: this.statusFilter || "all",
+      useDatabase: true,
+      fallbackOnly: window.forceRefreshLHDN !== true,
+      skipBackgroundSync: window.forceRefreshLHDN !== true,
+      lightweight: true,
+      forceRefresh: window.forceRefreshLHDN === true,
+    };
+
+    if (d.order?.length) {
+      params["order[0][column]"] = d.order[0].column;
+      params["order[0][dir]"] = d.order[0].dir;
+    }
+
+    if (window.forceRefreshLHDN === true) {
+      this.syncRequestId = this.newInboundSyncRequestId();
+    }
+    params.syncRequestId = this.syncRequestId;
+
+    const startDate = $("#tableStartDate").val();
+    const endDate = $("#tableEndDate").val();
+    if (startDate) params.dateFrom = startDate;
+    if (endDate) params.dateTo = endDate;
+
+    const minAmount = $("#minAmount").val();
+    const maxAmount = $("#maxAmount").val();
+    if (minAmount) params.minAmount = minAmount;
+    if (maxAmount) params.maxAmount = maxAmount;
+
+    const companyFilter = $("#companyFilter").val();
+    if (companyFilter) params.companyFilter = companyFilter;
+
+    const typeFilter = $("#documentTypeFilter").val();
+    if (typeFilter) params.typeFilter = typeFilter;
+
+    return params;
+  }
+
+  async fetchInboundSummary() {
+    try {
+      const response = await fetch("/api/lhdn/documents/summary", {
+        method: "GET",
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) return;
+      const data = await response.json();
+      if (data.success && data.summary) {
+        this.inboundSummary = data.summary;
+        this.updateCardTotals();
+        if (window.documentStatusAnalytics?.updateWithSummary) {
+          window.documentStatusAnalytics.updateWithSummary(data.summary);
+        }
+        if (typeof updateCharts === "function") {
+          updateCharts();
+        }
+      }
+    } catch (err) {
+      console.warn("[Inbound] Summary fetch failed:", err);
+    }
   }
 
   finishInboundConstructorSetup() {
@@ -580,6 +651,20 @@ class InvoiceTableManager {
     }, 1000);
     this.setupAutoRefresh();
     this.setupRealTimeStatusMonitoring();
+    this.fetchInboundSummary();
+
+    if (!this._inboundBeforeUnloadBound) {
+      this._inboundBeforeUnloadBound = true;
+      window.addEventListener("beforeunload", () => {
+        if (this._inboundAjaxXhr?.abort) {
+          this._inboundAjaxXhr.abort();
+        }
+        if (this._liveLoadTimeout) {
+          clearTimeout(this._liveLoadTimeout);
+        }
+        this.hideLoadingBackdrop();
+      });
+    }
   }
 
   getInboundCacheTtlMs(cachedRows) {
@@ -1040,6 +1125,12 @@ class InvoiceTableManager {
       if (this.submissionMonitorInterval) {
         clearInterval(this.submissionMonitorInterval);
       }
+      if (this._inboundAjaxXhr?.abort) {
+        this._inboundAjaxXhr.abort();
+      }
+      if (this._liveLoadTimeout) {
+        clearTimeout(this._liveLoadTimeout);
+      }
     });
 
     console.log('✅ Real-time status monitoring active');
@@ -1082,16 +1173,14 @@ class InvoiceTableManager {
         if (result.success && result.changes && result.changes.length > 0) {
           console.log(`📊 Detected ${result.changes.length} status changes`);
 
-          localStorage.removeItem('inboundTableData');
-          localStorage.removeItem('lastDataUpdate');
-
           // Show status indicator
           this.showStatusUpdateIndicator(result.changes.length);
 
-          // Trigger incremental refresh to get updated data
-          await this.refreshCurrentDataSource({ incremental: true, force: true });
+          if (this.table) {
+            this.table.ajax.reload(null, false);
+          }
+          await this.fetchInboundSummary();
 
-          // Show detailed notification about status changes
           this.showStatusChangeNotification(result.changes);
         }
       }
@@ -1444,31 +1533,68 @@ class InvoiceTableManager {
 
       // Show loading state with rate limit info
       this.showLoadingBackdrop(
-        "Searching Current Month's Documents",
+        "Syncing with LHDN…",
         `${remainingRequests || 0} requests remaining this minute`
       );
+
+      if (this._liveLoadTimeout) {
+        clearTimeout(this._liveLoadTimeout);
+      }
+      this._liveLoadTimeout = setTimeout(() => {
+        if (this._inboundAjaxXhr?.abort) {
+          this._inboundAjaxXhr.abort();
+        }
+        window.forceRefreshLHDN = false;
+        this.hideLoadingBackdrop();
+        ToastManager.show(
+          "LHDN sync is taking longer than expected. The table may still update when the server finishes.",
+          "warning",
+          6000
+        );
+      }, 120000);
 
       // Wait for rate limit slot
       await this.rateLimiter.waitForSlot("getRecentDocuments");
 
       // Queue the request to manage concurrency
       await this.requestQueue.add(async () => {
-        // Use /documents/recent (MyInvois recent list), not /documents/search (heavy audit search + lock)
         if (this.table) {
           window.forceRefreshLHDN = true;
-          this.table.ajax.url("/api/lhdn/documents/recent").load(() => {
-            window.forceRefreshLHDN = false;
-            this.hideLoadingBackdrop();
-            this.updateCardTotals();
+          await new Promise((resolve, reject) => {
+            this.table.ajax.reload(() => {
+              if (this._liveLoadTimeout) {
+                clearTimeout(this._liveLoadTimeout);
+                this._liveLoadTimeout = null;
+              }
+              window.forceRefreshLHDN = false;
+              this.hideLoadingBackdrop();
+              this.fetchInboundSummary().then(() => resolve());
+            }, false);
+            this.table.one("xhr.error", () => {
+              if (this._liveLoadTimeout) {
+                clearTimeout(this._liveLoadTimeout);
+                this._liveLoadTimeout = null;
+              }
+              window.forceRefreshLHDN = false;
+              this.hideLoadingBackdrop();
+              reject(new Error("Failed to load live LHDN data"));
+            });
           });
         } else {
-          // If table doesn't exist, initialize it
           await this.initializeTableWithData();
+          if (this._liveLoadTimeout) {
+            clearTimeout(this._liveLoadTimeout);
+            this._liveLoadTimeout = null;
+          }
           this.hideLoadingBackdrop();
         }
       }, 2); // Medium priority
     } catch (error) {
       console.error("Error switching to live data:", error);
+      if (this._liveLoadTimeout) {
+        clearTimeout(this._liveLoadTimeout);
+        this._liveLoadTimeout = null;
+      }
       this.hideLoadingBackdrop();
 
       // Enhanced error handling for rate limits
@@ -1595,11 +1721,6 @@ class InvoiceTableManager {
     this.lastRefreshTime = now;
 
     try {
-      // IMPORTANT: Clear localStorage cache to ensure fresh data from database
-      console.log('[Refresh] Clearing localStorage cache to fetch fresh data');
-      localStorage.removeItem('inboundTableData');
-      localStorage.removeItem('lastDataUpdate');
-      
       if (this.currentDataSource === "live") {
         // Check LHDN rate limits before refreshing
         const endpoint = "getRecentDocuments";
@@ -1658,71 +1779,47 @@ class InvoiceTableManager {
   // New incremental refresh method that preserves table state
   async performIncrementalRefresh() {
     try {
-      console.log("🔄 Performing incremental refresh...");
-
-      // Show subtle loading indicator without blocking UI
+      console.log("🔄 Performing incremental refresh (LHDN sync + paged reload)...");
       this.showIncrementalLoadingIndicator();
 
-      const currentData = this.table.data().toArray();
+      window.forceRefreshLHDN = true;
+      await new Promise((resolve) => {
+        this.table.ajax.reload(() => {
+          window.forceRefreshLHDN = false;
+          const json = this.table.ajax.json();
+          if (json?.metadata?.staleSync) {
+            console.log("[Inbound] Stale sync response ignored");
+          }
+          resolve();
+        }, false);
+      });
 
-      // Await LHDN recent sync (forceRefresh) — same list as the inbound grid, not /documents/search
-      const response = await fetch(
-        "/api/lhdn/documents/recent?useDatabase=true&forceRefresh=true&fallbackOnly=false",
-        {
-          method: "GET",
-          credentials: "include",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-          },
-        }
-      );
+      await this.fetchInboundSummary();
 
-      if (!response.ok) {
-        throw new Error(`API request failed: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const newData = data.result || [];
-      const prevCount = currentData.length;
-
-      // Replace rows so ordering and new invoices match the server (merge was tied to wrong endpoint)
-      this.table.clear();
-      this.table.rows.add(newData);
-      this.table.draw(false);
-
-      try {
-        localStorage.setItem("inboundTableData", JSON.stringify(newData));
-        localStorage.setItem("lastDataUpdate", String(Date.now()));
-      } catch (e) {
-        console.warn("[Inbound] Failed to update cache after refresh:", e);
-      }
+      const total =
+        this.inboundSummary?.invoices ??
+        this.table?.page?.info()?.recordsDisplay ??
+        0;
 
       ToastManager.show(
-        `Synced ${newData.length} invoice(s) from LHDN`,
+        `Synced with LHDN — ${total} invoice(s) in database`,
         "success",
         3000
       );
 
-      // Update totals and charts
-      this.updateCardTotals();
-      if (typeof updateCharts === 'function') {
-        updateCharts();
+      try {
+        localStorage.setItem("lastLhdnSyncAt", String(Date.now()));
+      } catch (_e) {
+        /* ignore */
       }
-
-      console.log(
-        `✅ Incremental refresh complete: ${newData.length} rows (was ${prevCount})`
-      );
-
     } catch (error) {
       console.error("❌ Incremental refresh failed:", error);
-      ToastManager.show("Incremental refresh failed, performing full refresh...", "warning");
-
-      // Fallback to full refresh
-      window.forceRefreshLHDN = true;
-      await this.switchToLiveData();
-    } finally {
-      //this.hideIncrementalLoadingIndicator();
+      window.forceRefreshLHDN = false;
+      ToastManager.show(
+        "Quick refresh failed. Please try again.",
+        "error"
+      );
+      throw error;
     }
   }
 
@@ -2182,10 +2279,10 @@ class InvoiceTableManager {
       autoWidth: false,
       pageLength: 10,
       lengthMenu: [[10, 25, 50, 100, -1], [10, 25, 50, 100, "All"]],
-      order: [[6, "desc"]], // The 6 should be the index of your date column
+      order: [[7, "desc"]],
       columnDefs: [
         {
-          targets: 6, // The DATE INFO column index
+          targets: 7,
           type: "date",
         },
       ],
@@ -2212,11 +2309,6 @@ class InvoiceTableManager {
         },
       },
       drawCallback: function (settings) {
-        if (settings._iDisplayLength !== undefined) {
-          self.updateCardTotals();
-          updateCharts(); // Update charts when table is redrawn
-        }
-
         // Update row indexes
         const table = $(this).DataTable();
         $(table.table().node())
@@ -2229,9 +2321,8 @@ class InvoiceTableManager {
           });
       },
       initComplete: function () {
-        self.updateCardTotals();
         self.initializeFilters();
-        updateCharts(); // Update charts when table is first initialized
+        self.fetchInboundSummary();
       },
     });
 
@@ -2349,143 +2440,64 @@ class InvoiceTableManager {
     $("#invoiceTable").closest(".card").find(".loading-overlay").remove();
 
     this.table = $("#invoiceTable").DataTable({
-      processing: false,
-      serverSide: false,
+      processing: true,
+      serverSide: true,
       stateSave: true,
       ajax: {
         url: "/api/lhdn/documents/recent",
         method: "GET",
-        data: function (d) {
-          console.log("[Inbound] Making AJAX request to:", "/api/lhdn/documents/recent");
-
-          // Check if we should use cached data on page load
-          const lastUpdate = localStorage.getItem("lastDataUpdate");
-          const cachedData = localStorage.getItem("inboundTableData");
-          let cacheValidTime = 5 * 60 * 1000; // 5 minutes default
-
-          if (lastUpdate && cachedData && !window.forceRefreshLHDN) {
-            try {
-              const parsed = JSON.parse(cachedData);
-              const hasNonTerminal = Array.isArray(parsed) && parsed.some((row) =>
-                ["Submitted", "Processing", "Pending"].includes(row.status)
-              );
-              if (hasNonTerminal) {
-                cacheValidTime = 2 * 60 * 1000; // 2 minutes when in-flight docs visible
-              }
-            } catch (_) {
-              /* ignore parse errors */
-            }
-
-            const now = new Date().getTime();
-            const lastUpdateTime = parseInt(lastUpdate);
-
-            // If cache is still valid and this is not a forced refresh
-            if (now - lastUpdateTime < cacheValidTime) {
-              d.useCache = true;
-              console.log("[Inbound] Using cached data for table load");
-            }
-          }
-
-          const isManualRefresh = window.forceRefreshLHDN === true;
-          d.forceRefresh = isManualRefresh;
-          d.useDatabase = true;
-          d.fallbackOnly = !isManualRefresh;
-          d.skipBackgroundSync = !isManualRefresh;
-          d.lightweight = !isManualRefresh;
-
-          console.log("[Inbound] Request parameters:", d);
-          return d;
+        data: (d) => self.buildInboundAjaxParams(d),
+        beforeSend: (xhr) => {
+          self._inboundAjaxXhr = xhr;
+        },
+        complete: () => {
+          self._inboundAjaxXhr = null;
+          self.hideLoadingBackdrop();
         },
         dataSrc: function (json) {
-          console.log("[Inbound] Received response:", json);
-          let result = [];
-          let dataSource = "unknown";
-
-          // Check if we should use cached data
-          if (json && json.useCache) {
-            const cachedData = localStorage.getItem("inboundTableData");
-            if (cachedData) {
-              try {
-                result = JSON.parse(cachedData);
-                dataSource = "localStorage";
-                console.log(
-                  "[Inbound] Using cached inbound data:",
-                  result.length,
-                  "records"
-                );
-                self.updateDataSourceIndicator("localStorage", result.length);
-              } catch (e) {
-                console.warn(
-                  "[Inbound] Failed to parse cached data, using API response"
-                );
-                result = json && json.result ? json.result : [];
-                dataSource = json?.metadata?.fromDatabase ? "database" : "api";
-              }
-            } else {
-              result = json && json.result ? json.result : [];
-              dataSource = json?.metadata?.fromDatabase ? "database" : "api";
-            }
-          } else {
-            result = json && json.result ? json.result : [];
-
-            // Determine data source from response metadata
-            if (json?.metadata?.fromDatabase) {
-              dataSource = "database";
-              console.log(`✅ [Inbound] Loaded ${result.length} records from WP_INBOUND_STATUS database`);
-              self.updateDataSourceIndicator("database", result.length);
-            } else if (json?.metadata?.fromApi) {
-              dataSource = "api";
-              console.log(`🌐 [Inbound] Loaded ${result.length} records from LHDN API`);
-              self.updateDataSourceIndicator("api", result.length);
-            } else {
-              dataSource = "fallback";
-              console.log(`📦 [Inbound] Loaded ${result.length} records from fallback source`);
-              self.updateDataSourceIndicator("fallback", result.length);
-            }
-
-            // Save data to cache (regardless of source)
-            if (result && result.length > 0) {
-              try {
-                localStorage.setItem(
-                  "inboundTableData",
-                  JSON.stringify(result)
-                );
-                localStorage.setItem("lastDataUpdate", new Date().getTime());
-                console.log(
-                  `[Inbound] Cached ${result.length} records from ${dataSource}`
-                );
-              } catch (e) {
-                console.warn("[Inbound] Failed to cache data:", e);
-              }
-            }
+          if (!json || json.success === false) {
+            return [];
           }
 
-          console.log("[Inbound] Final processed results:", result);
-          // Reset the force refresh flag
+          if (json.metadata?.staleSync) {
+            window.forceRefreshLHDN = false;
+            return [];
+          }
+
+          const recordsTotal =
+            json.recordsTotal ?? json.metadata?.recordsTotal ?? 0;
+          const recordsFiltered =
+            json.recordsFiltered ?? json.metadata?.recordsFiltered ?? recordsTotal;
+
+          json.recordsTotal = recordsTotal;
+          json.recordsFiltered = recordsFiltered;
+
+          const result = json.result || [];
+          const totalLabel = recordsFiltered || recordsTotal;
+
+          if (json?.metadata?.fromDatabase || json?.metadata?.fallback) {
+            self.updateDataSourceIndicator("database", totalLabel);
+          } else if (json?.metadata?.fromApi) {
+            self.updateDataSourceIndicator("api", totalLabel);
+          }
+
+          const wasForceRefresh = window.forceRefreshLHDN === true;
           window.forceRefreshLHDN = false;
 
-          // Auto-trigger full sync when the server signals incomplete data
-          if (
-            json?.metadata?.needsFullSync &&
-            !self.isFullSyncing &&
-            !localStorage.getItem("fullSyncTriggered")
-          ) {
-            console.log(
-              "[Inbound] Server flagged needsFullSync — auto-triggering Full Sync"
-            );
-            localStorage.setItem("fullSyncTriggered", "1");
-            setTimeout(() => self.fullSync(), 500);
+          if (wasForceRefresh) {
+            try {
+              localStorage.setItem("lastLhdnSyncAt", String(Date.now()));
+            } catch (_e) {
+              /* ignore */
+            }
           }
 
-          // Update totals and charts after data load
-          setTimeout(() => {
-            self.updateCardTotals();
-            updateCharts();
-          }, 100);
+          self.fetchInboundSummary();
 
           return result;
         },
         error: function (xhr, error, thrown) {
+          self.hideLoadingBackdrop();
           console.error("[Inbound] Ajax error:", {
             status: xhr.status,
             statusText: xhr.statusText,
@@ -2536,97 +2548,8 @@ class InvoiceTableManager {
             errorMessage = "Server error. The system is currently unavailable.";
           }
 
-          // Don't show error toast to users, just log to console
-          console.log(
-            errorMessage + " Attempting to load from local database..."
-          );
-
-          // Update loading message with neutral text
-          $("#loadingMessage").text("Loading invoice data...");
-          $("#loadingDetail").text("Please wait while we retrieve your data");
-
-          // Try to load data from database as fallback with improved error handling
-          fetch("/api/lhdn/documents/recent?useDatabase=true&fallbackOnly=true", {
-            credentials: 'include'
-          })
-            .then((response) => {
-              if (!response.ok) {
-                throw new Error(
-                  `Database fetch failed with status: ${response.status}`
-                );
-              }
-              return response.json();
-            })
-            .then((data) => {
-              if (data && data.result && data.result.length > 0) {
-                // Manually update the table with database data
-                self.table.clear().rows.add(data.result).draw();
-                // Don't show warning toast to users
-                console.log(
-                  "Using data from local database. LHDN API connection may be unavailable."
-                );
-
-                // Update card totals and charts with the new data
-                setTimeout(() => {
-                  self.updateCardTotals();
-                  updateCharts();
-                }, 100);
-              } else {
-                throw new Error("No data available in database");
-              }
-            })
-            .catch((fallbackError) => {
-              console.error("Error fetching fallback data:", fallbackError);
-
-              // Try to use cached data as last resort
-              const cachedData = localStorage.getItem("inboundTableData");
-              if (cachedData) {
-                try {
-                  const parsedData = JSON.parse(cachedData);
-                  if (parsedData && parsedData.length > 0) {
-                    self.table.clear().rows.add(parsedData).draw();
-                    console.log(
-                      "Using cached data as fallback:",
-                      parsedData.length,
-                      "records"
-                    );
-
-                    // Update card totals and charts
-                    setTimeout(() => {
-                      self.updateCardTotals();
-                      updateCharts();
-                    }, 100);
-
-                    // Show info message about using cached data
-                    ToastManager.show(
-                      "Using cached data. Some information may not be up to date.",
-                      "info"
-                    );
-                    return;
-                  }
-                } catch (e) {
-                  console.warn("Failed to parse cached data:", e);
-                }
-              }
-
-              // Don't show error toast to users
-              console.error(
-                "Could not load any data. Please try again later or refresh the page."
-              );
-
-              // Show a more user-friendly error message
-              $("#invoiceTable").closest(".card").find(".dataTables_empty")
-                .html(`
-                                <div class="alert alert-info">
-                                    <i class="bi bi-info-circle-fill me-2"></i>
-                                    <strong>No invoice data available.</strong>
-                                    <p class="mb-0 mt-2">We couldn't retrieve your invoice data at this time.</p>
-                                    <button class="btn btn-sm btn-outline-primary mt-2" onclick="window.location.reload()">
-                                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh Page
-                                    </button>
-                                </div>
-                            `);
-            });
+          console.log(errorMessage);
+          window.forceRefreshLHDN = false;
         },
       },
       columns: [
@@ -2894,10 +2817,10 @@ class InvoiceTableManager {
       autoWidth: false,
       pageLength: 10,
       lengthMenu: [[10, 25, 50, 100, -1], [10, 25, 50, 100, "All"]],
-      order: [[6, "desc"]], // The 6 should be the index of your date column
+      order: [[7, "desc"]],
       columnDefs: [
         {
-          targets: 6, // The DATE INFO column index
+          targets: 7,
           type: "date",
         },
       ],
@@ -2924,11 +2847,6 @@ class InvoiceTableManager {
         },
       },
       drawCallback: function (settings) {
-        if (settings._iDisplayLength !== undefined) {
-          self.updateCardTotals();
-          updateCharts(); // Update charts when table is redrawn
-        }
-
         // Update row indexes
         const table = $(this).DataTable();
         $(table.table().node())
@@ -2941,9 +2859,8 @@ class InvoiceTableManager {
           });
       },
       initComplete: function () {
-        self.updateCardTotals();
         self.initializeFilters();
-        updateCharts(); // Update charts when table is first initialized
+        self.fetchInboundSummary();
       },
     });
 
@@ -2961,33 +2878,28 @@ class InvoiceTableManager {
   initializeFilters() {
     const self = this;
 
-    // Global search
-    $("#globalSearch").on("input", function () {
-      self.table.search(this.value).draw();
-    });
+    function debounce(func, wait) {
+      let timeout;
+      return function (...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(this, args), wait);
+      };
+    }
 
-    // Status filter buttons
+    // Global search (server-side)
+    $("#globalSearch").on(
+      "input",
+      debounce(function () {
+        self.table.search(this.value).draw();
+      }, 300)
+    );
+
+    // Status filter buttons (server-side statusFilter param)
     $(".quick-filters .btn[data-filter]").on("click", function () {
       $(".quick-filters .btn").removeClass("active");
       $(this).addClass("active");
-
-      const filter = $(this).data("filter");
-      const statusColumn = self.table.column(8); // Status column
-
-      if (filter === "all") {
-        statusColumn.search("").draw();
-      } else {
-        // Convert filter value to match the actual status text
-        let searchValue =
-          filter.charAt(0).toUpperCase() + filter.slice(1).toLowerCase();
-
-        // Special handling for 'queue' status
-        if (filter === "queue") {
-          searchValue = "Queued|Submitted|Pending";
-        }
-
-        statusColumn.search(searchValue, true, false, true).draw();
-      }
+      self.statusFilter = $(this).data("filter") || "all";
+      self.table.ajax.reload();
     });
 
     // Date range filter
@@ -3051,13 +2963,9 @@ class InvoiceTableManager {
         .siblings()
         .removeClass("active");
 
-      // Clear DataTable filters
-      self.table.search("").columns().search("");
-
-      // Clear global search
+      self.table.search("");
       $("#globalSearch").val("");
-
-      // Reset and redraw table
+      self.statusFilter = "all";
       self.applyFilters();
 
       // Show success message
@@ -3094,15 +3002,6 @@ class InvoiceTableManager {
       // Show success message
       ToastManager.show("Filter removed", "success");
     });
-
-    // Helper function for debouncing
-    function debounce(func, wait) {
-      let timeout;
-      return function (...args) {
-        clearTimeout(timeout);
-        timeout = setTimeout(() => func.apply(this, args), wait);
-      };
-    }
   }
 
   initializeTableStyles() {
@@ -3671,29 +3570,38 @@ class InvoiceTableManager {
   }
 
   updateCardTotals() {
-    // Check if table is initialized
     if (!this.table || !$.fn.DataTable.isDataTable("#invoiceTable")) {
       return;
     }
 
     try {
-      const data = this.table.rows().data();
-      const totals = {
-        invoices: 0,
-        valid: 0,
-        invalid: 0,
-        rejected: 0,
-        cancelled: 0,
-        submitted: 0,
-      };
-
-      // Calculate average processing time
-      let processingTimes = [];
+      const processingTimes = [];
       let totalAmount = 0;
+      let totals;
 
-      // Count totals and collect processing times
-      if (data && data.length) {
-        data.each((row) => {
+      if (this.inboundSummary) {
+        const s = this.inboundSummary;
+        totals = {
+          invoices: s.invoices || 0,
+          valid: s.valid || 0,
+          invalid: s.invalid || 0,
+          rejected: s.rejected || 0,
+          cancelled: s.cancelled || 0,
+          submitted: s.queue ?? s.submitted ?? 0,
+        };
+      } else {
+        const data = this.table.rows().data();
+        totals = {
+          invoices: 0,
+          valid: 0,
+          invalid: 0,
+          rejected: 0,
+          cancelled: 0,
+          submitted: 0,
+        };
+
+        if (data && data.length) {
+          data.each((row) => {
           totals.invoices++;
 
           // Calculate processing time if dates are available
@@ -3736,10 +3644,10 @@ class InvoiceTableManager {
               totals.submitted++;
               break;
           }
-        });
+          });
+        }
       }
 
-      // Calculate average processing time
       const avgProcessingTime =
         processingTimes.length > 0
           ? processingTimes.reduce((sum, time) => sum + time, 0) /
@@ -4188,15 +4096,12 @@ class InvoiceTableManager {
   }
 
   applyFilters() {
-    const self = this;
     const table = this.table;
 
-    // Remove any existing custom filter
     $.fn.dataTable.ext.search = $.fn.dataTable.ext.search.filter(
       (fn) => fn.name !== "customInboundFilter"
     );
 
-    // Track active filters
     const activeFilters = [];
 
     // Date Range Filter
@@ -4246,93 +4151,8 @@ class InvoiceTableManager {
       activeFilters.push(`Source: ${sourceFilter}`);
     }
 
-    // Update active filters display
     this.updateActiveFilterTags(activeFilters);
-
-    // Add custom filtering function
-    $.fn.dataTable.ext.search.push(function customInboundFilter(
-      settings,
-      searchData,
-      index,
-      rowData
-    ) {
-      let showRow = true;
-
-      // Date Range Filter
-      if (startDate || endDate) {
-        // Prefer raw row data dates; fall back to parsing the cell text
-        let rawDate =
-          (rowData &&
-            (rowData.dateTimeValidated ||
-              rowData.dateTimeReceived ||
-              rowData.validatedAt ||
-              rowData.date)) ||
-          null;
-        let rowDate = rawDate ? new Date(rawDate) : null;
-
-        if (!rowDate || isNaN(rowDate)) {
-          // Fallback: attempt to parse any date-like text in the DATE INFO cell
-          const dateText = $(table.cell(index, 7).node()).text().trim();
-          const parsed = Date.parse(dateText);
-          if (!isNaN(parsed)) rowDate = new Date(parsed);
-        }
-
-        if (rowDate && !isNaN(rowDate)) {
-          rowDate.setHours(0, 0, 0, 0);
-
-          if (startDate) {
-            const startDateTime = new Date(startDate);
-            startDateTime.setHours(0, 0, 0, 0);
-            if (rowDate < startDateTime) showRow = false;
-          }
-
-          if (endDate) {
-            const endDateTime = new Date(endDate);
-            endDateTime.setHours(23, 59, 59, 999);
-            if (rowDate > endDateTime) showRow = false;
-          }
-        }
-      }
-
-      // Amount Range Filter
-      const amountStr = (searchData[9] || "").replace(/[^\d.-]/g, ""); // TOTAL AMOUNT column (index 9)
-      const amount = parseFloat(amountStr) || 0;
-      if (amount < minAmount || amount > maxAmount) showRow = false;
-
-      // Company Filter
-      if (companyFilter) {
-        const supplierName = (searchData[5] || "").toLowerCase(); // SUPPLIER column
-        const receiverName = (searchData[6] || "").toLowerCase(); // RECEIVER column
-        if (
-          !supplierName.includes(companyFilter.toLowerCase()) &&
-          !receiverName.includes(companyFilter.toLowerCase())
-        ) {
-          showRow = false;
-        }
-      }
-
-      // Document Type Filter
-      if (typeFilter) {
-        const docTypeCell = $(table.cell(index, 4).node())
-          .find(".badge-document-type")
-          .text()
-          .trim();
-        if (!docTypeCell.includes(typeFilter)) showRow = false;
-      }
-
-      // Source Filter
-      if (sourceFilter) {
-        const source =
-          rowData && rowData.source ? String(rowData.source) : "LHDN";
-        if (!source.toLowerCase().includes(String(sourceFilter).toLowerCase()))
-          showRow = false;
-      }
-
-      return showRow;
-    });
-
-    // Apply filters
-    table.draw();
+    table.ajax.reload();
   }
 
   updateActiveFilterTags(activeFilters) {
@@ -7271,35 +7091,6 @@ function getStatusColor(status) {
   return colors[status] || "secondary";
 }
 
-// Initialize everything when DOM is loaded
-document.addEventListener("DOMContentLoaded", () => {
-  console.log("DOM loaded, initializing enhanced features...");
-  try {
-    const charts = initializeCharts();
-
-    // Initialize invoice table using singleton
-    const invoiceManager = InvoiceTableManager.getInstance();
-
-    // Initialize date/time display
-    DateTimeManager.updateDateTime();
-
-    console.log("Enhanced features initialized successfully");
-  } catch (error) {
-    console.error("Error initializing enhanced features:", error);
-    CustomModal.fire({
-      icon: "error",
-      title: "Initialization Error",
-      text: "Failed to initialize some features. Please refresh the page.",
-      confirmButtonText: "Refresh",
-      showCancelButton: true,
-    }).then((result) => {
-      if (result.isConfirmed) {
-        window.location.reload();
-      }
-    });
-  }
-});
-
 // Add helper methods to InvoiceTableManager class
 InvoiceTableManager.prototype.showLoadingBackdrop = function (
   message = "Loading..."
@@ -7589,7 +7380,9 @@ class DocumentStatusAnalytics {
       const allData = table.rows().data().toArray();
       this.statusData = allData.map(row => {
         const status = row.status;
-        if (["Submitted", "Pending", "Queued"].includes(status)) return "Queue";
+        if (["Submitted", "Pending", "Queued", "Processing"].includes(status)) {
+          return "Queue";
+        }
         return status;
       });
 
@@ -7597,6 +7390,17 @@ class DocumentStatusAnalytics {
     } catch (error) {
       console.error('[Document Status Analytics] Error updating with table data:', error);
     }
+  }
+
+  updateWithSummary(summary) {
+    if (!summary) return;
+    const queueCount = summary.queue ?? summary.submitted ?? 0;
+    this.statusData = [];
+    for (let i = 0; i < (summary.valid || 0); i++) this.statusData.push("Valid");
+    for (let i = 0; i < (summary.invalid || 0); i++) this.statusData.push("Invalid");
+    for (let i = 0; i < (summary.cancelled || 0); i++) this.statusData.push("Cancelled");
+    for (let i = 0; i < queueCount; i++) this.statusData.push("Queue");
+    this.updateWithCurrentData();
   }
 
   showChartError() {

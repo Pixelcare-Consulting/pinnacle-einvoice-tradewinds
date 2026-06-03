@@ -100,6 +100,13 @@ const {
   ACTIONS,
   STATUS,
 } = require("../../services/logging-prisma.service");
+const {
+  INBOUND_LIST_SELECT,
+  parseInboundListParams,
+  buildInboundListWhere,
+  wantsInboundPagination,
+  summarizeInboundStatusGroups,
+} = require("../../src/lib/inbound-list-helpers");
 
 // Development logging helper - use this for debug logs in future development
 const isDevelopment = process.env.NODE_ENV === 'development';
@@ -802,16 +809,15 @@ const fetchRecentDocumentsImpl = async (req) => {
         details: { count: documents.length },
       });
 
-      // Return ALL DB records (not just the API batch) so existing data is preserved.
-      const allDbRecords = await prisma.wP_INBOUND_STATUS.findMany({
-        orderBy: { dateTimeReceived: "desc" },
-      });
+      const totalInDb = await prisma.wP_INBOUND_STATUS.count();
       console.log(
-        `[fetchRecentDocuments] API synced ${documents.length} docs, returning ${allDbRecords.length} total from DB`
+        `[fetchRecentDocuments] API synced ${documents.length} docs, ${totalInDb} total in DB (list via paged query)`
       );
 
       return {
-        result: allDbRecords,
+        result: [],
+        apiSyncedCount: documents.length,
+        recordsTotal: totalInDb,
         cached: false,
         fromApi: true,
         fromDatabase: true,
@@ -857,17 +863,98 @@ const fetchRecentDocumentsImpl = async (req) => {
   }
 };
 
+/** Per-user active forceRefresh sync token — stale clients (e.g. after F5) are ignored. */
+const activeSyncRequestId = new Map();
+
+function getInboundSyncSessionKey(req) {
+  return String(req.session?.user?.id ?? req.sessionID ?? "anon");
+}
+
+function registerInboundSyncRequest(req) {
+  const syncRequestId = req.query.syncRequestId;
+  if (!syncRequestId) return;
+  activeSyncRequestId.set(getInboundSyncSessionKey(req), syncRequestId);
+}
+
+function isStaleInboundSyncRequest(req) {
+  const syncRequestId = req.query.syncRequestId;
+  if (!syncRequestId) return false;
+  const current = activeSyncRequestId.get(getInboundSyncSessionKey(req));
+  return Boolean(current && current !== syncRequestId);
+}
+
+async function queryInboundListPage(req) {
+  const params = parseInboundListParams(req);
+  const where = buildInboundListWhere(params);
+
+  const [recordsTotal, recordsFiltered, rows] = await Promise.all([
+    prisma.wP_INBOUND_STATUS.count(),
+    prisma.wP_INBOUND_STATUS.count({ where }),
+    prisma.wP_INBOUND_STATUS.findMany({
+      where,
+      select: INBOUND_LIST_SELECT,
+      orderBy: params.orderBy,
+      skip: params.start,
+      take: params.length,
+    }),
+  ]);
+
+  return {
+    rows,
+    recordsTotal,
+    recordsFiltered,
+    start: params.start,
+    length: params.length,
+  };
+}
+
+function buildInboundPaginatedJson(page, formattedDocuments, extraMetadata = {}) {
+  return {
+    success: true,
+    result: formattedDocuments,
+    recordsTotal: page.recordsTotal,
+    recordsFiltered: page.recordsFiltered,
+    metadata: {
+      recordsTotal: page.recordsTotal,
+      recordsFiltered: page.recordsFiltered,
+      start: page.start,
+      length: page.length,
+      ...extraMetadata,
+    },
+  };
+}
+
 /**
  * Run at most one inbound LHDN /documents/recent sync at a time. Overlapping calls (e.g. force
  * refresh + background sync from getCachedDocuments) used to interleave saveInboundStatus and
  * could apply API page batches out of order, flipping the same UUID Valid ↔ Invalid.
  */
 let inboundRecentSyncChain = Promise.resolve();
+/** Latest client syncRequestId; superseded forceRefresh callers skip waiting on stale results. */
+let inboundActiveSyncRequestId = null;
+
 const fetchRecentDocuments = async (req) => {
-  const p = inboundRecentSyncChain.then(() => fetchRecentDocumentsImpl(req));
+  const syncRequestId = req.query.syncRequestId || null;
+  if (syncRequestId) {
+    inboundActiveSyncRequestId = syncRequestId;
+  }
+  const ownerId = syncRequestId;
+  const run = async () => {
+    const result = await fetchRecentDocumentsImpl(req);
+    if (ownerId && inboundActiveSyncRequestId !== ownerId) {
+      return { ...result, staleSync: true };
+    }
+    return result;
+  };
+  const p = inboundRecentSyncChain.then(run);
   inboundRecentSyncChain = p.catch(() => {});
   return p;
 };
+
+function isInboundSyncRequestStale(req) {
+  const id = req.query.syncRequestId;
+  return Boolean(id && inboundActiveSyncRequestId && id !== inboundActiveSyncRequestId);
+}
 
 // Function to get documents - no caching, direct fetch
 async function getCachedDocuments(req) {
@@ -881,6 +968,7 @@ async function getCachedDocuments(req) {
     // Without this, we only returned WP_INBOUND_STATUS immediately and fetched LHDN in the background
     // (user never saw new invoices until a later request).
     if (forceRefresh) {
+      registerInboundSyncRequest(req);
       try {
         console.log(
           "[getCachedDocuments] forceRefresh=true — awaiting fetchRecentDocuments"
@@ -893,10 +981,43 @@ async function getCachedDocuments(req) {
         );
       }
 
-      // After sync (success or fail), return ALL records from DB so we never
-      // replace 1000 existing rows with only the ~100 the API page returned.
+      if (isStaleInboundSyncRequest(req)) {
+        console.log(
+          "[getCachedDocuments] Ignoring stale forceRefresh result",
+          req.query.syncRequestId
+        );
+        return {
+          result: [],
+          staleSync: true,
+          cached: false,
+          fromDatabase: true,
+          fromApi: true,
+          timestamp: new Date().toISOString(),
+        };
+      }
+
       try {
+        if (wantsInboundPagination(req)) {
+          const page = await queryInboundListPage(req);
+          console.log(
+            `[getCachedDocuments] forceRefresh done — returning page ${page.start}-${page.start + page.rows.length} of ${page.recordsFiltered} filtered (${page.recordsTotal} total)`
+          );
+          return {
+            result: page.rows,
+            paginated: true,
+            recordsTotal: page.recordsTotal,
+            recordsFiltered: page.recordsFiltered,
+            start: page.start,
+            length: page.length,
+            cached: false,
+            fromDatabase: true,
+            fromApi: true,
+            timestamp: new Date().toISOString(),
+          };
+        }
+
         const allDocuments = await prisma.wP_INBOUND_STATUS.findMany({
+          select: INBOUND_LIST_SELECT,
           orderBy: { dateTimeReceived: "desc" },
         });
         if (allDocuments && allDocuments.length > 0) {
@@ -926,22 +1047,44 @@ async function getCachedDocuments(req) {
         console.log(
           `📊 Using database as primary data source - useDatabase: ${useDatabase}, incremental: ${incremental}`
         );
-        // Get documents from database
-        const dbDocuments = await prisma.wP_INBOUND_STATUS.findMany({
-          orderBy: {
-            dateTimeReceived: "desc",
-          },
-        });
-
-        if (dbDocuments && dbDocuments.length > 0) {
-          console.log(`✅ Found ${dbDocuments.length} documents in WP_INBOUND_STATUS database`);
+        if (wantsInboundPagination(req)) {
+          const page = await queryInboundListPage(req);
+          console.log(
+            `✅ Found ${page.recordsTotal} documents in WP_INBOUND_STATUS (page ${page.rows.length} rows)`
+          );
           data = {
-            result: dbDocuments,
+            result: page.rows,
+            paginated: true,
+            recordsTotal: page.recordsTotal,
+            recordsFiltered: page.recordsFiltered,
+            start: page.start,
+            length: page.length,
             cached: false,
             fromDatabase: true,
             fromApi: false,
             timestamp: new Date().toISOString(),
           };
+        } else {
+          const dbDocuments = await prisma.wP_INBOUND_STATUS.findMany({
+            select: INBOUND_LIST_SELECT,
+            orderBy: {
+              dateTimeReceived: "desc",
+            },
+          });
+
+          if (dbDocuments && dbDocuments.length > 0) {
+            console.log(`✅ Found ${dbDocuments.length} documents in WP_INBOUND_STATUS database`);
+            data = {
+              result: dbDocuments,
+              cached: false,
+              fromDatabase: true,
+              fromApi: false,
+              timestamp: new Date().toISOString(),
+            };
+          }
+        }
+
+        if (data) {
 
           const skipBackground = await shouldSkipInboundBackgroundSync(req);
           if (!skipBackground) {
@@ -959,7 +1102,9 @@ async function getCachedDocuments(req) {
           }
 
           return data;
-        } else if (useDatabase) {
+        }
+
+        if (useDatabase) {
           // Honor strict database mode: do not call API, return empty dataset
           console.log("ℹ️ No documents in WP_INBOUND_STATUS; honoring useDatabase=true with empty result");
           data = {
@@ -1009,22 +1154,41 @@ async function getCachedDocuments(req) {
     // If we still don't have data, try database fallback
     if (!data || !data.result || data.result.length === 0) {
       try {
-        const fallbackDocuments = await prisma.wP_INBOUND_STATUS.findMany({
-          orderBy: {
-            dateTimeReceived: "desc",
-          },
-          take: 9999,
-        });
-
-        if (fallbackDocuments && fallbackDocuments.length > 0) {
+        if (wantsInboundPagination(req)) {
+          const page = await queryInboundListPage(req);
           data = {
-            result: fallbackDocuments,
+            result: page.rows,
+            paginated: true,
+            recordsTotal: page.recordsTotal,
+            recordsFiltered: page.recordsFiltered,
+            start: page.start,
+            length: page.length,
             cached: false,
             fromDatabase: true,
             fallback: true,
             error: error.message,
           };
         } else {
+          const fallbackDocuments = await prisma.wP_INBOUND_STATUS.findMany({
+            select: INBOUND_LIST_SELECT,
+            orderBy: {
+              dateTimeReceived: "desc",
+            },
+            take: 9999,
+          });
+
+          if (fallbackDocuments && fallbackDocuments.length > 0) {
+            data = {
+              result: fallbackDocuments,
+              cached: false,
+              fromDatabase: true,
+              fallback: true,
+              error: error.message,
+            };
+          }
+        }
+
+        if (!data || (!data.paginated && (!data.result || data.result.length === 0))) {
           throw new Error("No documents found in database");
         }
       } catch (dbError) {
@@ -1032,6 +1196,25 @@ async function getCachedDocuments(req) {
         throw error; // Rethrow the original error
       }
     }
+  }
+
+  if (
+    data &&
+    wantsInboundPagination(req) &&
+    !data.paginated &&
+    (!data.result || data.result.length === 0)
+  ) {
+    const page = await queryInboundListPage(req);
+    data = {
+      ...data,
+      result: page.rows,
+      paginated: true,
+      recordsTotal: page.recordsTotal,
+      recordsFiltered: page.recordsFiltered,
+      start: page.start,
+      length: page.length,
+      fromDatabase: true,
+    };
   }
 
   return data;
@@ -2145,8 +2328,27 @@ router.get("/documents/recent", async (req, res) => {
         "Fallback only mode requested, skipping token check and API call"
       );
       try {
-        // Get documents from database
+        if (wantsInboundPagination(req)) {
+          const page = await queryInboundListPage(req);
+          const lightweight = req.query.lightweight !== "false";
+          const formatted = formatInboundDocumentsForResponse(page.rows, {
+            lightweight,
+          });
+          console.log(
+            `Found ${page.recordsTotal} documents in database for fallback (page ${formatted.length} rows)`
+          );
+          return res.json(
+            buildInboundPaginatedJson(page, formatted, {
+              fromDatabase: true,
+              fromApi: false,
+              fallback: true,
+              timestamp: new Date().toISOString(),
+            })
+          );
+        }
+
         const dbDocuments = await prisma.wP_INBOUND_STATUS.findMany({
+          select: INBOUND_LIST_SELECT,
           orderBy: {
             dateTimeReceived: "desc",
           },
@@ -2167,20 +2369,19 @@ router.get("/documents/recent", async (req, res) => {
               timestamp: new Date().toISOString(),
             },
           });
-        } else {
-          // Honor fallback-only mode: return empty result with success to avoid client error flows
-          return res.json({
-            success: true,
-            result: [],
-            metadata: {
-              total: 0,
-              fromDatabase: true,
-              fromApi: false,
-              fallback: true,
-              timestamp: new Date().toISOString(),
-            },
-          });
         }
+
+        return res.json({
+          success: true,
+          result: [],
+          metadata: {
+            total: 0,
+            fromDatabase: true,
+            fromApi: false,
+            fallback: true,
+            timestamp: new Date().toISOString(),
+          },
+        });
       } catch (dbError) {
         console.error("Error getting documents from database:", dbError);
         return res.status(500).json({
@@ -2214,8 +2415,27 @@ router.get("/documents/recent", async (req, res) => {
       // If useDatabase is true OR incremental is true, try to get documents from database instead of returning error
       if (useDatabase || incremental) {
         try {
-          // Get documents from database
+          if (wantsInboundPagination(req)) {
+            const page = await queryInboundListPage(req);
+            const lightweight = req.query.lightweight !== "false";
+            const formatted = formatInboundDocumentsForResponse(page.rows, {
+              lightweight,
+            });
+            console.log(
+              `Found ${page.recordsTotal} documents in database as fallback for missing token`
+            );
+            return res.json(
+              buildInboundPaginatedJson(page, formatted, {
+                fromDatabase: true,
+                fromApi: false,
+                fallback: true,
+                timestamp: new Date().toISOString(),
+              })
+            );
+          }
+
           const dbDocuments = await prisma.wP_INBOUND_STATUS.findMany({
+            select: INBOUND_LIST_SELECT,
             orderBy: {
               dateTimeReceived: "desc",
             },
@@ -2287,29 +2507,86 @@ router.get("/documents/recent", async (req, res) => {
         );
       }
 
+      if (fetchResult.staleSync) {
+        return res.json({
+          success: true,
+          result: [],
+          recordsTotal: 0,
+          recordsFiltered: 0,
+          metadata: {
+            staleSync: true,
+            recordsTotal: 0,
+            recordsFiltered: 0,
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
       const documents = fetchResult.result || [];
       console.log("Got documents from fetchResult, count:", documents.length);
 
-      const forceRefresh = req.query.forceRefresh === "true";
-      const lightweight =
-        req.query.lightweight === "true" ||
-        (fetchResult.fromDatabase && !forceRefresh);
-
       const formattedDocuments = formatInboundDocumentsForResponse(
         documents,
-        { lightweight }
+        { lightweight: true }
       );
 
       console.log(
-        `Sending response with ${lightweight ? "lightweight" : "formatted"} documents:`,
+        `Sending response with lightweight documents:`,
         formattedDocuments.length
       );
 
-      // Suggest full sync when the result set hits a full LHDN page — there may
-      // be more documents beyond the first page. Do NOT use "<= page size":
-      // small tenants with fewer than 100 invoices would loop forever because
-      // every /documents/recent load would set needsFullSync and the client
-      // auto-triggers /documents/search after each reload.
+      const baseMetadata = {
+        cached: fetchResult.cached,
+        fromDatabase: fetchResult.fromDatabase,
+        fromApi: fetchResult.fromApi,
+        fallback: fetchResult.fallback,
+        error: fetchResult.error
+          ? { message: fetchResult.error.message }
+          : undefined,
+        timestamp: new Date().toISOString(),
+      };
+
+      if (fetchResult.paginated || wantsInboundPagination(req)) {
+        let pageRows = formattedDocuments;
+        let pageMeta = {
+          recordsTotal: fetchResult.recordsTotal ?? 0,
+          recordsFiltered: fetchResult.recordsFiltered ?? 0,
+          start: fetchResult.start ?? (parseInt(req.query.start, 10) || 0),
+          length:
+            fetchResult.length ??
+            (parseInt(req.query.length, 10) || pageRows.length || 10),
+        };
+
+        if (
+          pageRows.length === 0 &&
+          (pageMeta.recordsTotal > 0 || wantsInboundPagination(req))
+        ) {
+          const page = await queryInboundListPage(req);
+          pageRows = formatInboundDocumentsForResponse(page.rows, {
+            lightweight: true,
+          });
+          pageMeta = {
+            recordsTotal: page.recordsTotal,
+            recordsFiltered: page.recordsFiltered,
+            start: page.start,
+            length: page.length,
+          };
+        }
+
+        return res.json(
+          buildInboundPaginatedJson(
+            {
+              recordsTotal: pageMeta.recordsTotal,
+              recordsFiltered: pageMeta.recordsFiltered,
+              start: pageMeta.start,
+              length: pageMeta.length,
+            },
+            pageRows,
+            baseMetadata
+          )
+        );
+      }
+
       const LHDN_PAGE_SIZE = 100;
       const needsFullSync =
         formattedDocuments.length === LHDN_PAGE_SIZE;
@@ -2319,15 +2596,8 @@ router.get("/documents/recent", async (req, res) => {
         result: formattedDocuments,
         metadata: {
           total: formattedDocuments.length,
-          cached: fetchResult.cached,
-          fromDatabase: fetchResult.fromDatabase,
-          fromApi: fetchResult.fromApi,
-          fallback: fetchResult.fallback,
           needsFullSync,
-          error: fetchResult.error
-            ? { message: fetchResult.error.message }
-            : undefined,
-          timestamp: new Date().toISOString(),
+          ...baseMetadata,
         },
       });
     } catch (error) {
@@ -2712,6 +2982,32 @@ router.get("/documents/recent-total", async (_req, res) => {
       totalCount: 0,
       success: false,
       message: "Failed to fetch recent documents",
+    });
+  }
+});
+
+router.get("/documents/summary", async (req, res) => {
+  try {
+    if (!req.session?.user) {
+      return handleAuthError(req, res);
+    }
+
+    const groups = await prisma.wP_INBOUND_STATUS.groupBy({
+      by: ["status"],
+      _count: { status: true },
+    });
+
+    const summary = summarizeInboundStatusGroups(groups);
+
+    res.json({
+      success: true,
+      summary,
+    });
+  } catch (error) {
+    console.error("Error getting inbound documents summary:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch inbound summary",
     });
   }
 });
