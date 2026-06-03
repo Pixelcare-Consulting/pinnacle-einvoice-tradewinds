@@ -1606,34 +1606,22 @@ class InvoiceTableManager {
         if (this.table) {
           this.beginInboundForceRefresh();
           try {
-            await new Promise((resolve, reject) => {
-              const onXhrError = (_e, _settings, _json, xhr) => {
-                if (this.isInboundAjaxAborted(xhr)) {
-                  return;
-                }
-                if (this._liveLoadTimeout) {
-                  clearTimeout(this._liveLoadTimeout);
-                  this._liveLoadTimeout = null;
-                }
-                this.endInboundForceRefresh();
-                this.hideLoadingBackdrop();
-                reject(new Error("Failed to load live LHDN data"));
-              };
-              this.table.one("xhr.error", onXhrError);
-              this.table.ajax.reload(() => {
-                this.table.off("xhr.error", onXhrError);
-                if (this._liveLoadTimeout) {
-                  clearTimeout(this._liveLoadTimeout);
-                  this._liveLoadTimeout = null;
-                }
-                this.endInboundForceRefresh();
-                this.hideLoadingBackdrop();
-                this.fetchInboundSummary().then(() => resolve());
-              }, false);
+            await this.reloadInboundTableAfterForceRefresh(async () => {
+              const json = this.table?.ajax?.json?.();
+              if (!json || json.success === false) {
+                throw new Error("Failed to load live LHDN data");
+              }
             });
+            if (this._liveLoadTimeout) {
+              clearTimeout(this._liveLoadTimeout);
+              this._liveLoadTimeout = null;
+            }
+            this.hideLoadingBackdrop();
+            await this.fetchInboundSummary();
           } catch (reloadErr) {
-            this.endInboundForceRefresh();
             throw reloadErr;
+          } finally {
+            this.endInboundForceRefresh();
           }
         } else {
           await this.initializeTableWithData();
@@ -1794,9 +1782,10 @@ class InvoiceTableManager {
           await new Promise((resolve) => setTimeout(resolve, waitTime));
         }
 
-        // Use incremental refresh instead of full reload
-        if (options.incremental && this.table) {
-          await this.performIncrementalRefresh();
+        if (this.table) {
+          await this.performIncrementalRefresh({
+            resetToFirstPage: options.force === true,
+          });
         } else {
           await this.switchToLiveData();
         }
@@ -1829,16 +1818,23 @@ class InvoiceTableManager {
     }
   }
 
-  // New incremental refresh method that preserves table state
-  async performIncrementalRefresh() {
+  // LHDN sync + paged table reload (Quick Refresh and Ctrl+Quick Refresh)
+  async performIncrementalRefresh(options = {}) {
     try {
       console.log("🔄 Performing incremental refresh (LHDN sync + paged reload)...");
       this.showIncrementalLoadingIndicator();
+
+      if (options.resetToFirstPage && this.table) {
+        this.table.page(0);
+      }
 
       this.beginInboundForceRefresh();
       try {
         await this.reloadInboundTableAfterForceRefresh(async () => {
           const json = this.table?.ajax?.json?.();
+          if (!json || json.success === false) {
+            throw new Error("LHDN refresh returned no data");
+          }
           if (json?.metadata?.staleSync || json?.metadata?.supersededSync) {
             console.log("[Inbound] Superseded sync — chaining fallback reload");
             window.forceRefreshLHDN = false;
