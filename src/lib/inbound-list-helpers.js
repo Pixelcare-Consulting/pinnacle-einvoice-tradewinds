@@ -1,4 +1,4 @@
-/** Grid list fields — excludes document, documentDetails, validationResults (@db.Text). */
+/** Grid list fields — document/documentDetails used server-side for export fields only, then stripped. */
 const INBOUND_LIST_SELECT = {
   uuid: true,
   submissionUid: true,
@@ -28,6 +28,8 @@ const INBOUND_LIST_SELECT = {
   sync_status: true,
   created_at: true,
   updated_at: true,
+  documentDetails: true,
+  document: true,
 };
 
 const INBOUND_ORDER_COLUMN_MAP = {

@@ -3606,6 +3606,7 @@ class InvoiceTableManager {
           "Validated Date": new Date(row.dateTimeValidated).toLocaleString(),
           Status: row.status,
           "Total Sales": `RM ${parseFloat(row.totalSales).toFixed(2)}`,
+          "Tax Type Code": getInboundTaxTypeCodeForExport(row),
         };
       });
 
@@ -7017,6 +7018,59 @@ function getInboundSstForExport(row) {
   };
 }
 
+/** Resolve SST tax type code(s) for export (list field + documentDetails/document fallback) */
+function getInboundTaxTypeCodeForExport(row) {
+  if (!row || typeof row !== "object") return "";
+
+  const direct = row.taxTypeCode || row.tax_type || row.taxType;
+  if (direct) return String(direct);
+
+  const sources = [row.documentDetails, row.document];
+  for (const raw of sources) {
+    if (!raw) continue;
+    try {
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+
+      const summaryCodes = (parsed.taxSummary || [])
+        .map((entry) => entry?.taxType || entry?.taxTypeCode)
+        .filter(Boolean);
+      if (summaryCodes.length) {
+        return [...new Set(summaryCodes.map(String))].join(", ");
+      }
+
+      const lineCodes = (parsed.lineItems || [])
+        .map((item) => item?.taxType || item?.taxTypeCode || item?.TaxType)
+        .filter(Boolean);
+      if (lineCodes.length) {
+        return [...new Set(lineCodes.map(String))].join(", ");
+      }
+
+      const invoice = parsed?.Invoice?.[0] || parsed?.parsedDocument?.Invoice?.[0];
+      if (invoice) {
+        const codes = new Set();
+        for (const sub of invoice.TaxTotal?.[0]?.TaxSubtotal || []) {
+          const code = sub?.TaxCategory?.[0]?.ID?.[0]?._;
+          if (code) codes.add(String(code));
+        }
+        for (const line of invoice.InvoiceLine || []) {
+          for (const sub of line.TaxTotal?.[0]?.TaxSubtotal || []) {
+            const code = sub?.TaxCategory?.[0]?.ID?.[0]?._;
+            if (code) codes.add(String(code));
+          }
+          const itemTax = line?.Item?.[0]?.ClassifiedTaxCategory?.[0]?.ID?.[0]?._;
+          if (itemTax) codes.add(String(itemTax));
+        }
+        if (codes.size) return [...codes].join(", ");
+      }
+    } catch (_) {
+      /* ignore invalid JSON */
+    }
+  }
+
+  return "";
+}
+
 // Helper function to export data to Excel with loading state management
 function exportToExcel(data, filename, buttonElement = null) {
   let originalButtonHtml = null;
@@ -7045,6 +7099,7 @@ function exportToExcel(data, filename, buttonElement = null) {
           "Date Issued",
           "Status",
           "Total Amount",
+          "Tax Type Code",
         ];
         const csvContent = [
           headers.join(","),
@@ -7061,6 +7116,7 @@ function exportToExcel(data, filename, buttonElement = null) {
               formatDate(row.dateTimeIssued) || "",
               row.status || "",
               formatCurrency(row.totalSales) || "",
+              getInboundTaxTypeCodeForExport(row),
             ].join(",");
           }),
         ].join("\n");

@@ -2212,7 +2212,14 @@ function formatInboundDocumentsForResponse(documents, options = {}) {
     return [];
   }
   if (options.lightweight) {
-    return documents;
+    return documents.map((doc) => {
+      const { document, documentDetails, validationResults, ...rest } = doc;
+      return {
+        ...rest,
+        ...extractInboundSstFromRow(doc),
+        taxTypeCode: extractInboundTaxTypeFromRow(doc),
+      };
+    });
   }
 
   return documents.map((doc) => {
@@ -2284,8 +2291,71 @@ function formatInboundDocumentsForResponse(documents, options = {}) {
         doc.documentCurrency || doc.currency || doc.currencyCode || "MYR",
       processingTimeMinutes,
       ...extractInboundSstFromRow(doc),
+      taxTypeCode: extractInboundTaxTypeFromRow(doc),
     };
   });
+}
+
+function collectTaxTypeCodesFromUbl(parsed) {
+  const codes = new Set();
+  const invoice = parsed?.Invoice?.[0];
+  if (!invoice) return codes;
+
+  for (const sub of invoice.TaxTotal?.[0]?.TaxSubtotal || []) {
+    const code = sub?.TaxCategory?.[0]?.ID?.[0]?._;
+    if (code) codes.add(String(code));
+  }
+
+  for (const line of invoice.InvoiceLine || []) {
+    for (const sub of line.TaxTotal?.[0]?.TaxSubtotal || []) {
+      const code = sub?.TaxCategory?.[0]?.ID?.[0]?._;
+      if (code) codes.add(String(code));
+    }
+    const itemTax = line?.Item?.[0]?.ClassifiedTaxCategory?.[0]?.ID?.[0]?._;
+    if (itemTax) codes.add(String(itemTax));
+  }
+
+  return codes;
+}
+
+/** SST tax type codes (01–06, E) for inbound list / CSV export */
+function extractInboundTaxTypeFromRow(doc) {
+  if (!doc || typeof doc !== "object") return "";
+
+  const direct = doc.taxTypeCode || doc.tax_type || doc.taxType;
+  if (direct) return String(direct);
+
+  if (doc.documentDetails) {
+    const parsed = safeJsonParseInboundColumn(doc.documentDetails);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const summaryCodes = (parsed.taxSummary || [])
+        .map((entry) => entry?.taxType || entry?.taxTypeCode)
+        .filter(Boolean);
+      if (summaryCodes.length) {
+        return [...new Set(summaryCodes.map(String))].join(", ");
+      }
+
+      const lineCodes = (parsed.lineItems || [])
+        .map((item) => item?.taxType || item?.taxTypeCode || item?.TaxType)
+        .filter(Boolean);
+      if (lineCodes.length) {
+        return [...new Set(lineCodes.map(String))].join(", ");
+      }
+
+      if (parsed.parsedDocument) {
+        const ublCodes = collectTaxTypeCodesFromUbl(parsed.parsedDocument);
+        if (ublCodes.size) return [...ublCodes].join(", ");
+      }
+    }
+  }
+
+  if (doc.document) {
+    const parsed = safeJsonParseInboundColumn(doc.document);
+    const ublCodes = collectTaxTypeCodesFromUbl(parsed);
+    if (ublCodes.size) return [...ublCodes].join(", ");
+  }
+
+  return "";
 }
 
 // Helper function to read token from file
