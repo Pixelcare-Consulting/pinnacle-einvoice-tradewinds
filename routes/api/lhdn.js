@@ -2358,6 +2358,69 @@ function extractInboundTaxTypeFromRow(doc) {
   return "";
 }
 
+/** Fetch LHDN /raw when DB has no UBL; cache document for later exports */
+async function resolveInboundTaxTypeCodeForExport(
+  uuid,
+  row,
+  accessToken,
+  lhdnConfig
+) {
+  const fromRow = extractInboundTaxTypeFromRow(row || { uuid });
+  if (fromRow) return fromRow;
+
+  if (!accessToken || !uuid) return "";
+
+  try {
+    const response = await axios.get(
+      `${lhdnConfig.baseUrl}/api/v1.0/documents/${uuid}/raw`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        timeout: lhdnConfig.timeout || 30000,
+      }
+    );
+
+    const docStr = response.data?.document;
+    if (!docStr || typeof docStr !== "string") return "";
+
+    let parsed;
+    try {
+      parsed = JSON.parse(docStr);
+    } catch {
+      return "";
+    }
+
+    const codes = collectTaxTypeCodesFromUbl(parsed);
+    const code = codes.size ? [...codes].join(", ") : "";
+
+    if (code) {
+      await prisma.wP_INBOUND_STATUS.update({
+        where: { uuid },
+        data: {
+          document: docStr,
+          updated_at: new Date().toISOString(),
+        },
+      }).catch((err) => {
+        console.warn(
+          `[Export tax] Failed to cache document for ${uuid}:`,
+          err.message
+        );
+      });
+    }
+
+    return code;
+  } catch (err) {
+    console.warn(
+      `[Export tax] LHDN /raw failed for ${uuid}:`,
+      err.response?.status || err.message
+    );
+    return "";
+  }
+}
+
 // Helper function to read token from file
 async function readTokenFromFile() {
   try {
@@ -3120,6 +3183,70 @@ router.get("/documents/summary", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch inbound summary",
+    });
+  }
+});
+
+router.post("/documents/export-tax-codes", async (req, res) => {
+  try {
+    if (!req.session?.user) {
+      return handleAuthError(req, res);
+    }
+
+    const uuids = Array.isArray(req.body?.uuids)
+      ? [
+          ...new Set(
+            req.body.uuids.filter((id) => typeof id === "string" && id.trim())
+          ),
+        ]
+      : [];
+
+    if (uuids.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No document UUIDs provided",
+      });
+    }
+
+    if (uuids.length > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Maximum 100 documents per export request",
+      });
+    }
+
+    let accessToken = req.session.accessToken;
+    if (!accessToken) {
+      accessToken = await readTokenFromFile();
+    }
+
+    const lhdnConfig = await getLHDNConfig();
+    const rows = await prisma.wP_INBOUND_STATUS.findMany({
+      where: { uuid: { in: uuids } },
+      select: { uuid: true, document: true, documentDetails: true },
+    });
+    const rowByUuid = Object.fromEntries(rows.map((row) => [row.uuid, row]));
+
+    const taxTypeCodes = {};
+    for (let i = 0; i < uuids.length; i++) {
+      const uuid = uuids[i];
+      taxTypeCodes[uuid] = await resolveInboundTaxTypeCodeForExport(
+        uuid,
+        rowByUuid[uuid] || { uuid },
+        accessToken,
+        lhdnConfig
+      );
+      if (i < uuids.length - 1) {
+        await wait(350);
+      }
+    }
+
+    return res.json({ success: true, taxTypeCodes });
+  } catch (error) {
+    console.error("[Export tax] Error resolving tax type codes:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to resolve tax type codes",
     });
   }
 });

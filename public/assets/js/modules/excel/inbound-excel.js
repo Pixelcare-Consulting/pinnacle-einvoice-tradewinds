@@ -3585,8 +3585,12 @@ class InvoiceTableManager {
         '<i class="bi bi-arrow-repeat spin me-1"></i>Exporting...'
       );
 
-      // Add a small delay to show the loading state
       await new Promise((resolve) => setTimeout(resolve, 100));
+
+      exportBtn.html(
+        '<i class="bi bi-arrow-repeat spin me-1"></i>Resolving tax codes...'
+      );
+      const taxTypeCodes = await fetchInboundExportTaxTypeCodes(selectedRows);
 
       // Prepare export data (no IRBM UUID for Invalid — aligns with LHDN / table display)
       const exportData = selectedRows.map((row) => {
@@ -3606,7 +3610,7 @@ class InvoiceTableManager {
           "Validated Date": new Date(row.dateTimeValidated).toLocaleString(),
           Status: row.status,
           "Total Sales": `RM ${parseFloat(row.totalSales).toFixed(2)}`,
-          "Tax Type Code": getInboundTaxTypeCodeForExport(row),
+          "Tax Type Code": resolveExportTaxTypeCode(row, taxTypeCodes),
         };
       });
 
@@ -7071,12 +7075,57 @@ function getInboundTaxTypeCodeForExport(row) {
   return "";
 }
 
+async function fetchInboundExportTaxTypeCodes(rows) {
+  const uuids = [...new Set((rows || []).map((row) => row?.uuid).filter(Boolean))];
+  if (!uuids.length) return {};
+
+  const resolved = {};
+  const missing = [];
+
+  for (const row of rows) {
+    const localCode = getInboundTaxTypeCodeForExport(row);
+    if (localCode) {
+      resolved[row.uuid] = localCode;
+    } else if (row.uuid) {
+      missing.push(row.uuid);
+    }
+  }
+
+  if (!missing.length) return resolved;
+
+  const response = await fetch("/api/lhdn/documents/export-tax-codes", {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({ uuids: missing }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.success) {
+    throw new Error(
+      data.message || `Failed to resolve tax type codes (${response.status})`
+    );
+  }
+
+  return { ...resolved, ...(data.taxTypeCodes || {}) };
+}
+
+function resolveExportTaxTypeCode(row, taxTypeCodes) {
+  return (
+    taxTypeCodes?.[row.uuid] ||
+    getInboundTaxTypeCodeForExport(row) ||
+    ""
+  );
+}
+
 // Helper function to export data to Excel with loading state management
-function exportToExcel(data, filename, buttonElement = null) {
+async function exportToExcel(data, filename, buttonElement = null) {
   let originalButtonHtml = null;
 
   try {
-    // Manage button loading state if button is provided
     if (buttonElement) {
       originalButtonHtml = buttonElement.innerHTML;
       buttonElement.disabled = true;
@@ -7084,75 +7133,61 @@ function exportToExcel(data, filename, buttonElement = null) {
         '<i class="bi bi-arrow-repeat spin me-1"></i>Exporting...';
     }
 
-    // Add a small delay to show the loading state
-    setTimeout(() => {
-      try {
-        // Convert data to CSV format
-        const headers = [
-          "UUID",
-          "Long ID",
-          "Internal ID",
-          "Supplier",
-          "Supplier SST",
-          "Receiver",
-          "Receiver SST",
-          "Date Issued",
-          "Status",
-          "Total Amount",
-          "Tax Type Code",
-        ];
-        const csvContent = [
-          headers.join(","),
-          ...data.map((row) => {
-            const sst = getInboundSstForExport(row);
-            return [
-              row.uuid || "",
-              row.longId || "",
-              row.internalId || "",
-              row.issuerName || row.supplierName || "",
-              sst.supplierSst,
-              row.receiverName || "",
-              sst.receiverSst,
-              formatDate(row.dateTimeIssued) || "",
-              row.status || "",
-              formatCurrency(row.totalSales) || "",
-              getInboundTaxTypeCodeForExport(row),
-            ].join(",");
-          }),
-        ].join("\n");
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
-        // Create and trigger download
-        const blob = new Blob([csvContent], {
-          type: "text/csv;charset=utf-8;",
-        });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `${filename}_${
-          new Date().toISOString().split("T")[0]
-        }.csv`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+    const taxTypeCodes = await fetchInboundExportTaxTypeCodes(data);
 
-        // Clean up the blob URL
-        URL.revokeObjectURL(link.href);
+    const headers = [
+      "UUID",
+      "Long ID",
+      "Internal ID",
+      "Supplier",
+      "Supplier SST",
+      "Receiver",
+      "Receiver SST",
+      "Date Issued",
+      "Status",
+      "Total Amount",
+      "Tax Type Code",
+    ];
+    const csvContent = [
+      headers.join(","),
+      ...data.map((row) => {
+        const sst = getInboundSstForExport(row);
+        return [
+          row.uuid || "",
+          row.longId || "",
+          row.internalId || "",
+          row.issuerName || row.supplierName || "",
+          sst.supplierSst,
+          row.receiverName || "",
+          sst.receiverSst,
+          formatDate(row.dateTimeIssued) || "",
+          row.status || "",
+          formatCurrency(row.totalSales) || "",
+          resolveExportTaxTypeCode(row, taxTypeCodes),
+        ].join(",");
+      }),
+    ].join("\n");
 
-        ToastManager.show("Export completed successfully", "success");
-      } catch (error) {
-        console.error("Error exporting to Excel:", error);
-        ToastManager.show("Failed to export data", "error");
-      } finally {
-        // Always restore button state if button was provided
-        if (buttonElement && originalButtonHtml) {
-          buttonElement.disabled = false;
-          buttonElement.innerHTML = originalButtonHtml;
-        }
-      }
-    }, 100); // Small delay to ensure loading state is visible
+    const blob = new Blob([csvContent], {
+      type: "text/csv;charset=utf-8;",
+    });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `${filename}_${
+      new Date().toISOString().split("T")[0]
+    }.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+
+    ToastManager.show("Export completed successfully", "success");
   } catch (error) {
-    console.error("Error setting up export:", error);
+    console.error("Error exporting to Excel:", error);
     ToastManager.show("Failed to export data", "error");
-    // Restore button state immediately if there's an error in setup
+  } finally {
     if (buttonElement && originalButtonHtml) {
       buttonElement.disabled = false;
       buttonElement.innerHTML = originalButtonHtml;
