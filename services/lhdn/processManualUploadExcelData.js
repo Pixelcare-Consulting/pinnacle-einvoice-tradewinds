@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { logRawToJson, logLhdnMapping } = require('./excelLogger');
 const { mapToLHDNFormat } = require('./lhdnMapper');
-
+const { convertExcelDate: toLhdnDate } = require('./excelDate');
 /**
  * Constants for Excel field mapping and default values
  */
@@ -106,39 +106,7 @@ const processManualUploadExcelData = (rawData) => {
       return MALAYSIAN_STATES[code] || String(stateCode);
     };
 
-    /**
-     * Helper function to convert Excel serial date to ISO date string
-     * Excel stores dates as serial numbers (days since 1900-01-01)
-     * @param {any} excelDate - Excel serial date number or date string
-     * @returns {string} ISO date string (YYYY-MM-DD) or original value if not a valid date
-     */
-    const convertExcelDate = (excelDate) => {
-      if (!excelDate) return '';
-
-      // If it's already a string that looks like a date, return as-is
-      if (typeof excelDate === 'string' && excelDate.includes('-')) {
-        return excelDate;
-      }
-
-      // If it's a number (Excel serial date)
-      const dateNum = parseFloat(excelDate);
-      if (!isNaN(dateNum) && dateNum > 0) {
-        // Excel epoch starts at 1900-01-01, but Excel incorrectly treats 1900 as a leap year
-        // So we need to subtract 1 day for dates after 1900-02-28
-        const excelEpoch = new Date(1900, 0, 1); // January 1, 1900
-        const millisecondsPerDay = 24 * 60 * 60 * 1000;
-
-        // Adjust for Excel's leap year bug
-        const adjustedDays = dateNum > 59 ? dateNum - 2 : dateNum - 1;
-        const resultDate = new Date(excelEpoch.getTime() + (adjustedDays * millisecondsPerDay));
-
-        // Return in YYYY-MM-DD format
-        return resultDate.toISOString().split('T')[0];
-      }
-
-      // If it's not a valid number, return as string
-      return String(excelDate);
-    };
+   const convertExcelDate = (excelDate) => toLhdnDate(excelDate) || '';
 
     /**
      * Helper function to get field value with support for different Excel column formats
@@ -626,7 +594,7 @@ const processManualUploadExcelData = (rawData) => {
             prepaidPayment: {
               id: getField(invoiceRow, 'PrepaidPayment') || DEFAULT_VALUES.NOT_APPLICABLE,
               amount: getField(invoiceRow, '73') || DEFAULT_VALUES.ZERO, // __EMPTY_73 for prepaid amount
-              date: getField(invoiceRow, '74') || null,  // __EMPTY_74 for prepaid date
+              date: toLhdnDate(getField(invoiceRow, '74')),  // __EMPTY_74 serial → YYYY-MM-DD
               time: getField(invoiceRow, '75') || null   // __EMPTY_75 for prepaid time
             }
           },

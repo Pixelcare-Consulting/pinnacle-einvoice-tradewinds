@@ -662,8 +662,12 @@ const mapToLHDNFormat = (excelData, version) => {
         "PrepaidPayment": [{
           "ID": wrapValue(doc.payment.prepaidPayment.id),
           "PaidAmount": wrapValue(doc.payment.prepaidPayment.amount, doc.header.documentCurrencyCode),
-          "PaidDate": wrapValue(doc.payment.prepaidPayment.date),
-          "PaidTime": wrapValue(doc.payment.prepaidPayment.time)
+          ...(doc.payment.prepaidPayment.date
+  ? { PaidDate: wrapValue(doc.payment.prepaidPayment.date) }
+  : {}),
+...(doc.payment.prepaidPayment.time
+  ? { PaidTime: wrapValue(doc.payment.prepaidPayment.time) }
+  : {})
         }],
         "AllowanceCharge": mapAllowanceCharges(doc.allowanceCharge),
         "TaxTotal": mapTaxTotal(doc.summary?.taxTotal, doc.header.documentCurrencyCode, doc.header.taxCurrencyCode),

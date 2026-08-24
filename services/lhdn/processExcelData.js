@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { logRawToJson, logLhdnMapping } = require('./excelLogger');
 const { mapToLHDNFormat } = require('./lhdnMapper');
-
+const { convertExcelDate: toLhdnDate } = require('./excelDate');
 /**
  * Constants for Excel field mapping and default values
  */
@@ -398,7 +398,7 @@ const processExcelData = (rawData) => {
             prepaidPayment: {
               id: getField(headerRow, 'PrepaidPayment') || DEFAULT_VALUES.NOT_APPLICABLE,
               amount: getField(headerRow, '53') || DEFAULT_VALUES.ZERO,
-              date: getField(headerRow, '54') || null,
+              date: toLhdnDate(getField(headerRow, '54')) || null,
               time: getField(headerRow, '55') || null
             }
           },

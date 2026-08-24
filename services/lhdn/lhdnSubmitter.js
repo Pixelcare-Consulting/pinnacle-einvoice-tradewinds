@@ -756,6 +756,38 @@ class LHDNSubmitter {
         }
       }
 
+      const typeExpectedRegex = /(DateExpected|NumberExpected|IntegerExpected):\s*([^\s}\n]+)/g;
+      let typeMatch;
+      while ((typeMatch = typeExpectedRegex.exec(message)) !== null) {
+        const expectedKind = typeMatch[1];
+        const propertyPath = typeMatch[2].trim();
+        const isPaidDate = /PaidDate/i.test(propertyPath);
+        errors.push({
+          type: expectedKind === 'DateExpected' ? 'INVALID_DATE' : 'INVALID_NUMBER',
+          propertyPath,
+          fieldDescription: isPaidDate ? 'Prepaid Paid Date is not a valid date' : `${expectedKind} on ${propertyPath}`,
+          userMessage: isPaidDate
+            ? 'Prepaid Paid Date is not a valid date. Use YYYY-MM-DD (example: 2026-08-14).'
+            : expectedKind === 'DateExpected'
+              ? 'A date value is not in YYYY-MM-DD format.'
+              : 'A field has an invalid number format.',
+          guidance: isPaidDate
+            ? [
+                'In the prepaid / paid date column, enter a real date as YYYY-MM-DD (example: 2026-08-14).',
+                'Do not leave Excel serial numbers (for example 46248) or N/A in this cell.',
+                'If there is no prepaid amount, leave the paid date blank so it is not sent to LHDN.',
+                'Save the file and submit again.'
+              ]
+            : [
+                'Check the highlighted field in your Excel file.',
+                'Use the format LHDN expects for that column.',
+                'Save the file and submit again.'
+              ],
+          originalPath: propertyPath,
+          _isUserFriendly: true
+        });
+      }
+
       // Look for PropertyRequired errors which indicate specific missing fields
       const propertyRequiredRegex = /PropertyRequired:\s*([^,}]+)/g;
       let match;
@@ -863,6 +895,23 @@ class LHDNSubmitter {
                 'Check all invoice line items for missing or invalid data',
                 'Ensure all required fields are filled in each line item',
                 'Verify unit codes, quantities, and prices are correct'
+              ],
+              originalPath: arrayPath,
+              _isUserFriendly: true
+            });
+          }
+        } else if (arrayPath.includes('PrepaidPayment') || /PaidDate/i.test(arrayPath)) {
+          if (!errors.some((e) => /PaidDate|PrepaidPayment/i.test(e.propertyPath || ''))) {
+            errors.push({
+              type: 'INVALID_PREPAID_PAYMENT',
+              propertyPath: arrayPath,
+              fieldDescription: 'Prepaid payment data is invalid',
+              userMessage: 'Prepaid Paid Date is not a valid date. Use YYYY-MM-DD (example: 2026-08-14).',
+              guidance: [
+                'In the prepaid / paid date column, enter a real date as YYYY-MM-DD (example: 2026-08-14).',
+                'Do not leave Excel serial numbers (for example 46248) or N/A in this cell.',
+                'If there is no prepaid amount, leave the paid date blank so it is not sent to LHDN.',
+                'Save the file and submit again.'
               ],
               originalPath: arrayPath,
               _isUserFriendly: true
@@ -1055,7 +1104,7 @@ class LHDNSubmitter {
       const code = detail.code || detail.errorCode || 'VALIDATION_ERROR';
 
       // Check if this is a complex nested error structure
-      if (message.includes('ArrayItemNotValid') || message.includes('StringExpected') || message.includes('PropertyRequired')) {
+      if (message.includes('ArrayItemNotValid') || message.includes('StringExpected') || message.includes('PropertyRequired') || message.includes('DateExpected')) {
         console.log('Detected complex nested error structure, extracting multiple errors...');
 
         const nestedErrors = this.extractNestedValidationErrors(message);
@@ -1944,6 +1993,21 @@ class LHDNSubmitter {
           };
         }
       }
+    }
+
+    // Prepaid paid date validation errors
+    if ((propertyPath && /PaidDate/i.test(propertyPath)) ||
+        messageText.includes('paiddate') ||
+        (messageText.includes('dateexpected') && messageText.includes('prepaid'))) {
+      return {
+        userMessage: 'Prepaid Paid Date is not a valid date. Use YYYY-MM-DD (example: 2026-08-14).',
+        guidance: [
+          'In the prepaid / paid date column, enter a real date as YYYY-MM-DD (example: 2026-08-14).',
+          'Do not leave Excel serial numbers (for example 46248) or N/A in this cell.',
+          'If there is no prepaid amount, leave the paid date blank so it is not sent to LHDN.',
+          'Save the file and submit again.'
+        ]
+      };
     }
 
     // Generic validation error fallback
