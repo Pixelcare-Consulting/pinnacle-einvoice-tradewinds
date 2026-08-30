@@ -13,6 +13,7 @@ export const releases: Release[] = [
     fix: [
       'Uploaded and invoice date headers on the outbound manual table are easier to read with more space and no overlapping text',
       'Status column uses less empty space around each badge',
+      'Invoice numbers popup now shows a clean list instead of a timeline-style layout, with copy buttons sitting next to each number',
     ],
   },
   {

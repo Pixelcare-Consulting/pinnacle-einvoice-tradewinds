@@ -5101,50 +5101,60 @@ class InvoiceTableManager {
                 <i class="bi bi-x-circle-fill me-1"></i>REJECTED</span>`;
         };
 
-        const getBorderColor = (invoiceNum) => {
-            const info = statusMap[invoiceNum.trim()];
-            if (!info) return '#cbd5e1';
-            return info.status === 'accepted' ? '#22c55e' : '#ef4444';
-        };
-
         const createInvoiceList = (filteredInvoices, currentPage = 1) => {
             const startIndex = (currentPage - 1) * itemsPerPage;
             const endIndex = startIndex + itemsPerPage;
             const pageInvoices = filteredInvoices.slice(startIndex, endIndex);
 
             if (pageInvoices.length === 0) {
-                return '<div style="text-align:center;padding:30px 0;color:#94a3b8;"><i class="bi bi-inbox" style="font-size:28px;display:block;margin-bottom:8px;"></i>No invoices match this filter</div>';
+                return '<div class="inv-modal-empty"><i class="bi bi-inbox"></i>No invoices match this filter</div>';
             }
 
-            return pageInvoices.map((invoice, index) => {
-                const info = statusMap[invoice.trim()];
-                const borderColor = getBorderColor(invoice);
+            const statusHeader = hasStatusData
+                ? '<span class="inv-col-status">Status</span>'
+                : '';
+
+            const rows = pageInvoices.map((invoice, index) => {
+                const trimmed = invoice.trim();
+                const info = statusMap[trimmed];
                 const isRejected = info?.status === 'rejected';
                 const isAccepted = info?.status === 'accepted';
-                const bg = isRejected ? '#fef2f2' : (isAccepted ? '#f0fdf4' : '#f8fafc');
-                const hoverBg = isRejected ? '#fee2e2' : (isAccepted ? '#dcfce7' : '#e0f2fe');
+                const rowClass = isRejected ? 'inv-modal-row is-rejected' : (isAccepted ? 'inv-modal-row is-accepted' : 'inv-modal-row');
 
                 let errorRow = '';
                 if (isRejected && info.error) {
-                    errorRow = `<div style="margin:6px 0 2px 38px;padding:6px 10px;background:#fee2e2;border-radius:4px;font-size:11px;color:#991b1b;font-family:system-ui,sans-serif;line-height:1.4;">
-                        <i class="bi bi-exclamation-triangle-fill me-1" style="font-size:10px;"></i>${info.error}
-                    </div>`;
+                    errorRow = `<div class="inv-modal-error"><i class="bi bi-exclamation-triangle-fill me-1"></i>${info.error}</div>`;
                 }
 
+                const statusCell = hasStatusData
+                    ? `<span class="inv-col-status">${getStatusBadge(invoice)}</span>`
+                    : '';
+
                 return `
-                <div class="invoice-item" style="padding:10px 12px;margin-bottom:4px;background:${bg};border-radius:8px;border-left:4px solid ${borderColor};transition:all 0.15s ease;cursor:pointer;"
-                    onmouseover="this.style.background='${hoverBg}';this.style.transform='translateX(3px)'"
-                    onmouseout="this.style.background='${bg}';this.style.transform='none'"
-                    onclick="window.outboundManualExcel.copyInvoiceNumber('${invoice.trim()}', this, true)">
-                    <div style="display:flex;align-items:center;gap:8px;">
-                        <span style="background:${borderColor};color:white;padding:2px 0;border-radius:4px;font-size:10px;font-weight:700;min-width:28px;text-align:center;display:inline-block;font-family:system-ui,sans-serif;">${startIndex + index + 1}</span>
-                        <span style="flex:1;font-family:'SF Mono',SFMono-Regular,ui-monospace,monospace;font-size:13px;font-weight:500;color:#1e293b;">${invoice.trim()}</span>
-                        ${getStatusBadge(invoice)}
-                        <i class="bi bi-clipboard" style="color:#94a3b8;font-size:12px;flex-shrink:0;" title="Click to copy"></i>
+                <div class="inv-modal-row-wrap">
+                    <div class="${rowClass}" data-invoice="${trimmed.replace(/"/g, '&quot;')}">
+                        <span class="inv-col-num">${startIndex + index + 1}</span>
+                        <span class="inv-col-number">${trimmed}</span>
+                        ${statusCell}
+                        <button type="button" class="inv-copy-btn" title="Copy invoice number" aria-label="Copy ${trimmed}"
+                            onclick="event.stopPropagation(); window.outboundManualExcel.copyInvoiceNumber('${trimmed}', this.closest('.inv-modal-row'), true)">
+                            <i class="bi bi-clipboard"></i>
+                        </button>
                     </div>
                     ${errorRow}
                 </div>`;
             }).join('');
+
+            return `
+                <div class="inv-modal-list${hasStatusData ? ' has-status' : ''}">
+                    <div class="inv-modal-list-header">
+                        <span class="inv-col-num">#</span>
+                        <span class="inv-col-number">Invoice Number</span>
+                        ${statusHeader}
+                        <span class="inv-col-action"></span>
+                    </div>
+                    ${rows}
+                </div>`;
         };
 
         const createPagination = (totalPages, currentPage, filteredCount) => {
@@ -5215,20 +5225,20 @@ class InvoiceTableManager {
                             </div>
                         </div>
                         ${filterSection}
-                        <div id="invoiceListContainer" style="max-height:420px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#cbd5e1 transparent;padding-right:4px;">
+                        <div id="invoiceListContainer">
                             ${createInvoiceList(invoiceNumbers, 1)}
                         </div>
                         <div id="invoicePagination" class="mt-3">
                             ${createPagination(totalPages, 1, invoiceNumbers.length)}
                         </div>
-                        <div class="mt-2 text-center">
-                            <small id="invoiceCountDisplay" style="color:#94a3b8;font-size:12px;">
+                        <div class="inv-modal-count">
+                            <small id="invoiceCountDisplay">
                                 Showing 1-${Math.min(itemsPerPage, invoiceNumbers.length)} of ${invoiceNumbers.length} invoices
                             </small>
                         </div>
                     </div>
-                    <div class="modal-footer" style="border-top:1px solid #f1f5f9;padding:12px 24px;">
-                        <button type="button" class="btn btn-lhdn-cancel" data-bs-dismiss="modal" style="border-radius:8px;padding:8px 20px;">Close</button>
+                    <div class="modal-footer inv-modal-footer">
+                        <button type="button" class="btn btn-lhdn-cancel" data-bs-dismiss="modal">Close</button>
                     </div>
                 </div>
             </div>
@@ -6268,10 +6278,15 @@ class InvoiceTableManager {
             await this.copyTextWithFallback(invoiceNumber);
 
             // Visual feedback
-            element.style.background = '#dcfce7';
-            setTimeout(() => {
-                element.style.background = isEvenRow ? '#f8fafc' : '#ffffff';
-            }, 1000);
+            if (element?.classList?.contains('inv-modal-row')) {
+                element.classList.add('copied');
+                setTimeout(() => element.classList.remove('copied'), 1000);
+            } else {
+                element.style.background = '#dcfce7';
+                setTimeout(() => {
+                    element.style.background = isEvenRow ? '#f8fafc' : '#ffffff';
+                }, 1000);
+            }
 
             // Show toast notification
             if (window.toastNotification) {
