@@ -8,6 +8,13 @@ export interface Release {
 
 export const releases: Release[] = [
   {
+    version: '3.1.9',
+    date: '30/08/2026',
+    improvement: [
+      'Supplier, receiver, invoice date, and submitted column titles now show in full on the outbound manual invoice table',
+    ],
+  },
+  {
     version: '3.1.8',
     date: '30/08/2026',
     improvement: [

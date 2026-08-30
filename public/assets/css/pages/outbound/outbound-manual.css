@@ -6,16 +6,16 @@
     /* Column widths — MUST sum to 100% (hidden cols = 0%) */
     --om-col-check: 3%;
     --om-col-index: 3%;
-    --om-col-filename: 10%;
-    --om-col-invoice: 8%;
-    --om-col-supplier: 9%;
-    --om-col-receiver: 9%;
-    --om-col-uploaded: 7%;
-    --om-col-inv-date: 7%;
-    --om-col-submitted: 6%;
-    --om-col-status: 18%;
-    --om-col-amount: 14%;
-    --om-col-action: 8%;
+    --om-col-filename: 8%;
+    --om-col-invoice: 7%;
+    --om-col-supplier: 11%;
+    --om-col-receiver: 11%;
+    --om-col-uploaded: 6%;
+    --om-col-inv-date: 9%;
+    --om-col-submitted: 8%;
+    --om-col-status: 15%;
+    --om-col-amount: 13%;
+    --om-col-action: 6%;
 
     /* Cell containment — overrides outbound-table.css globals */
     --om-cell-pad-x: 0.5rem;
@@ -102,6 +102,17 @@
     word-break: break-word;
     vertical-align: middle;
     hyphens: auto;
+}
+
+#outbound-manual-page #invoiceTable th.om-col-supplier,
+#outbound-manual-page #invoiceTable th.om-col-receiver,
+#outbound-manual-page #invoiceTable th.om-col-uploaded,
+#outbound-manual-page #invoiceTable th.om-col-inv-date,
+#outbound-manual-page #invoiceTable th.om-col-submitted {
+    white-space: normal;
+    text-overflow: unset;
+    line-height: 1.2;
+    vertical-align: middle;
 }
 
 #outbound-manual-page #invoiceTable .om-col-status .outbound-status {
