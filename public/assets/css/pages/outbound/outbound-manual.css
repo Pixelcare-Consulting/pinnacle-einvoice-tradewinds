@@ -8,14 +8,14 @@
     --om-col-index: 3%;
     --om-col-filename: 8%;
     --om-col-invoice: 8%;
-    --om-col-supplier: 11%;
-    --om-col-receiver: 11%;
-    --om-col-uploaded: 9%;
-    --om-col-inv-date: 9%;
+    --om-col-supplier: 10%;
+    --om-col-receiver: 10%;
+    --om-col-uploaded: 10%;
+    --om-col-inv-date: 10%;
     --om-col-submitted: 8%;
-    --om-col-status: 12%;
-    --om-col-amount: 12%;
-    --om-col-action: 6%;
+    --om-col-status: 10%;
+    --om-col-amount: 13%;
+    --om-col-action: 7%;
 
     /* Cell containment — overrides outbound-table.css globals */
     --om-cell-pad-x: 0.5rem;
@@ -41,7 +41,6 @@
 #outbound-manual-page #invoiceTable thead th {
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
     max-width: unset;
     font-size: 0.75rem;
     padding: 0.75rem 0.4rem;
@@ -122,6 +121,10 @@
 #outbound-manual-page #invoiceTable th.om-col-inv-date {
     padding-left: 0.35rem;
     padding-right: 0.35rem;
+    font-size: 0.7rem;
+    letter-spacing: 0.15px;
+    line-height: 1.15;
+    word-break: keep-all;
 }
 
 #outbound-manual-page #invoiceTable td.om-col-status {
@@ -371,17 +374,18 @@
     position: sticky;
     top: 0;
     z-index: 10;
-    white-space: nowrap;
     text-align: left;
     vertical-align: middle;
     box-shadow: none;
 }
 
-#outbound-manual-page #invoiceTable thead th.om-col-status,
-#outbound-manual-page #invoiceTable thead th.om-col-amount,
+#outbound-manual-page #invoiceTable thead th.om-col-supplier,
+#outbound-manual-page #invoiceTable thead th.om-col-receiver,
 #outbound-manual-page #invoiceTable thead th.om-col-uploaded,
 #outbound-manual-page #invoiceTable thead th.om-col-inv-date,
-#outbound-manual-page #invoiceTable thead th.om-col-submitted {
+#outbound-manual-page #invoiceTable thead th.om-col-submitted,
+#outbound-manual-page #invoiceTable thead th.om-col-status,
+#outbound-manual-page #invoiceTable thead th.om-col-amount {
     white-space: normal !important;
     overflow: visible !important;
     text-overflow: unset !important;
