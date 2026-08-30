@@ -5,18 +5,18 @@
 #outbound-manual-page {
     /* Column widths — MUST sum to 100% */
     --om-col-check: 3%;
-    --om-col-index: 2%;
-    --om-col-filename: 11%;
+    --om-col-index: 3%;
+    --om-col-filename: 10%;
     --om-col-invoice: 9%;
     --om-col-supplier: 8%;
     --om-col-receiver: 8%;
-    --om-col-uploaded-by: 8%;
+    --om-col-uploaded-by: 7%;
     --om-col-uploaded: 8%;
-    --om-col-inv-date: 8%;
+    --om-col-inv-date: 9%;
     --om-col-submitted: 8%;
     --om-col-status: 10%;
-    --om-col-amount: 8%;
-    --om-col-action: 9%;
+    --om-col-amount: 9%;
+    --om-col-action: 8%;
 
     /* Cell containment — overrides outbound-table.css globals */
     --om-cell-pad-x: 0.5rem;
@@ -31,12 +31,20 @@
     table-layout: fixed;
 }
 
-#outbound-manual-page #invoiceTable th,
-#outbound-manual-page #invoiceTable td {
-    overflow: var(--om-cell-overflow);
+#outbound-manual-page #invoiceTable tbody td {
+    overflow: hidden;
     text-overflow: ellipsis;
     max-width: 0;
     padding: var(--om-cell-pad-y) var(--om-cell-pad-x);
+}
+
+#outbound-manual-page #invoiceTable thead th {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: unset;
+    font-size: 0.75rem;
+    padding: 0.75rem 0.4rem;
 }
 
 #outbound-manual-page #invoiceTable th:nth-child(1),
@@ -103,6 +111,9 @@
 }
 
 #outbound-manual-page .table-section.outbound-table-grid {
+    background: #fff;
+    border: 1px solid #e9ecef;
+    border-radius: 0 0 12px 12px;
     padding: 0 1rem 1.25rem;
     box-shadow: none;
 }
@@ -183,74 +194,6 @@
     overflow: hidden;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
-
-/* Column Width Enforcement — 15 columns (incl. 2 hidden) */
-.outbound-table-responsive table th:nth-child(1),
-.outbound-table-responsive table td:nth-child(1),
-#invoiceTable th:nth-child(1),
-#invoiceTable td:nth-child(1) { width: 3%; text-align: center; }
-
-.outbound-table-responsive table th:nth-child(2),
-.outbound-table-responsive table td:nth-child(2),
-#invoiceTable th:nth-child(2),
-#invoiceTable td:nth-child(2) { width: 3%; text-align: center; }
-
-.outbound-table-responsive table th:nth-child(3),
-.outbound-table-responsive table td:nth-child(3),
-#invoiceTable th:nth-child(3),
-#invoiceTable td:nth-child(3) { width: 12%; text-align: left; }
-
-.outbound-table-responsive table th:nth-child(4),
-.outbound-table-responsive table td:nth-child(4),
-#invoiceTable th:nth-child(4),
-#invoiceTable td:nth-child(4) { width: 10%; text-align: left; }
-
-.outbound-table-responsive table th:nth-child(5),
-.outbound-table-responsive table td:nth-child(5),
-#invoiceTable th:nth-child(5),
-#invoiceTable td:nth-child(5) { width: 9%; text-align: left; }
-
-.outbound-table-responsive table th:nth-child(6),
-.outbound-table-responsive table td:nth-child(6),
-#invoiceTable th:nth-child(6),
-#invoiceTable td:nth-child(6) { width: 9%; text-align: left; }
-
-.outbound-table-responsive table th:nth-child(7),
-.outbound-table-responsive table td:nth-child(7),
-#invoiceTable th:nth-child(7),
-#invoiceTable td:nth-child(7) { width: 7%; text-align: center; }
-
-.outbound-table-responsive table th:nth-child(8),
-.outbound-table-responsive table td:nth-child(8),
-#invoiceTable th:nth-child(8),
-#invoiceTable td:nth-child(8) { width: 9%; min-width: unset; text-align: center; }
-
-.outbound-table-responsive table th:nth-child(9),
-.outbound-table-responsive table td:nth-child(9),
-#invoiceTable th:nth-child(9),
-#invoiceTable td:nth-child(9) { width: 10%; min-width: unset; text-align: center; }
-
-.outbound-table-responsive table th:nth-child(10),
-.outbound-table-responsive table td:nth-child(10),
-#invoiceTable th:nth-child(10),
-#invoiceTable td:nth-child(10) { width: 9%; min-width: unset; text-align: center; }
-
-/* columns 11–12 hidden (statusPriority, id) */
-
-.outbound-table-responsive table th:nth-child(13),
-.outbound-table-responsive table td:nth-child(13),
-#invoiceTable th:nth-child(13),
-#invoiceTable td:nth-child(13) { width: 8%; text-align: center; }
-
-.outbound-table-responsive table th:nth-child(14),
-.outbound-table-responsive table td:nth-child(14),
-#invoiceTable th:nth-child(14),
-#invoiceTable td:nth-child(14) { width: 8%; text-align: right; }
-
-.outbound-table-responsive table th:nth-child(15),
-.outbound-table-responsive table td:nth-child(15),
-#invoiceTable th:nth-child(15),
-#invoiceTable td:nth-child(15) { width: 9%; text-align: center; }
 
 /* Modern Table Header */
 .outbound-table-responsive thead th,
@@ -496,8 +439,8 @@
     font-style: italic;
 }
 
-/* Checkbox Styling */
-input[type="checkbox"] {
+/* Checkbox Styling — exclude outbound table checkboxes (scoped in #outbound-manual-page) */
+input[type="checkbox"]:not(.outbound-checkbox) {
     width: 1.1rem;
     height: 1.1rem;
     accent-color: #1a365d;
@@ -752,11 +695,68 @@ input[type="checkbox"] {
     padding: 0;
 }
 
-/* Zone 2: Browse row (search + entries, no card) */
+/* Zone 2: Browse row (search + filters + entries) */
 .outbound-table-browse {
     margin-bottom: 0.75rem;
     padding: 0 0.25rem;
     width: 100%;
+}
+
+#outbound-manual-page .outbound-browse-card {
+    background: #fff;
+    border: 1px solid #e9ecef;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+    padding: 1rem 1.25rem;
+    margin-bottom: 0.75rem;
+}
+
+#outbound-manual-page .advanced-filters-content {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin-top: 0.75rem;
+}
+
+#outbound-manual-page .advanced-filters-content .form-label {
+    font-weight: 500;
+    color: #495057;
+    margin-bottom: 0.5rem;
+}
+
+#outbound-manual-page .advanced-filters-content .form-control,
+#outbound-manual-page .advanced-filters-content .form-select {
+    border: 2px solid #e9ecef;
+    border-radius: 6px;
+    padding: 0.5rem 1rem;
+}
+
+#outbound-manual-page .advanced-filters-content .input-group-text {
+    border: 2px solid #e9ecef;
+    background-color: #f8f9fa;
+}
+
+#outbound-manual-page .outbound-checkbox {
+    width: 1rem;
+    height: 1rem;
+    min-width: 1rem;
+    flex-shrink: 0;
+    appearance: none;
+}
+
+#outbound-manual-page .outbound-checkbox-column,
+#outbound-manual-page #invoiceTable td:first-child,
+#outbound-manual-page #invoiceTable th:first-child {
+    text-align: center;
+    vertical-align: middle;
+    padding-left: 0.35rem;
+    padding-right: 0.35rem;
+}
+
+#outbound-manual-page .outbound-checkbox-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .outbound-browse-row {

@@ -20,7 +20,7 @@
 
 <!-- Template Main CSS Files -->
 <link href="/assets/css/pages/outbound/outbound-table.css?v=20260826" rel="stylesheet">
-<link href="/assets/css/pages/outbound/outbound-manual.css?v=20260830-6" rel="stylesheet">
+<link href="/assets/css/pages/outbound/outbound-manual.css?v=20260830-7" rel="stylesheet">
 <!-- Excel Loading Animation CSS -->
 <link href="/assets/css/pages/outbound/excel-loading.css" rel="stylesheet">
 <!-- Invoice Preview Modal Enhancements -->
@@ -983,31 +983,7 @@ tr.outbound-row-highlight td {
     color: #dc3545;
 }
 
-/* Advanced Filters */
-.advanced-filters-content {
-    background-color: #f8f9fa;
-    border-radius: 8px;
-    padding: 1.5rem;
-    margin-top: 1rem;
-}
-
-.advanced-filters-content .form-label {
-    font-weight: 500;
-    color: #495057;
-    margin-bottom: 0.5rem;
-}
-
-.advanced-filters-content .form-control,
-.advanced-filters-content .form-select {
-    border: 2px solid #e9ecef;
-    border-radius: 6px;
-    padding: 0.5rem 1rem;
-}
-
-.advanced-filters-content .input-group-text {
-    border: 2px solid #e9ecef;
-    background-color: #f8f9fa;
-}
+/* Advanced Filters — moved to outbound-manual.css under #outbound-manual-page */
 
 /* Loading State */
 .filter-loading {
@@ -2714,7 +2690,7 @@ tr.outbound-row-highlight td {
                                 <div class="outbound-toolbar">
                                     <div class="outbound-toolbar-row">
                                         <div class="outbound-action-bar">
-                                            <button class="btn outbound-toolbar-btn outbound-toolbar-btn--primary" id="openExcelUploadModalBtn" data-bs-toggle="modal" data-bs-target="#flatFileUploadModal" title="Upload Excel template for processing">
+                                            <button class="btn outbound-toolbar-btn outbound-toolbar-btn--primary" id="openExcelUploadModalBtn" type="button" title="Upload Excel template for processing">
                                                 <i class="bi bi-file-earmark-excel me-1"></i>Upload Excel Template
                                             </button>
                                             <button class="btn outbound-toolbar-btn outbound-toolbar-btn--secondary" id="bulkSubmitBtn" disabled title="Submit selected files to LHDN">
@@ -2729,7 +2705,7 @@ tr.outbound-row-highlight td {
                             </div>
 
                             <!-- Zone 2: Browse row (search + filters + entries) -->
-                            <div class="outbound-table-browse">
+                            <div class="outbound-table-browse outbound-browse-card">
                                 <div class="outbound-browse-row">
                                     <div class="outbound-browse-search">
                                         <div class="search-wrapper position-relative outbound-toolbar-search">
@@ -2739,7 +2715,7 @@ tr.outbound-row-highlight td {
                                         </div>
                                     </div>
                                     <div class="outbound-browse-controls">
-                                        <button class="btn outbound-action-btn submit" type="button" data-bs-toggle="collapse" data-bs-target="#advancedFilters" aria-expanded="false" aria-controls="advancedFilters">
+                                        <button class="btn outbound-action-btn submit" type="button" id="advancedFiltersToggle" aria-expanded="false" aria-controls="advancedFilters">
                                             <i class="bi bi-sliders me-1"></i>Advanced
                                         </button>
                                         <div class="outbound-length-slot" id="outboundLengthSlot" aria-label="Table page size"></div>
@@ -3054,7 +3030,7 @@ tr.outbound-row-highlight td {
 <!-- New submission orchestrator -->
 <script src="/assets/js/modules/submission/submission-client.js?v=20260828"></script>
 <!-- Excel validation functions -->
-<script src="/assets/js/modules/excel/outbound-manual.js?v=20260830-6"></script>
+<script src="/assets/js/modules/excel/outbound-manual.js?v=20260830-7"></script>
 <!-- <script src="/assets/js/modules/tutorial/guided-tour.js"></script> -->
 <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
 
@@ -3227,24 +3203,22 @@ tr.outbound-row-highlight td {
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     // Get the advanced filters button and collapse element
-    const advancedFiltersBtn = document.querySelector('[data-bs-toggle="collapse"][data-bs-target="#advancedFilters"]');
+    const advancedFiltersBtn = document.getElementById('advancedFiltersToggle');
     const advancedFiltersCollapse = document.getElementById('advancedFilters');
 
     if (advancedFiltersBtn && advancedFiltersCollapse) {
-        // Initialize the collapse manually
         const bsCollapse = new bootstrap.Collapse(advancedFiltersCollapse, {
             toggle: false
         });
 
-        // Add click event listener to the button
         advancedFiltersBtn.addEventListener('click', function(e) {
             e.preventDefault();
             e.stopPropagation();
             bsCollapse.toggle();
         });
 
-        // Update button icon on collapse events
         advancedFiltersCollapse.addEventListener('show.bs.collapse', function () {
+            advancedFiltersBtn.setAttribute('aria-expanded', 'true');
             const icon = advancedFiltersBtn.querySelector('i.bi');
             if (icon) {
                 icon.classList.remove('bi-sliders');
@@ -3253,6 +3227,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         advancedFiltersCollapse.addEventListener('hide.bs.collapse', function () {
+            advancedFiltersBtn.setAttribute('aria-expanded', 'false');
             const icon = advancedFiltersBtn.querySelector('i.bi');
             if (icon) {
                 icon.classList.remove('bi-x-lg');

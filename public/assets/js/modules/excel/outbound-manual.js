@@ -366,7 +366,39 @@ class FileUploadManager {
             });
         }
 
+        this.initializeUploadModalListeners();
         this.initializeEventListeners();
+    }
+
+    initializeUploadModalListeners() {
+        try {
+            const uploadModalEl = document.getElementById('flatFileUploadModal');
+            if (!uploadModalEl || uploadModalEl.hasAttribute('data-upload-listeners')) {
+                return;
+            }
+
+            const dlg = uploadModalEl.querySelector('.modal-dialog');
+            if (dlg && !dlg.classList.contains('modal-dialog-centered')) {
+                dlg.classList.add('modal-dialog-centered');
+            }
+
+            uploadModalEl.addEventListener('show.bs.modal', () => {
+                const header = uploadModalEl.querySelector('.modal-header');
+                if (header) {
+                    header.style.background = '#405189';
+                    header.classList.add('text-white');
+                }
+            });
+
+            uploadModalEl.addEventListener('hidden.bs.modal', () => {
+                const preserveLoadingBackdrop = Boolean(document.getElementById('loadingBackdrop'));
+                this.cleanupModalArtifacts({ preserveLoadingBackdrop });
+            });
+
+            uploadModalEl.setAttribute('data-upload-listeners', 'true');
+        } catch (e) {
+            console.warn('Failed to initialize upload modal listeners', e);
+        }
     }
 
     initializeEventListeners() {
@@ -421,6 +453,15 @@ class FileUploadManager {
             });
         }
 
+        const openUploadBtn = document.getElementById('openExcelUploadModalBtn');
+        if (openUploadBtn && !openUploadBtn.hasAttribute('data-upload-open-listener')) {
+            openUploadBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                this.openUploadModal();
+            });
+            openUploadBtn.setAttribute('data-upload-open-listener', 'true');
+        }
+
         // Process file button
         if (this.processFileBtn) {
             this.processFileBtn.addEventListener('click', () => {
@@ -453,19 +494,20 @@ class FileUploadManager {
         const proceedWithUploadBtn = document.getElementById('proceedWithUploadBtn');
         if (proceedWithUploadBtn) {
             proceedWithUploadBtn.addEventListener('click', () => {
-                // Close the preview modal
-                const previewModal = bootstrap.Modal.getInstance(document.getElementById('excelPreviewModal'));
-                if (previewModal) {
+                const previewModalEl = document.getElementById('excelPreviewModal');
+                const previewModal = previewModalEl
+                    ? bootstrap.Modal.getInstance(previewModalEl)
+                    : null;
+
+                if (previewModalEl && previewModal) {
+                    previewModalEl.addEventListener('hidden.bs.modal', () => {
+                        this.cleanupModalArtifacts();
+                        this.handleProcessFile();
+                    }, { once: true });
                     previewModal.hide();
+                } else {
+                    this.handleProcessFile();
                 }
-
-                // Clean up any modal backdrops
-                setTimeout(() => {
-                    this.cleanupModalArtifacts();
-                }, 100);
-
-                // Trigger the actual upload process
-                this.handleProcessFile();
             });
         }
     }
@@ -641,16 +683,8 @@ class FileUploadManager {
         });
 
         try {
-            // Hide the upload modal first and clean up backdrop
-            const uploadModal = bootstrap.Modal.getInstance(document.getElementById('flatFileUploadModal'));
-            if (uploadModal) {
-                uploadModal.hide();
-            }
-
-            // Force remove any remaining modal backdrops
-            setTimeout(() => {
-                this.cleanupModalArtifacts();
-            }, 100);
+            // Close upload modal safely and wait for Bootstrap hide lifecycle
+            await this.closeUploadModal();
 
             // Show professional loading modal for pre-validation
             this.showEnhancedLoadingModal('Pre-validating Excel file...');
@@ -743,9 +777,7 @@ class FileUploadManager {
                     this.showSuccess(successMessage);
                     this.resetUI();
                     this.refreshTable(uploadedFileId);
-                    setTimeout(() => {
-                        this.cleanupModalArtifacts();
-                    }, 500);
+                    this.cleanupModalArtifacts();
                 }, 1000);
             } else {
                 throw new Error(result.error || 'Upload failed');
@@ -781,9 +813,56 @@ class FileUploadManager {
             // Re-enable the process button
             if (this.processFileBtn) {
                 this.processFileBtn.disabled = false;
-                this.processFileBtn.innerHTML = '<i class="bi bi-play-circle me-1"></i>Process File';
+                this.processFileBtn.innerHTML = '<i class="bi bi-upload me-2"></i><span>Upload & Process</span>';
             }
         }
+    }
+
+    openUploadModal() {
+        this.cleanupModalArtifacts();
+        this.resetUI();
+
+        const modalEl = document.getElementById('flatFileUploadModal');
+        if (!modalEl) {
+            return;
+        }
+
+        bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    }
+
+    closeUploadModal() {
+        return new Promise((resolve) => {
+            try {
+                const modalEl = document.getElementById('flatFileUploadModal');
+                if (!modalEl) {
+                    this.cleanupModalArtifacts();
+                    resolve();
+                    return;
+                }
+
+                const modal = bootstrap.Modal.getInstance(modalEl);
+                const isOpen = modalEl.classList.contains('show') || modal?._isShown;
+
+                if (!modal || !isOpen) {
+                    this.cleanupModalArtifacts();
+                    resolve();
+                    return;
+                }
+
+                const onHidden = () => {
+                    modalEl.removeEventListener('hidden.bs.modal', onHidden);
+                    this.cleanupModalArtifacts({ preserveLoadingBackdrop: true });
+                    resolve();
+                };
+
+                modalEl.addEventListener('hidden.bs.modal', onHidden);
+                modal.hide();
+            } catch (modalError) {
+                console.warn('Error closing upload modal:', modalError);
+                this.cleanupModalArtifacts();
+                resolve();
+            }
+        });
     }
 
     // Enhanced Loading Modal Methods (Using same design as outbound-excel.js)
@@ -913,16 +992,37 @@ class FileUploadManager {
     }
 
     // Utility method to clean up modal artifacts
-    cleanupModalArtifacts() {
-        // Remove any remaining modal backdrops
-        const backdrops = document.querySelectorAll('.modal-backdrop');
-        backdrops.forEach(backdrop => {
-            if (backdrop && !backdrop.closest('#loadingBackdrop')) {
-                backdrop.remove();
-            }
+    cleanupModalArtifacts(options = {}) {
+        const { preserveLoadingBackdrop = false } = options;
+
+        document.querySelectorAll('.modal-backdrop').forEach((backdrop) => {
+            backdrop.remove();
         });
 
-        // Clean up body classes and styles
+        if (!preserveLoadingBackdrop) {
+            document.querySelectorAll('#loadingBackdrop, .excel-loading-backdrop').forEach((overlay) => {
+                if (overlay.id === 'duplicateBlockModal') {
+                    return;
+                }
+                overlay.remove();
+            });
+        }
+
+        const modalEl = document.getElementById('flatFileUploadModal');
+        if (modalEl) {
+            modalEl.classList.remove('show');
+            modalEl.style.display = '';
+            modalEl.setAttribute('aria-hidden', 'true');
+            modalEl.removeAttribute('aria-modal');
+            modalEl.removeAttribute('role');
+
+            const modal = bootstrap.Modal.getInstance(modalEl);
+            if (modal) {
+                modal._isShown = false;
+                modal._isTransitioning = false;
+            }
+        }
+
         document.body.classList.remove('modal-open');
         document.body.style.overflow = '';
         document.body.style.paddingRight = '';
@@ -2820,8 +2920,10 @@ class FileUploadManager {
         const filePreview = document.getElementById('filePreview');
 
         if (fileDetails && uploadArea) {
+            fileDetails.classList.add('d-none');
             fileDetails.style.display = 'none';
             uploadArea.style.display = 'block';
+            uploadArea.classList.remove('d-none');
         }
 
         if (filePreview) {
@@ -2830,6 +2932,7 @@ class FileUploadManager {
 
         if (this.processFileBtn) {
             this.processFileBtn.disabled = true;
+            this.processFileBtn.innerHTML = '<i class="bi bi-upload me-2"></i><span>Upload & Process</span>';
         }
     }
 
@@ -3757,7 +3860,6 @@ class InvoiceTableManager {
                 columns: [
                     {
                         data: null,
-                        width: '35px',
                         orderable: false,
                         searchable: false,
                         className: 'text-center',
@@ -3777,7 +3879,6 @@ class InvoiceTableManager {
                     },
                     {
                         data: null,
-                        width: '40px',
                         orderable: false,
                         searchable: false,
                         className: 'text-center',
@@ -3790,31 +3891,26 @@ class InvoiceTableManager {
                     {
                         data: 'fileName',
                         title: 'FILE NAME',
-                        width: '15%',
                         render: (data, type, row) => this.renderFileName(data, type, row)
                     },
                     {
                         data: 'invoiceNumber',
                         title: 'INVOICE NO.',
-                        width: '12%',
                         render: (data, type, row) => this.renderInvoiceNumber(data, type, row)
                     },
                     {
                         data: 'supplier',
                         title: 'SUPPLIER',
-                        width: '18%',
                         render: (data, type, row) => this.renderSupplier(data, type, row)
                     },
                     {
                         data: 'receiver',
                         title: 'RECEIVER',
-                        width: '14%',
                         render: (data, type, row) => this.renderReceiver(data, type, row)
                     },
                     {
                         data: 'uploadedBy',
                         title: 'UPLOADED BY',
-                        width: '10%',
                         className: 'text-center',
                         render: (data, type, row) => this.renderUploadedBy(data, type, row)
                     },
@@ -3822,7 +3918,6 @@ class InvoiceTableManager {
                         data: 'date',
                         orderable: true,
                         title: 'UPLOADED',
-                        width: '9%',
                         className: 'text-center outbound-date-cell',
                         render: (data, type) => {
                             if (type === 'sort' || type === 'type') {
@@ -3834,14 +3929,12 @@ class InvoiceTableManager {
                     {
                         data: 'invDateInfo',
                         title: 'INVOICE DATE',
-                        width: '10%',
                         className: 'text-center outbound-date-cell',
                         render: (data, type, row) => this.renderInvDateInfo(data, type, row)
                     },
                     {
                         data: 'submittedDate',
                         title: 'SUBMITTED',
-                        width: '10%',
                         className: 'text-center outbound-date-cell',
                         orderable: true,
                         render: (data, type) => {
@@ -3864,28 +3957,25 @@ class InvoiceTableManager {
                     {
                         data: 'status',
                         title: 'STATUS',
-                        width: '8%',
                         className: 'text-center',
                         render: (data, type, row) => this.renderStatus(data, type, row)
                     },
                     {
                         data: 'totalAmount',
                         title: 'TOTAL AMOUNT',
-                        width: '11%',
                         className: 'text-end',
                         render: (data) => this.renderTotalAmount(data)
                     },
                     {
                         data: null,
                         title: 'ACTION',
-                        width: '180px',
                         orderable: false,
                         className: 'text-center',
                         render: (data, type, row) => this.renderActions(row)
                     }
                 ],
-                scrollX: true,
-                scrollCollapse: true,
+                scrollX: false,
+                scrollCollapse: false,
                 autoWidth: false,
                 pageLength: 10,
                 dom: '<"outbound-controls"<"outbound-length-control"l>><"outbound-table-responsive"t><"outbound-bottom"<"outbound-info"i><"outbound-pagination"p>>',
@@ -7640,25 +7730,6 @@ class UploadedFilesManager {
             // Clear selection and refresh on error too
             this.selectedFiles.clear();
 
-    // Ensure Upload modal is centered and header is dark blue
-    try {
-        const uploadModalEl = document.getElementById('flatFileUploadModal');
-        if (uploadModalEl) {
-            const dlg = uploadModalEl.querySelector('.modal-dialog');
-            if (dlg && !dlg.classList.contains('modal-dialog-centered')) {
-                dlg.classList.add('modal-dialog-centered');
-            }
-
-            uploadModalEl.addEventListener('show.bs.modal', () => {
-                const header = uploadModalEl.querySelector('.modal-header');
-                if (header) {
-                    header.style.background = '#405189';
-                    header.classList.add('text-white');
-                }
-            });
-        }
-    } catch (e) { console.warn('Failed to enforce modal styles', e); }
-
             this.updateBulkActionButtons();
             if (typeof refreshOutboundTable === 'function') refreshOutboundTable();
 
@@ -9532,8 +9603,10 @@ function showDuplicateBlockModal({ blockingFile, duplicateType, message }) {
             <div class="excel-loading-content" style="max-width:520px">
                 <div class="excel-modal-header">
                     <div class="excel-processing-icon"><i class="bi bi-files"></i></div>
-                    <h5 class="excel-processing-title">Duplicate Upload Blocked</h5>
-                    <p class="excel-processing-subtitle">${duplicateType === 'CONTENT_DUPLICATE' ? 'Same invoice content' : 'Filename already in table'}</p>
+                    <div class="excel-processing-title">
+                        <h5>Duplicate Upload Blocked</h5>
+                        <p class="excel-processing-subtitle">${duplicateType === 'CONTENT_DUPLICATE' ? 'Same invoice content' : 'Filename already in table'}</p>
+                    </div>
                 </div>
                 <div class="excel-modal-body text-start px-4 pb-2">
                     <p>${message || 'This upload is blocked by an existing row in your upload table.'}</p>
@@ -9789,6 +9862,17 @@ window.closePreValidationErrorModal = function() {
             opacity: 0.8;
             margin: 0;
             font-size: 0.9rem;
+        }
+
+        .excel-modal-header .excel-processing-subtitle {
+            color: rgba(255, 255, 255, 0.9);
+            text-align: center;
+            margin: 0;
+            font-size: 0.9rem;
+        }
+
+        .excel-modal-header .excel-processing-title {
+            margin-bottom: 0.25rem;
         }
 
         /* Document Stack Animation */
