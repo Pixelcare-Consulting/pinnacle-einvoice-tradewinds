@@ -6,16 +6,16 @@
     /* Column widths — MUST sum to 100% */
     --om-col-check: 3%;
     --om-col-index: 3%;
-    --om-col-filename: 10%;
-    --om-col-invoice: 9%;
+    --om-col-filename: 9%;
+    --om-col-invoice: 8%;
     --om-col-supplier: 7%;
     --om-col-receiver: 7%;
     --om-col-uploaded: 8%;
-    --om-col-inv-date: 9%;
-    --om-col-submitted: 8%;
-    --om-col-status: 15%;
-    --om-col-amount: 12%;
-    --om-col-action: 9%;
+    --om-col-inv-date: 8%;
+    --om-col-submitted: 6%;
+    --om-col-status: 18%;
+    --om-col-amount: 15%;
+    --om-col-action: 8%;
 
     /* Cell containment — overrides outbound-table.css globals */
     --om-cell-pad-x: 0.5rem;
@@ -82,10 +82,21 @@
     max-width: none;
 }
 
+#outbound-manual-page #invoiceTable th:nth-child(12) {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: unset;
+    line-height: 1.2;
+    vertical-align: middle;
+}
+
 #outbound-manual-page #invoiceTable th:nth-child(13),
 #outbound-manual-page #invoiceTable td:nth-child(13) {
     width: var(--om-col-amount);
     text-align: right;
+    overflow: visible;
+    white-space: normal;
+    max-width: none;
 }
 
 #outbound-manual-page #invoiceTable th:nth-child(13) {
@@ -128,9 +139,10 @@
     line-height: 1.25;
     text-align: center;
     font-size: var(--om-status-font-size);
-    padding: 4px 6px;
-    border-radius: 9999px;
+    padding: 4px 8px;
+    border-radius: 8px;
     font-weight: 600;
+    box-sizing: border-box;
 }
 
 #outbound-manual-page .outbound-status i {
