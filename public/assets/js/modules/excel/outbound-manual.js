@@ -3847,30 +3847,6 @@ class InvoiceTableManager {
         }
     }
 
-    applyOutboundTableColumnLayout() {
-        const table = document.getElementById('invoiceTable');
-        if (!table) return;
-
-        table.querySelectorAll('thead th.om-status-cell, thead th.om-amount-cell').forEach((th) => {
-            th.style.whiteSpace = 'normal';
-            th.style.overflow = 'visible';
-            th.style.textOverflow = 'clip';
-            th.style.lineHeight = '1.2';
-            th.style.verticalAlign = 'middle';
-        });
-
-        table.querySelectorAll('td.om-status-cell, th.om-status-cell').forEach((el) => {
-            el.style.maxWidth = 'none';
-            el.style.overflow = 'visible';
-            el.style.whiteSpace = 'normal';
-        });
-
-        table.querySelectorAll('td.om-amount-cell, th.om-amount-cell').forEach((el) => {
-            el.style.maxWidth = 'none';
-            el.style.overflow = 'visible';
-        });
-    }
-
     initializeTable() {
         try {
             // Destroy existing table if it exists
@@ -3886,8 +3862,7 @@ class InvoiceTableManager {
                         data: null,
                         orderable: false,
                         searchable: false,
-                        className: 'text-center',
-                        width: '3%',
+                        className: 'om-col-check text-center',
                         render: function (data, type, row) {
                             const status = (row.status || 'uploaded').toLowerCase();
                             const disabledStatus = ['submitted', 'cancelled', 'rejected', 'invalid'].includes(status);
@@ -3906,8 +3881,7 @@ class InvoiceTableManager {
                         data: null,
                         orderable: false,
                         searchable: false,
-                        className: 'text-center',
-                        width: '3%',
+                        className: 'om-col-index text-center',
                         render: function (data, type, row, meta) {
                             const pageInfo = meta.settings._iDisplayStart;
                             const index = pageInfo + meta.row + 1;
@@ -3917,30 +3891,32 @@ class InvoiceTableManager {
                     {
                         data: 'fileName',
                         title: 'FILE NAME',
-                        width: '9%',
+                        className: 'om-col-filename',
                         render: (data, type, row) => this.renderFileName(data, type, row)
                     },
                     {
                         data: 'invoiceNumber',
                         title: 'INVOICE NO.',
+                        className: 'om-col-invoice',
                         render: (data, type, row) => this.renderInvoiceNumber(data, type, row)
                     },
                     {
                         data: 'supplier',
                         title: 'SUPPLIER',
+                        className: 'om-col-supplier',
                         render: (data, type, row) => this.renderSupplier(data, type, row)
                     },
                     {
                         data: 'receiver',
                         title: 'RECEIVER',
+                        className: 'om-col-receiver',
                         render: (data, type, row) => this.renderReceiver(data, type, row)
                     },
                     {
                         data: 'date',
                         orderable: true,
                         title: 'UPLOADED',
-                        width: '8%',
-                        className: 'text-center outbound-date-cell',
+                        className: 'om-col-uploaded text-center outbound-date-cell',
                         render: (data, type) => {
                             if (type === 'sort' || type === 'type') {
                                 return data ? new Date(data).getTime() : 0;
@@ -3951,13 +3927,14 @@ class InvoiceTableManager {
                     {
                         data: 'invDateInfo',
                         title: 'INVOICE DATE',
-                        className: 'text-center outbound-date-cell',
+                        className: 'om-col-inv-date text-center outbound-date-cell',
                         render: (data, type, row) => this.renderInvDateInfo(data, type, row)
                     },
                     {
                         data: 'submittedDate',
                         title: 'SUBMITTED',
                         orderable: true,
+                        className: 'om-col-submitted text-center',
                         render: (data, type) => {
                             if (type === 'sort' || type === 'type') {
                                 return data ? new Date(data).getTime() : 0;
@@ -3968,30 +3945,32 @@ class InvoiceTableManager {
                     {
                         data: 'statusPriority',
                         visible: false,
-                        searchable: false
+                        searchable: false,
+                        className: 'om-col-hidden'
                     },
                     {
                         data: 'id',
                         visible: false,
-                        searchable: false
+                        searchable: false,
+                        className: 'om-col-hidden'
                     },
                     {
                         data: 'status',
                         title: 'STATUS',
+                        className: 'om-col-status text-center',
                         render: (data, type, row) => this.renderStatus(data, type, row)
                     },
                     {
                         data: 'totalAmount',
                         title: 'TOTAL AMOUNT',
-                        width: '15%',
+                        className: 'om-col-amount text-right',
                         render: (data) => this.renderTotalAmount(data)
                     },
                     {
                         data: null,
                         title: 'ACTION',
                         orderable: false,
-                        width: '8%',
-                        className: 'text-center',
+                        className: 'om-col-action text-center',
                         render: (data, type, row) => this.renderActions(row)
                     }
                 ],
@@ -4002,10 +3981,6 @@ class InvoiceTableManager {
                 dom: '<"outbound-controls"<"outbound-length-control"l>><"outbound-table-responsive"t><"outbound-bottom"<"outbound-info"i><"outbound-pagination"p>>',
                 initComplete: () => {
                     this.relocateLengthControl();
-                    this.applyOutboundTableColumnLayout();
-                },
-                drawCallback: () => {
-                    this.applyOutboundTableColumnLayout();
                 },
                 processing: true,
                 serverSide: false,
@@ -4518,25 +4493,26 @@ class InvoiceTableManager {
             invalid: 'exclamation-triangle-fill',
             valid: 'check-circle-fill'
         };
-        const statusColors = {
-            pending: '#ff8307',
-            uploaded: '#dc3545',
-            error: '#dc3545',
-            processed: '#28a745',
-            'ready to submit': '#28a745',
-            processing: '#0d6efd',
-            submitted: '#198754',
-            cancelled: '#ffc107',
-            rejected: '#dc3545',
-            failed: '#dc3545',
-            invalid: '#dc3545',
-            valid: '#198754'
+
+        const statusVariantMap = {
+            pending: 'pending',
+            uploaded: 'failed-to-upload',
+            error: 'failed-to-upload',
+            processed: 'ready-to-submit',
+            'ready to submit': 'ready-to-submit',
+            processing: 'processing',
+            submitted: 'submitted',
+            cancelled: 'cancelled',
+            rejected: 'rejected',
+            failed: 'failed-to-upload',
+            invalid: 'invalid',
+            valid: 'submitted'
         };
 
         let icon = icons[statusClass] || 'question-circle';
-        let color = statusColors[statusClass] || '#6c757d';
         let displayName = statusDisplayNames[statusClass] || raw;
         let titleText = displayName;
+        let statusVariant = statusVariantMap[statusClass] || statusClass.replace(/\s+/g, '-');
 
         // Only overlay LHDN success counts on files that actually submitted.
         // A rejected submit stays Ready to Submit; the eye icon shows the error.
@@ -4552,44 +4528,42 @@ class InvoiceTableManager {
 
                     if (totalDocuments > 0) {
                         if (failedDocuments === 0) {
-                            // All successful
                             titleText = `${validDocuments} of ${totalDocuments} Submitted`;
                             displayName = `${validDocuments}/${totalDocuments}`;
                             icon = 'check-circle-fill';
-                            color = '#198754';
+                            statusVariant = 'submitted';
                         } else if (validDocuments === 0) {
                             // All failed
                             titleText = `${failedDocuments} of ${totalDocuments} Failed`;
                             displayName = `${failedDocuments}/${totalDocuments}`;
                             icon = 'exclamation-triangle-fill';
-                            color = '#dc3545';
+                            statusVariant = 'failed-to-upload';
                         } else {
                             // Partial success
                             titleText = `${validDocuments} of ${totalDocuments} Submitted`;
                             displayName = `${validDocuments}/${totalDocuments}`;
                             icon = 'exclamation-circle';
-                            color = '#ff8307';
+                            statusVariant = 'pending';
                         }
                     }
                 } else if (lhdnData && lhdnData.status === 'success') {
-                    // Single document success
                     displayName = 'Submitted';
                     titleText = 'Submitted';
                     icon = 'check-circle-fill';
-                    color = '#198754';
+                    statusVariant = 'submitted';
                 } else if (lhdnData && lhdnData.status === 'failed' && lhdnData.error) {
                     // Single document failure
                     displayName = 'Failed';
                     titleText = 'Failed';
                     icon = 'exclamation-triangle-fill';
-                    color = '#dc3545';
+                    statusVariant = 'failed-to-upload';
                 }
             } catch (e) {
                 console.warn('Error parsing LHDN response for status display:', e);
             }
         }
 
-        return `<span class="outbound-status ${statusClass.replace(/\s+/g,'-')}" title="${titleText}" style="background: ${color}15; color: ${color};">
+        return `<span class="outbound-status outbound-status--${statusVariant}" title="${titleText}">
             <i class="bi bi-${icon}"></i>${displayName}</span>`;
     }
 
@@ -4644,26 +4618,8 @@ class InvoiceTableManager {
         }
 
         return `
-            <div class="total-amount-wrapper" style="
-                display: flex;
-                align-items: center;
-                justify-content: flex-end;
-            ">
-                <span class="total-amount" style="
-                    font-weight: 500;
-                    color: #1e40af;
-                    font-family: 'SF Mono', SFMono-Regular, ui-monospace, monospace;
-                    background: rgba(30, 64, 175, 0.1);
-                    padding: 3px 6px;
-                    border-radius: 4px;
-                    display: inline-block;
-                    letter-spacing: 0.3px;
-                    white-space: nowrap;
-                    transition: all 0.2s ease;
-                    font-size: 12px;
-                ">
-                    ${formattedAmount}
-                </span>
+            <div class="om-total-amount-wrap">
+                <span class="om-total-amount">${formattedAmount}</span>
             </div>
         `;
     }
@@ -4700,7 +4656,7 @@ class InvoiceTableManager {
             <div class="cell-group">
                 <div class="cell-main">
                     <i class="bi bi-file-earmark-excel me-1"></i>
-                    <span title="${data}">${data}</span>
+                    <span class="reg-text om-party-name" title="${data}">${data}</span>
                 </div>
                 <div class="cell-sub">
                     <i class="bi bi-hdd me-1"></i>
@@ -4847,7 +4803,7 @@ class InvoiceTableManager {
             <div class="cell-group">
                 <div class="cell-main">
                     <i class="bi bi-person-badge me-1"></i>
-                    <span>${data}</span>
+                    <span class="reg-text om-party-name" title="${data}">${data}</span>
                 </div>
                 <div class="cell-sub">
                     <i class="bi bi-building me-1"></i>
@@ -4994,7 +4950,7 @@ class InvoiceTableManager {
             <div class="cell-group">
                 <div class="cell-main">
                     <i class="bi bi-person-check me-1"></i>
-                    <span>${data}</span>
+                    <span class="reg-text om-party-name" title="${data}">${data}</span>
                 </div>
                 <div class="cell-sub">
                     <i class="bi bi-building me-1"></i>

@@ -20,7 +20,7 @@
 
 <!-- Template Main CSS Files -->
 <link href="/assets/css/pages/outbound/outbound-table.css?v=20260826" rel="stylesheet">
-<link href="/assets/css/pages/outbound/outbound-manual.css?v=20260830-10" rel="stylesheet">
+<link href="/assets/css/pages/outbound/outbound-manual.css?v=20260830-11" rel="stylesheet">
 <!-- Excel Loading Animation CSS -->
 <link href="/assets/css/pages/outbound/excel-loading.css" rel="stylesheet">
 <!-- Invoice Preview Modal Enhancements -->
@@ -2777,24 +2777,24 @@ tr.outbound-row-highlight td {
                                 <table id="invoiceTable" class="outbound-manual-table">
                                             <thead>
                                                 <tr>
-                                                    <th class="outbound-checkbox-column">
+                                                    <th class="om-col-check text-center outbound-checkbox-column">
                                                         <div class="outbound-checkbox-header">
                                                             <input type="checkbox" class="outbound-checkbox" id="selectAll">
                                                         </div>
                                                     </th>
-                                                    <th>#</th>
-                                                    <th>FILE NAME</th>
-                                                    <th>INVOICE NO.</th>
-                                                    <th>SUPPLIER</th>
-                                                    <th>RECEIVER</th>
-                                                    <th>UPLOADED</th>
-                                                    <th>INVOICE DATE</th>
-                                                    <th>SUBMITTED</th>
-                                                    <th style="display:none"></th>
-                                                    <th style="display:none"></th>
-                                                    <th>STATUS</th>
-                                                    <th>TOTAL AMOUNT</th>
-                                                    <th class="outbound-action-column">ACTION</th>
+                                                    <th class="om-col-index text-center">#</th>
+                                                    <th class="om-col-filename">FILE NAME</th>
+                                                    <th class="om-col-invoice">INVOICE NO.</th>
+                                                    <th class="om-col-supplier">SUPPLIER</th>
+                                                    <th class="om-col-receiver">RECEIVER</th>
+                                                    <th class="om-col-uploaded text-center">UPLOADED</th>
+                                                    <th class="om-col-inv-date text-center">INVOICE DATE</th>
+                                                    <th class="om-col-submitted text-center">SUBMITTED</th>
+                                                    <th class="om-col-hidden"></th>
+                                                    <th class="om-col-hidden"></th>
+                                                    <th class="om-col-status text-center">STATUS</th>
+                                                    <th class="om-col-amount text-right">TOTAL AMOUNT</th>
+                                                    <th class="om-col-action text-center outbound-action-column">ACTION</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
@@ -3029,7 +3029,7 @@ tr.outbound-row-highlight td {
 <!-- New submission orchestrator -->
 <script src="/assets/js/modules/submission/submission-client.js?v=20260828"></script>
 <!-- Excel validation functions -->
-<script src="/assets/js/modules/excel/outbound-manual.js?v=20260830-10"></script>
+<script src="/assets/js/modules/excel/outbound-manual.js?v=20260830-11"></script>
 <!-- <script src="/assets/js/modules/tutorial/guided-tour.js"></script> -->
 <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
 

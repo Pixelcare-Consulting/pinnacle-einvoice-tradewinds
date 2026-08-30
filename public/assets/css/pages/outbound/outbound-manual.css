@@ -3,18 +3,18 @@
    =================================== */
 
 #outbound-manual-page {
-    /* Column widths — MUST sum to 100% */
+    /* Column widths — MUST sum to 100% (hidden cols = 0%) */
     --om-col-check: 3%;
     --om-col-index: 3%;
-    --om-col-filename: 9%;
+    --om-col-filename: 10%;
     --om-col-invoice: 8%;
-    --om-col-supplier: 7%;
-    --om-col-receiver: 7%;
-    --om-col-uploaded: 8%;
-    --om-col-inv-date: 8%;
+    --om-col-supplier: 9%;
+    --om-col-receiver: 9%;
+    --om-col-uploaded: 7%;
+    --om-col-inv-date: 7%;
     --om-col-submitted: 6%;
     --om-col-status: 18%;
-    --om-col-amount: 15%;
+    --om-col-amount: 14%;
     --om-col-action: 8%;
 
     /* Cell containment — overrides outbound-table.css globals */
@@ -30,10 +30,11 @@
     table-layout: fixed;
 }
 
+#outbound-manual-page #invoiceTable colgroup col {
+    width: auto !important;
+}
+
 #outbound-manual-page #invoiceTable tbody td {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 0;
     padding: var(--om-cell-pad-y) var(--om-cell-pad-x);
 }
 
@@ -46,62 +47,56 @@
     padding: 0.75rem 0.4rem;
 }
 
-#outbound-manual-page #invoiceTable th:nth-child(1),
-#outbound-manual-page #invoiceTable td:nth-child(1) { width: var(--om-col-check); text-align: center; }
+/* Column widths — class-based single source of truth */
+#outbound-manual-page #invoiceTable .om-col-check { width: var(--om-col-check); text-align: center; }
+#outbound-manual-page #invoiceTable .om-col-index { width: var(--om-col-index); text-align: center; }
+#outbound-manual-page #invoiceTable .om-col-filename { width: var(--om-col-filename); text-align: left; }
+#outbound-manual-page #invoiceTable .om-col-invoice { width: var(--om-col-invoice); text-align: left; }
+#outbound-manual-page #invoiceTable .om-col-supplier { width: var(--om-col-supplier); text-align: left; }
+#outbound-manual-page #invoiceTable .om-col-receiver { width: var(--om-col-receiver); text-align: left; }
+#outbound-manual-page #invoiceTable .om-col-uploaded { width: var(--om-col-uploaded); text-align: center; }
+#outbound-manual-page #invoiceTable .om-col-inv-date { width: var(--om-col-inv-date); text-align: center; }
+#outbound-manual-page #invoiceTable .om-col-submitted { width: var(--om-col-submitted); text-align: center; }
+#outbound-manual-page #invoiceTable .om-col-status { width: var(--om-col-status); text-align: center; }
+#outbound-manual-page #invoiceTable .om-col-amount { width: var(--om-col-amount); text-align: right; }
+#outbound-manual-page #invoiceTable .om-col-action { width: var(--om-col-action); text-align: center; }
 
-#outbound-manual-page #invoiceTable th:nth-child(2),
-#outbound-manual-page #invoiceTable td:nth-child(2) { width: var(--om-col-index); text-align: center; }
+#outbound-manual-page #invoiceTable .om-col-hidden {
+    width: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    overflow: hidden !important;
+    display: none !important;
+}
 
-#outbound-manual-page #invoiceTable th:nth-child(3),
-#outbound-manual-page #invoiceTable td:nth-child(3) { width: var(--om-col-filename); text-align: left; }
+/* Truncation — truncatable text columns only */
+#outbound-manual-page #invoiceTable td.om-col-filename,
+#outbound-manual-page #invoiceTable td.om-col-invoice,
+#outbound-manual-page #invoiceTable td.om-col-supplier,
+#outbound-manual-page #invoiceTable td.om-col-receiver {
+    max-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 
-#outbound-manual-page #invoiceTable th:nth-child(4),
-#outbound-manual-page #invoiceTable td:nth-child(4) { width: var(--om-col-invoice); text-align: left; }
-
-#outbound-manual-page #invoiceTable th:nth-child(5),
-#outbound-manual-page #invoiceTable td:nth-child(5) { width: var(--om-col-supplier); text-align: left; }
-
-#outbound-manual-page #invoiceTable th:nth-child(6),
-#outbound-manual-page #invoiceTable td:nth-child(6) { width: var(--om-col-receiver); text-align: left; }
-
-#outbound-manual-page #invoiceTable th:nth-child(7),
-#outbound-manual-page #invoiceTable td:nth-child(7) { width: var(--om-col-uploaded); text-align: center; }
-
-#outbound-manual-page #invoiceTable th:nth-child(8),
-#outbound-manual-page #invoiceTable td:nth-child(8) { width: var(--om-col-inv-date); text-align: center; }
-
-#outbound-manual-page #invoiceTable th:nth-child(9),
-#outbound-manual-page #invoiceTable td:nth-child(9) { width: var(--om-col-submitted); text-align: center; }
-
-#outbound-manual-page #invoiceTable th:nth-child(12),
-#outbound-manual-page #invoiceTable td:nth-child(12) {
-    width: var(--om-col-status);
-    text-align: center;
+#outbound-manual-page #invoiceTable td.om-col-status,
+#outbound-manual-page #invoiceTable th.om-col-status,
+#outbound-manual-page #invoiceTable td.om-col-amount,
+#outbound-manual-page #invoiceTable th.om-col-amount {
     overflow: visible;
     white-space: normal;
     max-width: none;
 }
 
-#outbound-manual-page #invoiceTable th:nth-child(12) {
+#outbound-manual-page #invoiceTable th.om-col-status {
     white-space: normal;
-    overflow: visible;
     text-overflow: unset;
     line-height: 1.2;
     vertical-align: middle;
 }
 
-#outbound-manual-page #invoiceTable th:nth-child(13),
-#outbound-manual-page #invoiceTable td:nth-child(13) {
-    width: var(--om-col-amount);
-    text-align: right;
-    overflow: visible;
+#outbound-manual-page #invoiceTable th.om-col-amount {
     white-space: normal;
-    max-width: none;
-}
-
-#outbound-manual-page #invoiceTable th:nth-child(13) {
-    white-space: normal;
-    overflow: visible;
     text-overflow: unset;
     line-height: 1.2;
     word-break: break-word;
@@ -109,8 +104,9 @@
     hyphens: auto;
 }
 
-#outbound-manual-page #invoiceTable th:nth-child(14),
-#outbound-manual-page #invoiceTable td:nth-child(14) { width: var(--om-col-action); text-align: center; }
+#outbound-manual-page #invoiceTable .om-col-status .outbound-status {
+    white-space: nowrap;
+}
 
 /* Reset shared outbound-table.css conflicts */
 #outbound-manual-page .cell-main {
@@ -150,23 +146,72 @@
     font-size: 0.8rem;
 }
 
-#outbound-manual-page #invoiceTable .om-status-cell,
-#outbound-manual-page #invoiceTable .om-amount-cell {
-    max-width: none !important;
-    overflow: visible !important;
+#outbound-manual-page .outbound-status--ready-to-submit {
+    background: #dcfce7;
+    color: #166534;
 }
 
-#outbound-manual-page #invoiceTable thead th.om-status-cell,
-#outbound-manual-page #invoiceTable thead th.om-amount-cell {
-    white-space: normal !important;
-    overflow: visible !important;
-    text-overflow: unset !important;
-    line-height: 1.2;
-    vertical-align: middle;
+#outbound-manual-page .outbound-status--submitted {
+    background: #d1fae5;
+    color: #065f46;
 }
 
-#outbound-manual-page #invoiceTable .om-status-cell .outbound-status {
+#outbound-manual-page .outbound-status--pending {
+    background: #ffedd5;
+    color: #9a3412;
+}
+
+#outbound-manual-page .outbound-status--processing {
+    background: #dbeafe;
+    color: #1e40af;
+}
+
+#outbound-manual-page .outbound-status--failed-to-upload {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+#outbound-manual-page .outbound-status--rejected {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+#outbound-manual-page .outbound-status--cancelled {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+#outbound-manual-page .outbound-status--invalid {
+    background: #fce7f3;
+    color: #9d174d;
+}
+
+#outbound-manual-page .om-total-amount-wrap {
+    display: flex;
+    justify-content: flex-end;
+    min-width: 0;
+    max-width: 100%;
+}
+
+#outbound-manual-page .om-total-amount {
+    font-weight: 500;
+    color: #1e40af;
+    font-family: 'SF Mono', SFMono-Regular, ui-monospace, monospace;
+    background: rgba(30, 64, 175, 0.1);
+    padding: 3px 6px;
+    border-radius: 4px;
     white-space: nowrap;
+    font-size: 12px;
+}
+
+#outbound-manual-page .om-party-name {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    white-space: normal;
+    line-height: 1.3;
 }
 
 #outbound-manual-page .table-section.outbound-table-grid {
@@ -201,10 +246,6 @@
     white-space: nowrap;
 }
 
-#outbound-manual-page .total-amount-wrapper {
-    min-width: 0;
-    max-width: 100%;
-}
 
 .om-eye-meta-block {
     margin-bottom: 1rem;
@@ -309,8 +350,8 @@
     box-shadow: none;
 }
 
-#outbound-manual-page #invoiceTable thead th.om-status-cell,
-#outbound-manual-page #invoiceTable thead th.om-amount-cell {
+#outbound-manual-page #invoiceTable thead th.om-col-status,
+#outbound-manual-page #invoiceTable thead th.om-col-amount {
     white-space: normal !important;
     overflow: visible !important;
     text-overflow: unset !important;
