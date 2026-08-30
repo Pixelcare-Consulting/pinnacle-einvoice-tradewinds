@@ -22,6 +22,7 @@ setInterval(() => {
     if (now - session.lastActivity > authConfig.session.timeout) {
       console.log(`Auto-removing inactive session for user: ${username}`);
       activeSessions.delete(username);
+      sessionActivity.delete(username);
 
       // Log session timeout
       LoggingService.log({
@@ -242,6 +243,51 @@ function isImportantPath(path) {
 
   return importantPaths.some(p => path.includes(p));
 }
+/**
+ * Destroy all Express sessions in DB for this username (Force New Login).
+ * Optional exceptSid = keep current browser session if already exists.
+ */
+const destroySessionsForUsername = async (username, exceptSid = null) => {
+  if (!username) return 0;
+
+  try {
+    const sessions = await prisma.session.findMany({
+      select: { sid: true, data: true },
+    });
+
+    let deleted = 0;
+
+    for (const row of sessions) {
+      if (exceptSid && row.sid === exceptSid) continue;
+
+      try {
+        const parsed = JSON.parse(row.data);
+        const sessionUser =
+          parsed?.user?.username ||
+          parsed?.passport?.user?.Username ||
+          parsed?.passport?.user?.username;
+
+        if (
+          sessionUser &&
+          String(sessionUser).toLowerCase() === String(username).toLowerCase()
+        ) {
+          await prisma.session.delete({ where: { sid: row.sid } });
+          deleted++;
+        }
+      } catch (e) {
+        // skip bad JSON rows
+      }
+    }
+
+    console.log(
+      `[Session] Force-cleared ${deleted} DB session(s) for user: ${username}`
+    );
+    return deleted;
+  } catch (error) {
+    console.error('[Session] Error destroying sessions for user:', username, error);
+    return 0;
+  }
+};
 
 const removeActiveSession = (username) => {
   // Get session before removing for logging
@@ -547,6 +593,7 @@ module.exports = {
   checkActiveSession,
   updateActiveSession,
   removeActiveSession,
+  destroySessionsForUsername,
   handleSessionExpiry,
   handleUnauthorized,
   updateUserActivity,

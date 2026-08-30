@@ -7175,7 +7175,7 @@ async function showLHDNErrorModal(error) {
             // Load the helper script dynamically if not already loaded
             await new Promise((resolve, reject) => {
                 const script = document.createElement('script');
-                script.src = '/assets/utils/lhdnUIHelper.js';
+                script.src = '/assets/utils/lhdnUIHelper.js?v=20260819';
                 script.onload = resolve;
                 script.onerror = () => {
                     console.error('Failed to load LHDN UI Helper');

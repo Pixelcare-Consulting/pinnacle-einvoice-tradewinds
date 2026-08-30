@@ -36,10 +36,20 @@ const dataCache = {
             total: this.tableData.length,
             submitted: 0,
             invalid: 0,
-            pending: 0
+            readyToSubmit: 0
         };
 
-        this.tableData.forEach(file => {
+        const teamFilter = window.outboundTeamViewFilter || 'all';
+        const rowsForCounts =
+            teamFilter === 'mine' && window.currentUserId != null
+                ? this.tableData.filter(
+                      (file) =>
+                          Number(file.uploadedByUserId) ===
+                          Number(window.currentUserId)
+                  )
+                : this.tableData;
+
+        rowsForCounts.forEach(file => {
             const status = (file.status || 'uploaded').toLowerCase();
             switch (status) {
                 case 'submitted':
@@ -49,20 +59,20 @@ const dataCache = {
                 case 'rejected':
                     counts.invalid++;
                     break;
-                case 'pending':
-                case 'uploaded':
                 case 'processed':
-                case 'processing':
-                    counts.pending++;
+                case 'ready to submit':
+                    counts.readyToSubmit++;
                     break;
             }
         });
+
+        counts.total = rowsForCounts.length;
 
         // Update card displays
         this.updateCardDisplay('total-invoice-count', counts.total);
         this.updateCardDisplay('total-submitted-count', counts.submitted);
         this.updateCardDisplay('total-invalid-count', counts.invalid);
-        this.updateCardDisplay('total-queue-value', counts.pending);
+        this.updateCardDisplay('total-queue-value', counts.readyToSubmit);
     },
 
     updateCardDisplay(className, count) {
@@ -79,6 +89,19 @@ const dataCache = {
         }
     }
 };
+
+function getCurrentUserId() {
+    const id = window.currentUserId;
+    if (id == null || id === '') return null;
+    const parsed = Number(id);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isOwnManualUploadRow(row) {
+    const userId = getCurrentUserId();
+    if (userId == null || !row) return true;
+    return Number(row.uploadedByUserId) === userId;
+}
 
 function formatManualInvoiceDateForDisplay(data) {
     if (!data) return null;
@@ -180,6 +203,7 @@ class FileUploadManager {
         this.maxFileSize = 5 * 1024 * 1024; // 5MB
         this.allowedTypes = ['.xlsx', '.xls'];
         this.selectedFile = null;
+        this._processInFlight = false;
 
         // Debug: Log element states
         console.log('Elements found:', {
@@ -457,11 +481,18 @@ class FileUploadManager {
     async handleProcessFile() {
         console.log('🔍 [FRONTEND DEBUG] handleProcessFile called');
 
+        if (this._processInFlight) {
+            console.log('🔍 [FRONTEND DEBUG] Upload already in progress, ignoring duplicate click');
+            return;
+        }
+
         if (!this.selectedFile) {
             console.log('🔍 [FRONTEND DEBUG] No file selected for processing');
             this.showError('Please select a file to upload');
             return;
         }
+
+        this._processInFlight = true;
 
         console.log('🔍 [FRONTEND DEBUG] Starting file processing for:', {
             name: this.selectedFile.name,
@@ -522,6 +553,25 @@ class FileUploadManager {
 
             // Upload file with progress tracking
             const result = await this.uploadWithProgress('/api/outbound-files-manual/upload-excel-template', formData);
+            this.refreshTable();
+
+            if (
+                !result.success &&
+                (result.duplicateType || result.duplicateFile || result.existingFile)
+            ) {
+                this.hideEnhancedLoadingModal();
+                showDuplicateBlockModal({
+                    blockingFile:
+                        result.duplicateFile ||
+                        result.existingFile || {
+                            id: result.blockingFileId,
+                            filename: result.blockingFilename,
+                        },
+                    duplicateType: result.duplicateType || 'DUPLICATE',
+                    message: result.error,
+                });
+                return;
+            }
 
             if (result.success) {
                 // Check if the uploaded file exceeds document limit
@@ -541,6 +591,7 @@ class FileUploadManager {
 
                 // Update progress to completion
                 this.updateRealProgress(100, 'complete');
+                this.refreshTable();
 
                 // Complete the progress after a short delay
                 setTimeout(() => {
@@ -559,26 +610,36 @@ class FileUploadManager {
                     }, 500);
                 }, 1000);
             } else {
-                // Check if this is a duplicate error
-                if (result.duplicateType) {
-                    this.hideEnhancedLoadingModal();
-                    this.showDuplicateDetectionModal(result);
-                    return;
-                }
                 throw new Error(result.error || 'Upload failed');
             }
 
         } catch (error) {
             console.error('Upload error:', error);
+            this.refreshTable();
 
             // Show error state in modal for a moment before hiding
             this.showErrorState(error.message || 'Upload failed');
 
             setTimeout(() => {
                 this.hideEnhancedLoadingModal();
-                this.showError(error.message || 'Upload failed');
+                if (
+                    error?.duplicateType ||
+                    error?.duplicateFile ||
+                    error?.existingFile
+                ) {
+                    showDuplicateBlockModal({
+                        blockingFile:
+                            error.duplicateFile ||
+                            error.existingFile,
+                        duplicateType: error.duplicateType,
+                        message: error.message,
+                    });
+                } else {
+                    this.showError(error.message || 'Upload failed');
+                }
             }, 500);
         } finally {
+            this._processInFlight = false;
             // Re-enable the process button
             if (this.processFileBtn) {
                 this.processFileBtn.disabled = false;
@@ -931,28 +992,33 @@ class FileUploadManager {
 
             // Handle response
             xhr.addEventListener('load', () => {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    try {
-                        // Simulate backend processing phases
-                        this.updateRealProgress(100, 'upload');
-                        setTimeout(() => this.updateRealProgress(50, 'parse'), 500);
-                        setTimeout(() => this.updateRealProgress(80, 'validate'), 1000);
-
-                        const response = JSON.parse(xhr.responseText);
-                        resolve(response);
-                    } catch (e) {
-                        reject(new Error('Invalid JSON response'));
-                    }
-                } else {
-                    // Try to parse server error message for better diagnostics
-                    try {
-                        const resJson = JSON.parse(xhr.responseText || '{}');
-                        const serverMsg = resJson.error || resJson.message;
-                        reject(new Error(serverMsg ? `HTTP ${xhr.status}: ${serverMsg}` : `HTTP ${xhr.status}: ${xhr.statusText}`));
-                    } catch (parseErr) {
-                        reject(new Error(`HTTP ${xhr.status}: ${xhr.statusText}`));
-                    }
+                let response = null;
+                try {
+                    response = JSON.parse(xhr.responseText || '{}');
+                } catch (e) {
+                    response = null;
                 }
+
+                if (xhr.status >= 200 && xhr.status < 300 && response) {
+                    this.updateRealProgress(100, 'upload');
+                    setTimeout(() => this.updateRealProgress(50, 'parse'), 500);
+                    setTimeout(() => this.updateRealProgress(80, 'validate'), 1000);
+                    resolve(response);
+                    return;
+                }
+
+                // 409 duplicate / 400 failed upload still create an Outbound row.
+                // Resolve so the table can reload; do not treat as a blank failure.
+                if (response && (response.error || response.duplicateType || response.success === false)) {
+                    resolve(response);
+                    return;
+                }
+
+                reject(new Error(
+                    (response && (response.error || response.message))
+                        ? `HTTP ${xhr.status}: ${response.error || response.message}`
+                        : `HTTP ${xhr.status}: ${xhr.statusText}`
+                ));
             });
 
             xhr.addEventListener('error', () => {
@@ -1035,10 +1101,16 @@ class FileUploadManager {
 
     // Duplicate Detection Modal Methods
     showDuplicateDetectionModal(duplicateInfo) {
+        $('#loadingBackdrop').remove();
+        this.cleanupModalArtifacts();
+
+        const existing = document.getElementById('duplicateDetectionModal');
+        if (existing) existing.remove();
+
         const modalHTML = `
-            <div id="duplicateDetectionModal" class="custom-modal">
+            <div id="duplicateDetectionModal" class="custom-modal duplicate-modal">
                 <div class="modal-overlay" onclick="window.fileUploadManager.closeDuplicateDetectionModal()"></div>
-                <div class="modal-content duplicate-modal">
+                <div class="om-dup-card">
                     <div class="modal-header">
                         <div class="d-flex align-items-center">
                             <div class="header-icon-wrapper me-3">
@@ -1046,7 +1118,7 @@ class FileUploadManager {
                             </div>
                             <div>
                                 <h4 class="mb-1 fw-semibold text-warning">Duplicate Content Detected</h4>
-                                <p class="mb-0 small">This file contains data that has already been processed</p>
+                                <p class="mb-0 small text-white-50">This file contains data that has already been processed</p>
                             </div>
                         </div>
                         <button class="btn-close-custom" onclick="window.fileUploadManager.closeDuplicateDetectionModal()">
@@ -1104,9 +1176,6 @@ class FileUploadManager {
                         <button class="btn btn-secondary" onclick="window.fileUploadManager.closeDuplicateDetectionModal()">
                             <i class="bi bi-x-circle me-2"></i>Cancel Upload
                         </button>
-                        <button class="btn btn-primary" onclick="window.fileUploadManager.viewExistingSubmissions()">
-                            <i class="bi bi-eye me-2"></i>View Existing Files
-                        </button>
                     </div>
                 </div>
             </div>
@@ -1129,9 +1198,9 @@ class FileUploadManager {
         const summary = duplicateCheck.summary || {};
 
         const modalHTML = `
-            <div id="duplicateWarningsModal" class="custom-modal">
+            <div id="duplicateWarningsModal" class="custom-modal warning-modal">
                 <div class="modal-overlay" onclick="window.fileUploadManager.closeDuplicateWarningsModal()"></div>
-                <div class="modal-content warning-modal">
+                <div class="om-dup-card">
                     <div class="modal-header">
                         <div class="d-flex align-items-center">
                             <div class="header-icon-wrapper me-3">
@@ -1242,20 +1311,20 @@ class FileUploadManager {
     }
 
     addDuplicateModalStyles() {
-        // Check if styles already exist
-        if (document.getElementById('duplicateModalStyles')) {
-            return;
-        }
+        const old = document.getElementById('duplicateModalStyles');
+        if (old) old.remove();
 
         const styles = `
             <style id="duplicateModalStyles">
                 .custom-modal {
                     position: fixed;
-                    top: 0;
-                    left: 0;
-                    width: 100%;
-                    height: 100%;
-                    z-index: 9999;
+                    inset: 0;
+                    z-index: 12000;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 24px;
+                    box-sizing: border-box;
                     opacity: 0;
                     visibility: hidden;
                     transition: opacity 0.3s ease, visibility 0.3s ease;
@@ -1268,27 +1337,23 @@ class FileUploadManager {
 
                 .modal-overlay {
                     position: absolute;
-                    top: 0;
-                    left: 0;
-                    width: 100%;
-                    height: 100%;
+                    inset: 0;
                     background: rgba(0, 0, 0, 0.5);
                     backdrop-filter: blur(2px);
                 }
 
-                .duplicate-modal .modal-content,
-                .warning-modal .modal-content {
-                    position: absolute;
-                    top: 50%;
-                    left: 50%;
-                    transform: translate(-50%, -50%);
-                    background: white;
+                .custom-modal .om-dup-card {
+                    position: relative;
+                    z-index: 1;
+                    background: #fff;
                     border-radius: 12px;
                     box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
                     max-width: 600px;
-                    width: 90%;
-                    max-height: 80vh;
+                    width: 100%;
+                    max-height: min(80vh, calc(100vh - 48px));
                     overflow-y: auto;
+                    display: flex;
+                    flex-direction: column;
                 }
 
                 .duplicate-modal .modal-header,
@@ -2631,11 +2696,22 @@ class FileUploadManager {
     }
 
     refreshTable() {
-        // Force refresh the DataTable
+        dataCache.invalidateCache();
         sessionStorage.setItem('forceRefreshOutboundTable', 'true');
-        if (window.invoiceTableManager && window.invoiceTableManager.table) {
-            window.invoiceTableManager.table.ajax.reload();
-        }
+        const manager = window.invoiceTableManager;
+        if (!manager || !manager.table) return;
+
+        document.querySelectorAll('.quick-filters .btn[data-filter]').forEach((btn) =>
+            btn.classList.remove('active')
+        );
+        const allBtn = document.querySelector('.quick-filters .btn[data-filter="all"]');
+        if (allBtn) allBtn.classList.add('active');
+
+        manager.table.ajax.reload(() => {
+            if (typeof manager.applyQuickFilter === 'function') {
+                manager.applyQuickFilter('all');
+            }
+        }, false);
     }
 
     formatFileSize(bytes) {
@@ -2982,15 +3058,7 @@ class FileUploadManager {
         document.head.insertAdjacentHTML('beforeend', errorModalStyles);
         document.body.insertAdjacentHTML('beforeend', modalHtml);
 
-        // Add click outside to close
-        const backdrop = document.getElementById('preValidationErrorBackdrop');
-        backdrop.addEventListener('click', (e) => {
-            if (e.target === backdrop) {
-                window.closePreValidationErrorModal();
-            }
-        });
-
-        // Add escape key to close
+        // Keep the error on screen until Close is clicked (do not dismiss on outside click).
         const handleEscape = (e) => {
             if (e.key === 'Escape') {
                 window.closePreValidationErrorModal();
@@ -3249,7 +3317,7 @@ class FileUploadManager {
                     detail.index + 1,
                     error.code,
                     error.field,
-                    `"${(error.userFriendlyMessage || error.message).replace(/"/g, '""')}"`,
+                    `"${String(error.userFriendlyMessage || error.message || '').replace(/"/g, '""')}"`,
                     error.value ? `"${String(error.value).replace(/"/g, '""')}"` : ''
                 ].join(',');
                 csvContent += row + "\n";
@@ -3508,8 +3576,11 @@ class InvoiceTableManager {
         InvoiceTableManager.instance = this;
         this.table = null;
         this.selectedRows = new Set();
+        this.teamViewFilter = 'all';
+        window.outboundTeamViewFilter = this.teamViewFilter;
 
         this.initializeTable();
+        this.initializeTeamViewFilter();
     }
 
     initializeTable() {
@@ -3532,8 +3603,13 @@ class InvoiceTableManager {
                         render: function (data, type, row) {
                             const status = (row.status || 'uploaded').toLowerCase();
                             const disabledStatus = ['submitted', 'cancelled', 'rejected', 'invalid'].includes(status);
-                            const disabledAttr = disabledStatus ? 'disabled' : '';
-                            const title = disabledStatus ? `Cannot select ${status} items` : '';
+                            const notOwner = !isOwnManualUploadRow(row);
+                            const disabledAttr =
+                                disabledStatus || notOwner ? 'disabled' : '';
+                            let title = disabledStatus ? `Cannot select ${status} items` : '';
+                            if (notOwner) {
+                                title = 'You can only bulk-select your own uploads';
+                            }
 
                             return `<input type="checkbox" class="outbound-checkbox" ${disabledAttr} data-status="${status}" title="${title}">`;
                         }
@@ -3571,14 +3647,21 @@ class InvoiceTableManager {
                     {
                         data: 'receiver',
                         title: 'RECEIVER',
-                        width: '16%',
+                        width: '14%',
                         render: (data, type, row) => this.renderReceiver(data, type, row)
+                    },
+                    {
+                        data: 'uploadedBy',
+                        title: 'UPLOADED BY',
+                        width: '10%',
+                        className: 'text-center',
+                        render: (data, type, row) => this.renderUploadedBy(data, type, row)
                     },
                     {
                         data: 'date',
                         orderable: true,
                         title: 'Uploaded',
-                        width: '10%',
+                        width: '9%',
                         className: 'text-center',
                         render: (data) => this.renderUploadedDate(data)
                     },
@@ -3635,6 +3718,7 @@ class InvoiceTableManager {
                 ajax: {
                     url: '/api/outbound-files-manual/list-fixed-paths',
                     method: 'GET',
+                    cache: false,
                     dataSrc: (json) => {
                         if (!json.success) {
                             console.error('Error:', json.error);
@@ -3666,6 +3750,7 @@ class InvoiceTableManager {
                                 id: file.id,
                                 fileSize: file.fileSize,
                                 uploadedBy: file.uploadedBy,
+                                uploadedByUserId: file.uploadedByUserId,
                                 uploadDate: file.uploadDate,
                                 processedDate: file.processedDate,
                                 submittedDate: file.submittedDate,
@@ -3764,8 +3849,8 @@ class InvoiceTableManager {
                     }
                 },
                 order: [
-                    [1, 'asc'], // Primary: statusPriority (Ready to Submit > Processed > others)
-                    [6, 'desc'] // Secondary: upload date, newest first
+                    [10, 'asc'],
+                    [7, 'desc']
                 ],
                 language: {
                     search: '',
@@ -3869,6 +3954,43 @@ class InvoiceTableManager {
         }
     }
 
+    initializeTeamViewFilter() {
+        document.querySelectorAll('.team-view-filters .btn[data-team-view]').forEach((button) => {
+            button.addEventListener('click', (e) => {
+                document.querySelectorAll('.team-view-filters .btn[data-team-view]').forEach((btn) =>
+                    btn.classList.remove('active')
+                );
+                e.currentTarget.classList.add('active');
+                this.teamViewFilter = e.currentTarget.dataset.teamView || 'all';
+                window.outboundTeamViewFilter = this.teamViewFilter;
+                this.applyTeamViewFilter();
+                dataCache.updateCardCounts();
+            });
+        });
+    }
+
+    applyTeamViewFilter() {
+        if (!this.table) return;
+        const userId = getCurrentUserId();
+        if (this._teamViewSearchFn) {
+            const idx = $.fn.dataTable.ext.search.indexOf(this._teamViewSearchFn);
+            if (idx !== -1) {
+                $.fn.dataTable.ext.search.splice(idx, 1);
+            }
+            this._teamViewSearchFn = null;
+        }
+        if (this.teamViewFilter === 'mine' && userId != null) {
+            const tableRef = this.table;
+            this._teamViewSearchFn = function (settings, data, dataIndex) {
+                if (settings.nTable !== tableRef.table().node()) return true;
+                const row = tableRef.row(dataIndex).data();
+                return Number(row?.uploadedByUserId) === userId;
+            };
+            $.fn.dataTable.ext.search.push(this._teamViewSearchFn);
+        }
+        this.table.draw();
+    }
+
     initializeQuickFilters() {
         document.querySelectorAll('.quick-filters .btn[data-filter]').forEach((button) => {
             button.addEventListener('click', (e) => {
@@ -3888,7 +4010,7 @@ class InvoiceTableManager {
         const globalSearch = document.getElementById('globalSearch');
         if (globalSearch) globalSearch.value = '';
 
-        const statusColumnIndex = 10;
+        const statusColumnIndex = 11;
         if (filterValue === 'all') {
             this.table.column(statusColumnIndex).search('').draw();
         } else {
@@ -4076,29 +4198,42 @@ class InvoiceTableManager {
         return '<span class="text-muted">-</span>';
     }
 
+    renderUploadedBy(data, type, row) {
+        const name = data || row?.uploadedBy || 'Unknown';
+        const isOwn = isOwnManualUploadRow(row);
+        if (isOwn) {
+            return `<span class="reg-text" title="Your upload">${name}</span>`;
+        }
+        return `<span class="reg-text" title="Read-only — uploaded by another user">${name}</span>
+            <span style="font-size:10px;padding:2px 6px;border-radius:8px;background:#f1f5f9;color:#64748b;font-weight:600;margin-left:4px;white-space:nowrap;">read-only</span>`;
+    }
+
     renderStatus(data, type, row) {
-        const raw = (data || 'Pending').toString();
+        const raw = (data || 'Failed to upload').toString();
         const statusClass = raw.toLowerCase();
 
-        // Map status display names
         const statusDisplayNames = {
             pending: 'Pending',
-            uploaded: 'Pending',
+            uploaded: 'Failed to upload',
+            error: 'Failed to upload',
             processed: 'Ready to Submit',
             'ready to submit': 'Ready to Submit',
+            processing: 'Processing',
             submitted: 'Submitted',
             cancelled: 'Cancelled',
             rejected: 'Rejected',
-            failed: 'Failed',
+            failed: 'Failed to upload',
             invalid: 'Invalid',
             valid: 'Valid'
         };
 
         const icons = {
-            pending: 'hourglass-split',
-            uploaded: 'hourglass-split',
+            pending: 'clock-history',
+            uploaded: 'exclamation-triangle-fill',
+            error: 'exclamation-triangle-fill',
             processed: 'check-circle',
             'ready to submit': 'check-circle',
+            processing: 'arrow-repeat',
             submitted: 'check-circle-fill',
             cancelled: 'x-circle-fill',
             rejected: 'x-circle-fill',
@@ -4108,9 +4243,11 @@ class InvoiceTableManager {
         };
         const statusColors = {
             pending: '#ff8307',
-            uploaded: '#ff8307',
+            uploaded: '#dc3545',
+            error: '#dc3545',
             processed: '#28a745',
             'ready to submit': '#28a745',
+            processing: '#0d6efd',
             submitted: '#198754',
             cancelled: '#ffc107',
             rejected: '#dc3545',
@@ -4123,8 +4260,9 @@ class InvoiceTableManager {
         let color = statusColors[statusClass] || '#6c757d';
         let displayName = statusDisplayNames[statusClass] || raw;
 
-        // Enhanced status display with success/failure counts
-        if (row && row.lhdnResponse) {
+        // Only overlay LHDN success counts on files that actually submitted.
+        // A rejected submit stays Ready to Submit; the eye icon shows the error.
+        if (row && row.lhdnResponse && statusClass === 'submitted') {
             try {
                 const lhdnData = typeof row.lhdnResponse === 'string'
                     ? JSON.parse(row.lhdnResponse)
@@ -4249,6 +4387,7 @@ class InvoiceTableManager {
 
     renderActions(row) {
         const actions = [];
+        const isOwn = isOwnManualUploadRow(row);
 
         actions.push(`
             <button type="button" class="outbound-row-action-btn outbound-row-action-btn--view"
@@ -4257,7 +4396,7 @@ class InvoiceTableManager {
             </button>
         `);
 
-        if (!['submitted', 'cancelled'].includes(row.status?.toLowerCase())) {
+        if (!['submitted', 'cancelled'].includes(row.status?.toLowerCase()) && isOwn) {
             actions.push(`
                 <button type="button" class="outbound-row-action-btn outbound-row-action-btn--delete"
                     onclick="uploadedFilesManager.deleteFile('${row.id}')" title="Delete File">
@@ -5101,6 +5240,8 @@ class InvoiceTableManager {
                                 processedDate: d.processedDate || d.processed_date,
                                 submittedDate: d.submittedDate || d.submitted_date,
                                 invoiceNumber: d.invoiceNumber || d.invoice_count,
+                                errorMessage: d.error_message || d.errorMessage,
+                                error_message: d.error_message || d.errorMessage,
                             };
                             console.log('File data retrieved directly from API');
                         }
@@ -5150,7 +5291,7 @@ class InvoiceTableManager {
                 }
             }
 
-            this.displayLHDNDetailsModal(fileData, lhdnData);
+            this.displayLHDNDetailsModal(fileData, resolveEyeModalLhdnData(fileData, lhdnData));
 
         } catch (error) {
             console.error('Error showing LHDN details:', error);
@@ -5235,7 +5376,7 @@ class InvoiceTableManager {
         // Create modal HTML
         const modalHTML = `
             <div id="lhdnDetailsModal" class="lhdn-details-modal">
-                <div class="lhdn-details-overlay" onclick="this.parentElement.remove()"></div>
+                <div class="lhdn-details-overlay"></div>
                 <div class="lhdn-details-content">
                     <div class="lhdn-details-header">
                         <div class="d-flex align-items-center">
@@ -5316,28 +5457,7 @@ class InvoiceTableManager {
 
             if (rejectedIssues.length > 0) {
                 rejectedIssues.forEach((detail, index) => {
-                    const friendly = toEndUserFriendlyDetail(detail, invoiceLookup);
-                    const invoiceNo = friendly.invoiceNumber
-                        ? `Invoice No. ${escapeHtml(friendly.invoiceNumber)}`
-                        : (detail.invoiceRef ? `Invoice No. ${escapeHtml(detail.invoiceRef)}` : '');
-                    const lineHint = friendly.lineItemNum
-                        ? `<div class="om-error-where"><i class="bi bi-list-ol me-1"></i>Line item ${friendly.lineItemNum}</div>`
-                        : '';
-                    content += `
-                    <div class="om-doc-panel om-doc-panel--danger">
-                        <div class="d-flex align-items-start gap-2 mb-2">
-                            <span class="om-issue-badge">${index + 1}</span>
-                            <div class="flex-grow-1">
-                                ${invoiceNo ? `<div class="om-error-title">${invoiceNo}</div>` : ''}
-                                ${lineHint}
-                            </div>
-                        </div>
-                        ${friendly.primaryField ? `<span class="om-error-field-name">${escapeHtml(friendly.primaryField)}</span>` : ''}
-                        <p class="om-error-message mb-2">${escapeHtml(friendly.message)}</p>
-                        <ul class="om-error-steps mb-0">
-                            ${friendly.guidance.map((g) => `<li>${escapeHtml(g)}</li>`).join('')}
-                        </ul>
-                    </div>`;
+                    content += renderSubmissionIssuePanel(detail, index, invoiceLookup);
                 });
             } else {
                 rejected.forEach((doc, index) => {
@@ -5477,38 +5597,7 @@ class InvoiceTableManager {
             </h6>`;
 
             allIssues.forEach((detail, index) => {
-                const friendly = toEndUserFriendlyDetail(detail, invoiceLookup);
-                const invoiceNo = friendly.invoiceNumber
-                    ? `Invoice No. ${escapeHtml(friendly.invoiceNumber)}`
-                    : (detail.invoiceRef ? `Invoice No. ${escapeHtml(detail.invoiceRef)}` : '');
-                const lineHint = friendly.lineItemNum
-                    ? `<div class="om-error-where"><i class="bi bi-list-ol me-1"></i>Line item ${friendly.lineItemNum}</div>`
-                    : '';
-                content += `
-                    <div class="om-doc-panel om-doc-panel--danger">
-                        <div class="d-flex align-items-start gap-2 mb-2">
-                            <span class="om-issue-badge">${index + 1}</span>
-                            <div class="flex-grow-1">
-                                ${invoiceNo ? `<div class="om-error-title">${invoiceNo}</div>` : ''}
-                                ${lineHint}
-                            </div>
-                        </div>
-                        ${friendly.primaryField ? `<span class="om-error-field-name">${escapeHtml(friendly.primaryField)}</span>` : ''}
-                        <p class="om-error-message mb-2">${escapeHtml(friendly.message)}</p>
-                        <div class="om-error-help-box">
-                            <div class="om-error-help-title"><i class="bi bi-lightbulb me-1"></i>What you can do</div>
-                            <ul class="om-error-steps mb-0">
-                                ${friendly.guidance.map((g) => `<li>${escapeHtml(g)}</li>`).join('')}
-                            </ul>
-                        </div>
-                        ${friendly.technicalRaw ? `
-                            <details class="om-error-tech-details mt-2">
-                                <summary>Technical details (for IT / support)</summary>
-                                <pre class="om-error-tech-pre">${escapeHtml(friendly.technicalRaw)}</pre>
-                            </details>
-                        ` : ''}
-                    </div>
-                `;
+                content += renderSubmissionIssuePanel(detail, index, invoiceLookup);
             });
         } else if (errorObj) {
             const friendly = translateTechnicalLhdnMessage(errorObj.message, invoiceLookup);
@@ -5535,8 +5624,18 @@ class InvoiceTableManager {
         }
 
         if (fileData.status) {
+            const statusLabel = {
+                uploaded: 'Failed to upload',
+                processed: 'Ready to Submit',
+                submitted: 'Submitted',
+                error: 'Failed to upload',
+                failed: 'Failed to upload',
+                processing: 'Processing',
+                pending: 'Pending',
+                submitting: 'Processing'
+            }[(fileData.status || '').toLowerCase()] || fileData.status;
             content += `<div class="detail-item">
-                <strong>Status:</strong> ${fileData.status}
+                <strong>Status:</strong> ${statusLabel}
             </div>`;
         }
 
@@ -5752,7 +5851,7 @@ class InvoiceTableManager {
 
         const modalHTML = `
             <div id="invoiceTableErrorModal" class="lhdn-details-modal">
-                <div class="lhdn-details-overlay" onclick="this.parentElement.remove()"></div>
+                <div class="lhdn-details-overlay"></div>
                 <div class="lhdn-details-content" style="max-width: 500px;">
                     <div class="lhdn-details-header">
                         <div class="d-flex align-items-center">
@@ -5820,7 +5919,7 @@ class InvoiceTableManager {
 
         const modalHTML = `
             <div id="invoiceTableErrorModal" class="lhdn-details-modal">
-                <div class="lhdn-details-overlay" onclick="this.parentElement.remove()"></div>
+                <div class="lhdn-details-overlay"></div>
                 <div class="lhdn-details-content" style="max-width: 600px;">
                     <div class="lhdn-details-header">
                         <div class="d-flex align-items-center">
@@ -7288,8 +7387,27 @@ class UploadedFilesManager {
                 onStage: ({ stage, message, progress, eta, error }) => updateSubmissionFlow({ stage, message, progress, eta, error })
             });
 
-            updateSubmissionFlow({ stage: 'response', message: 'Bulk submission started. Finalizing...', progress: 90 });
             closeSubmissionFlowModal();
+
+            const overall = data?.completionStatus;
+            const errorFiles =
+                (data?.summary?.errorFiles || 0) +
+                (data?.summary?.validationFailedFiles || 0);
+            if (
+                overall === 'completed_with_errors' ||
+                overall === 'error' ||
+                errorFiles > 0
+            ) {
+                this.showValidationErrorModal({
+                    validationFailed: true,
+                    details: data?.details || [],
+                    totalDocuments: data?.summary?.totalFiles || fileIds.length,
+                    failedDocuments: errorFiles || 1,
+                    summary: data?.summary
+                });
+                if (typeof refreshOutboundTable === 'function') refreshOutboundTable();
+                return;
+            }
 
             await showSubmissionSuccessModal({
                 userMessage: 'Your submission has been successfully sent to LHDN for processing.',
@@ -7360,8 +7478,9 @@ class UploadedFilesManager {
                     } else {
                         Swal.fire('Deleted!', 'File has been deleted successfully.', 'success');
                     }
-                    // Refresh the table and update counts
                     if (typeof refreshOutboundTable === 'function') refreshOutboundTable();
+                } else if (response.status === 403) {
+                    throw new Error(data.error || 'You can only delete files you uploaded');
                 } else {
                     throw new Error(data.error || 'Failed to delete file');
                 }
@@ -7494,10 +7613,16 @@ class UploadedFilesManager {
         // Store error data globally for access by global functions
         window.currentValidationErrorData = errorData;
 
-        const { details, totalDocuments, failedDocuments } = errorData;
-
-        // Create the modern error modal
-        this.createValidationErrorModal(errorData);
+        try {
+            this.createValidationErrorModal(errorData || {});
+        } catch (modalErr) {
+            console.error('Failed to render validation error modal:', modalErr);
+            showSubmissionErrorModal({
+                category: 'Submission Not Completed',
+                friendlyMessage: 'One or more files did not complete. This window stays open until you click Close. Download is unavailable if the error details could not be rendered.',
+                technical: errorData
+            });
+        }
     }
 
     createValidationErrorModal(errorData) {
@@ -7510,7 +7635,7 @@ class UploadedFilesManager {
                 [data-sfv2="error"]{ --error-brand:#dc2626; --error-brand-800:#b91c1c; --error-ink:#0f172a; --error-muted:#64748b; --error-ring:#fca5a5; }
 
                 /* Modal Backdrop */
-                .submission-flow-error-backdrop{ position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.6); backdrop-filter:blur(4px); z-index:9999; display:flex; align-items:center; justify-content:center; padding:20px; box-sizing:border-box; overflow-y:auto }
+                .submission-flow-error-backdrop{ position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.6); backdrop-filter:blur(4px); z-index:12000; display:flex; align-items:center; justify-content:center; padding:20px; box-sizing:border-box; overflow-y:auto }
                 .sf-error-card{ max-width:800px; width:100%; max-height:90vh; background:#fff; border-radius:16px; box-shadow:0 4px 12px rgba(0,0,0,.15); display:flex; flex-direction:column; margin:auto }
 
                 /* Header */
@@ -7615,13 +7740,27 @@ class UploadedFilesManager {
 
         // Build error details HTML
         let errorDetailsHtml = '';
-        details.forEach((detail, index) => {
+        const normalizedDetails = normalizeValidationErrorDetails(details);
+        if (normalizedDetails.length === 0) {
+            errorDetailsHtml = `
+                <div class="sfv2-error-item">
+                    <div class="sfv2-error-invoice">
+                        <i class="fas fa-file-invoice sfv2-error-invoice-icon"></i>
+                        One or more files did not complete submission
+                    </div>
+                    <div class="sfv2-error-field">
+                        <div class="sfv2-error-field-issue">Close this window, then click the eye icon on that row to see what LHDN rejected. Fix that invoice in Excel and submit again.</div>
+                    </div>
+                </div>
+            `;
+        }
+        normalizedDetails.forEach((detail) => {
             let errorFieldsHtml = '';
-            detail.errors.forEach(error => {
+            (detail.errors || []).forEach(error => {
                 errorFieldsHtml += `
                     <div class="sfv2-error-field">
-                        <div class="sfv2-error-field-name">Field: ${error.field}</div>
-                        <div class="sfv2-error-field-issue">Issue: ${error.userFriendlyMessage || error.message}</div>
+                        <div class="sfv2-error-field-name">Field: ${error.field || 'Unknown'}</div>
+                        <div class="sfv2-error-field-issue">Issue: ${error.userFriendlyMessage || error.message || 'Validation failed'}</div>
                         ${error.value ? `<div class="sfv2-error-field-value">Current Value: ${error.value}</div>` : ''}
                     </div>
                 `;
@@ -7703,17 +7842,7 @@ class UploadedFilesManager {
         // Add modal to page
         document.body.insertAdjacentHTML('beforeend', modalHtml);
 
-        // Event listeners are now handled via onclick attributes in the HTML
-
-        // Add click outside to close
-        const backdrop = document.getElementById('validationErrorBackdrop');
-        backdrop.addEventListener('click', (e) => {
-            if (e.target === backdrop) {
-                window.closeValidationErrorModal();
-            }
-        });
-
-        // Add escape key to close
+        // Keep the error on screen until Close is clicked (do not dismiss on outside click).
         const handleEscape = (e) => {
             if (e.key === 'Escape') {
                 window.closeValidationErrorModal();
@@ -7738,18 +7867,82 @@ class UploadedFilesManager {
 
     // Download validation error report as CSV
     downloadValidationErrorReport(errorData) {
-        const { details, totalDocuments, failedDocuments } = errorData;
+        let { details, totalDocuments, failedDocuments } = errorData || {};
+        let normalizedDetails = normalizeValidationErrorDetails(details);
+
+        if (normalizedDetails.length === 0 && errorData?.lhdnResponse) {
+            const lhdnData =
+                typeof errorData.lhdnResponse === 'string'
+                    ? JSON.parse(errorData.lhdnResponse)
+                    : errorData.lhdnResponse;
+            const issues = collectAllSubmissionIssues(lhdnData, null);
+            normalizedDetails = issues.map((issue, index) => ({
+                invoiceNumber: issue.invoiceNumber || `Issue ${index + 1}`,
+                index,
+                errors: [
+                    {
+                        code: issue.code || 'VALIDATION',
+                        field: issue.field || 'Unknown',
+                        message: issue.message,
+                        userFriendlyMessage: issue.message,
+                        value: issue.value,
+                    },
+                ],
+            }));
+        }
+
+        if (normalizedDetails.length === 0 && errorData?.fileId && window.invoiceTableManager?.table) {
+            const row = window.invoiceTableManager.table
+                .rows()
+                .data()
+                .toArray()
+                .find((r) => String(r.id) === String(errorData.fileId));
+            if (row?.lhdnResponse) {
+                try {
+                    const lhdnData =
+                        typeof row.lhdnResponse === 'string'
+                            ? JSON.parse(row.lhdnResponse)
+                            : row.lhdnResponse;
+                    const issues = collectAllSubmissionIssues(lhdnData, buildInvoiceNumberLookup(row));
+                    normalizedDetails = issues.map((issue, index) => ({
+                        invoiceNumber: issue.invoiceNumber || `Issue ${index + 1}`,
+                        index,
+                        errors: [
+                            {
+                                code: issue.code || 'VALIDATION',
+                                field: issue.field || 'Unknown',
+                                message: issue.message,
+                                userFriendlyMessage: issue.message,
+                            },
+                        ],
+                    }));
+                } catch (e) {
+                    console.warn('CSV fallback from row lhdnResponse failed', e);
+                }
+            }
+        }
+
+        if (normalizedDetails.length === 0) {
+            if (window.toastNotification?.warning) {
+                window.toastNotification.warning(
+                    'No details',
+                    'Use the eye icon on the failed row to review LHDN errors.',
+                    5000
+                );
+            }
+            return;
+        }
 
         let csvContent = "Invoice Number,Row Index,Error Code,Field,Error Message,Current Value\n";
 
-        details.forEach(detail => {
-            detail.errors.forEach(error => {
+        normalizedDetails.forEach(detail => {
+            (detail.errors || []).forEach(error => {
                 const row = [
                     detail.invoiceNumber,
                     detail.index + 1,
                     error.code,
                     error.field,
-                    `"${(error.userFriendlyMessage || error.message).replace(/"/g, '""')}"`,
+                    `"${String(error.userFriendlyMessage || error.message || '').replace(/"/g, '""')}"`,
                     error.value ? `"${String(error.value).replace(/"/g, '""')}"` : ''
                 ].join(',');
                 csvContent += row + "\n";
@@ -8214,9 +8407,14 @@ const LHDN_FIELD_LABELS = {
     TaxableAmount: 'Taxable amount',
     PayableAmount: 'Payable amount',
     IdentificationCode: 'Country code',
+    PaidDate: 'Prepaid Paid Date',
+    PaidTime: 'Prepaid Paid Time',
+    PaidAmount: 'Prepaid Amount',
+    PrepaidPayment: 'Prepaid Payment',
 };
 
 const GENERIC_LHDN_USER_MESSAGES = [
+    /^validation error$/i,
     /there is an issue with your invoice/i,
     /there is an issue with one of your invoice/i,
     /document validation failed/i,
@@ -8224,6 +8422,7 @@ const GENERIC_LHDN_USER_MESSAGES = [
     /a required field is missing from your invoice/i,
     /lhdn could not validate/i,
     /please review your invoice information/i,
+    /missing required information or has an invalid value/i,
 ];
 
 function isGenericLhdnUserMessage(msg) {
@@ -8231,8 +8430,17 @@ function isGenericLhdnUserMessage(msg) {
     return GENERIC_LHDN_USER_MESSAGES.some((re) => re.test(msg));
 }
 
+function lastLhdnFieldSegment(fieldPath) {
+    const cleaned = String(fieldPath || '')
+        .replace(/#\//g, '')
+        .replace(/\._+$/g, '')
+        .replace(/\[\d+\]/g, '');
+    const parts = cleaned.split('.').filter((p) => p && p !== '_');
+    return parts[parts.length - 1] || '';
+}
+
 function humanizeLhdnFieldName(name) {
-    const key = String(name || '').replace(/\[\d+\]/g, '');
+    const key = lastLhdnFieldSegment(name) || String(name || '').replace(/\[\d+\]/g, '');
     if (LHDN_FIELD_LABELS[key]) return LHDN_FIELD_LABELS[key];
     return key.replace(/([A-Z])/g, ' $1').replace(/^\w/, (c) => c.toUpperCase()).trim() || 'Required field';
 }
@@ -8367,6 +8575,21 @@ function buildWhereFromContext(ctx, invoiceLookup, invoiceRef) {
 
 function guidanceForLhdnField(fieldPath) {
     const path = String(fieldPath || '');
+    if (/InvoicePeriod/i.test(path) && /StartDate|EndDate/i.test(path)) {
+        return [
+            'Invoice period Start Date and End Date are optional. If the file has no period, leave those cells blank.',
+            'If you fill them, use YYYY-MM-DD (example: 2026-08-14). Do not use N/A or Excel serials.',
+            'Save the file and submit again from this page.',
+        ];
+    }
+    if (/PaidDate|PrepaidPayment|DateExpected/i.test(path)) {
+        return [
+            'In the prepaid / paid date column, enter a real date as YYYY-MM-DD (example: 2026-08-14).',
+            'Do not leave Excel serial numbers (for example 46248) or N/A in this cell.',
+            'If there is no prepaid amount, leave the paid date blank so it is not sent to LHDN.',
+            'Save the file and submit again from this page.',
+        ];
+    }
     if (path.includes('Amount') && path.includes('ItemPriceExtension')) {
         return [
             'In your Excel template, enter the Amount for this line item (item price extension column).',
@@ -8398,8 +8621,21 @@ function guidanceForLhdnField(fieldPath) {
     ];
 }
 
+function buildInvalidFormatMessage(fieldPath, ctx, invoiceLookup, expectedKind) {
+    const label = humanizeLhdnFieldName(lastLhdnFieldSegment(fieldPath) || fieldPath);
+    const loc = formatInvoiceLocation(ctx, invoiceLookup, null);
+    const where = loc ? ` on ${loc}` : ' in your Excel data';
+    if (expectedKind === 'DateExpected' || /PaidDate/i.test(String(fieldPath || ''))) {
+        return `"${label}" is not a valid date${where}. Use YYYY-MM-DD (example: 2026-08-14).`;
+    }
+    if (expectedKind === 'NumberExpected' || expectedKind === 'IntegerExpected') {
+        return `"${label}" must be a number${where}.`;
+    }
+    return `"${label}" has an invalid format${where}.`;
+}
+
 function buildMissingFieldMessage(fieldPath, ctx, invoiceLookup) {
-    const field = String(fieldPath || '').split('.').pop().replace(/\[\d+\]/g, '') || 'required information';
+    const field = lastLhdnFieldSegment(fieldPath) || 'required information';
     const label = humanizeLhdnFieldName(field);
     const loc = formatInvoiceLocation(ctx, invoiceLookup, null);
     if (loc && ctx.lineNum) {
@@ -8427,7 +8663,7 @@ function extractNestedErrorsFromRaw(raw, invoiceLookup) {
         const key = `${ctx.invoiceNum}|${ctx.lineNum}|${fieldPath}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        const fieldName = fieldPath.split('.').pop().replace(/\[\d+\]/g, '');
+        const fieldName = lastLhdnFieldSegment(fieldPath);
         results.push({
             propertyPath: fieldPath,
             fieldName,
@@ -8441,23 +8677,21 @@ function extractNestedErrorsFromRaw(raw, invoiceLookup) {
 
     if (results.length) return results;
 
-    const strRe = /StringExpected:\s*([^\s}]+)/gi;
-    while ((match = strRe.exec(text)) !== null) {
-        const fieldPath = match[1].trim();
+    const typeRe = /(DateExpected|NumberExpected|IntegerExpected|BooleanExpected|StringExpected):\s*([^\s}\n]+)/gi;
+    while ((match = typeRe.exec(text)) !== null) {
+        const expectedKind = match[1];
+        const fieldPath = match[2].trim();
         const slice = text.substring(Math.max(0, match.index - 400), match.index + 80);
         const ctx = parseInvoiceContextFromText(slice + ' ' + fieldPath);
-        const key = `str|${ctx.invoiceNum}|${ctx.lineNum}|${fieldPath}`;
+        const fieldName = lastLhdnFieldSegment(fieldPath);
+        const key = `${expectedKind}|${ctx.invoiceNum}|${ctx.lineNum}|${fieldPath}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        const label = humanizeLhdnFieldName(fieldPath.split('.').pop());
-        const loc = formatInvoiceLocation(ctx, invoiceLookup, null);
         results.push({
             propertyPath: fieldPath,
-            fieldName: fieldPath.split('.').pop(),
-            userMessage: loc && ctx.lineNum
-                ? `"${label}" has an invalid format on ${loc}.`
-                : `"${label}" has an invalid format in your Excel data.`,
-            fieldDescription: label,
+            fieldName,
+            userMessage: buildInvalidFormatMessage(fieldPath, ctx, invoiceLookup, expectedKind),
+            fieldDescription: humanizeLhdnFieldName(fieldName),
             guidance: guidanceForLhdnField(fieldPath),
             where: buildWhereFromContext(ctx, invoiceLookup),
             invoiceRef: getInvoiceNumberForIndex(invoiceLookup, ctx.invoiceNum) || undefined,
@@ -8599,12 +8833,20 @@ function translateTechnicalLhdnMessage(raw, invoiceLookup) {
         return LHDN_PLAIN_ERROR_MAP[codeMatch[1].toUpperCase()];
     }
 
-    if (/PropertyRequired/i.test(text)) {
+    if (/PropertyRequired|DateExpected|StringExpected|NumberExpected|IntegerExpected/i.test(text)) {
         const nested = extractNestedErrorsFromRaw(text, invoiceLookup);
         if (nested.length === 1) return nested[0].userMessage;
         if (nested.length > 1) {
             return `MyInvois found ${nested.length} missing or invalid fields. See each item below.`;
         }
+    }
+
+    if (/PaidDate/i.test(text)) {
+        const ctx = parseInvoiceContextFromText(text);
+        const loc = formatInvoiceLocation(ctx, invoiceLookup, null);
+        return loc
+            ? `Prepaid Paid Date on ${loc} is not a valid date. Use YYYY-MM-DD (example: 2026-08-14).`
+            : 'Prepaid Paid Date is not a valid date. Use YYYY-MM-DD (example: 2026-08-14).';
     }
 
     if (/ItemPriceExtension/i.test(text) && /Amount/i.test(text)) {
@@ -8616,7 +8858,7 @@ function translateTechnicalLhdnMessage(raw, invoiceLookup) {
         return 'Amount (item price) is missing for one of your line items.';
     }
 
-    if (/ArrayItemNotValid|INVOICE_LINE|line item|InvoiceLine/i.test(text)) {
+    if (/INVOICE_LINE|InvoiceLine/i.test(text)) {
         const ctx = parseInvoiceContextFromText(text);
         const loc = formatInvoiceLocation(ctx, invoiceLookup, null);
         if (loc && ctx.lineNum) {
@@ -8626,6 +8868,25 @@ function translateTechnicalLhdnMessage(raw, invoiceLookup) {
             return `${loc} is missing required information or has an invalid value.`;
         }
         return 'One or more line items in your Excel file are incomplete or invalid.';
+    }
+
+    if (/ArrayItemNotValid/i.test(text)) {
+        const nested = extractNestedErrorsFromRaw(text, invoiceLookup);
+        if (nested.length === 1) return nested[0].userMessage;
+        if (nested.length > 1) {
+            return `MyInvois found ${nested.length} invalid fields. See each item below.`;
+        }
+        const ctx = parseInvoiceContextFromText(text);
+        const loc = formatInvoiceLocation(ctx, invoiceLookup, null);
+        const field = lastLhdnFieldSegment(text);
+        const label = field ? humanizeLhdnFieldName(field) : '';
+        if (loc && label) {
+            return `"${label}" on ${loc} has an invalid value.`;
+        }
+        if (loc) {
+            return `${loc} has an invalid value. Please check the highlighted field in Excel.`;
+        }
+        return 'MyInvois found an invalid value in your Excel file. See the LHDN details below.';
     }
 
     if (/TIN|BuyerTIN|SupplierTIN/i.test(text)) {
@@ -8659,15 +8920,15 @@ function toEndUserFriendlyDetail(detail, invoiceLookup) {
     const nestedOne = nestedFromRaw.length === 1 ? nestedFromRaw[0] : null;
 
     let message =
-        detail?.userMessage ||
         nestedOne?.userMessage ||
+        detail?.userMessage ||
         detail?.userFriendlyMessage ||
         normalized.userMessage ||
         '';
 
     const fieldDesc =
-        detail?.fieldDescription ||
         nestedOne?.fieldDescription ||
+        detail?.fieldDescription ||
         normalized.fieldDescription ||
         '';
 
@@ -8679,18 +8940,20 @@ function toEndUserFriendlyDetail(detail, invoiceLookup) {
         message = translateTechnicalLhdnMessage(raw, invoiceLookup);
     }
 
-    if (nestedOne && isGenericLhdnUserMessage(message)) {
+    if (nestedOne?.userMessage && (isGenericLhdnUserMessage(message) || isTechnicalLhdnText(message))) {
         message = nestedOne.userMessage;
     }
 
     let guidance = [
-        ...(detail?.guidance || nestedOne?.guidance || normalized.guidance || []),
+        ...(nestedOne?.guidance || detail?.guidance || normalized.guidance || []),
     ].filter((g) => g && !isTechnicalLhdnText(g));
 
-    if (!guidance.length) {
+    const guidanceLooksGeneric = /review your invoice information|required fields are filled|correct format requirements/i
+        .test(guidance.join(' '));
+    if (!guidance.length || (guidanceLooksGeneric && nestedOne?.guidance?.length)) {
         guidance = nestedOne?.guidance?.length
             ? nestedOne.guidance
-            : guidanceForLhdnField(detail?.propertyPath || raw);
+            : guidanceForLhdnField(nestedOne?.propertyPath || detail?.propertyPath || raw);
     }
 
     const ctx = parseInvoiceContextFromText(
@@ -8706,10 +8969,14 @@ function toEndUserFriendlyDetail(detail, invoiceLookup) {
             : '';
 
     const fieldName =
-        detail?.fieldName ||
         nestedOne?.fieldName ||
-        (detail?.propertyPath ? String(detail.propertyPath).split('.').pop().replace(/\[\d+\]/g, '') : '');
+        detail?.fieldName ||
+        lastLhdnFieldSegment(detail?.propertyPath || raw);
     const primaryField = fieldName ? humanizeLhdnFieldName(fieldName) : '';
+    const rawText = String(raw || '').trim();
+    const technicalRaw = rawText && !/^validation error$/i.test(rawText)
+        ? rawText
+        : '';
 
     return {
         message,
@@ -8718,8 +8985,46 @@ function toEndUserFriendlyDetail(detail, invoiceLookup) {
         lineItemNum,
         primaryField,
         errorCode: plainCodeLabel,
-        technicalRaw: isTechnicalLhdnText(raw) ? raw : '',
+        technicalRaw,
     };
+}
+
+function renderSubmissionIssuePanel(detail, index, invoiceLookup) {
+    const friendly = toEndUserFriendlyDetail(detail, invoiceLookup);
+    const invoiceNo = friendly.invoiceNumber
+        ? `Invoice No. ${escapeHtml(friendly.invoiceNumber)}`
+        : (detail.invoiceRef ? `Invoice No. ${escapeHtml(detail.invoiceRef)}` : '');
+    const lineHint = friendly.lineItemNum
+        ? `<div class="om-error-where"><i class="bi bi-list-ol me-1"></i>Line item ${friendly.lineItemNum}</div>`
+        : '';
+    const lhdnHtml = friendly.technicalRaw
+        ? `<div class="om-error-lhdn-reported">
+            <div class="om-error-lhdn-reported-title">What LHDN reported</div>
+            <pre class="om-error-lhdn-reported-pre">${escapeHtml(friendly.technicalRaw)}</pre>
+        </div>`
+        : '';
+    const guidanceHtml = friendly.guidance?.length
+        ? `<div class="om-error-help-box">
+            <div class="om-error-help-title"><i class="bi bi-lightbulb me-1"></i>What you can do</div>
+            <ul class="om-error-steps mb-0">
+                ${friendly.guidance.map((g) => `<li>${escapeHtml(g)}</li>`).join('')}
+            </ul>
+        </div>`
+        : '';
+    return `
+        <div class="om-doc-panel om-doc-panel--danger">
+            <div class="d-flex align-items-start gap-2 mb-2">
+                <span class="om-issue-badge">${index + 1}</span>
+                <div class="flex-grow-1">
+                    ${invoiceNo ? `<div class="om-error-title">${invoiceNo}</div>` : ''}
+                    ${lineHint}
+                </div>
+            </div>
+            ${friendly.primaryField ? `<span class="om-error-field-name">${escapeHtml(friendly.primaryField)}</span>` : ''}
+            <p class="om-error-message mb-2">${escapeHtml(friendly.message)}</p>
+            ${lhdnHtml}
+            ${guidanceHtml}
+        </div>`;
 }
 
 // Normalize error object into the requested structure
@@ -8749,6 +9054,44 @@ function escapeHtml(s){
     .replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;')
     .replace(/'/g,'&#39;');
+}
+
+function normalizeValidationErrorDetails(details) {
+  const detailList = Array.isArray(details) ? details : [];
+  return detailList.map((detail, index) => {
+    if (detail && Array.isArray(detail.errors)) return detail;
+    return {
+      invoiceNumber: detail?.invoiceNumber || detail?.filename || `Item ${index + 1}`,
+      index: detail?.index ?? index,
+      errors: [{
+        field: detail?.field || 'Unknown',
+        message: detail?.message || detail?.error || 'Submission failed',
+        value: detail?.value
+      }]
+    };
+  });
+}
+
+function resolveEyeModalLhdnData(fileData, lhdnData) {
+  if (
+    lhdnData &&
+    (lhdnData.error ||
+      lhdnData.details ||
+      lhdnData.summary ||
+      lhdnData.success === false ||
+      lhdnData.status === 'failed')
+  ) {
+    return lhdnData;
+  }
+  const msg = fileData?.error_message || fileData?.errorMessage;
+  if (msg) {
+    return {
+      success: false,
+      status: 'failed',
+      error: { message: msg }
+    };
+  }
+  return lhdnData;
 }
 
 function closeSubmissionFlowModal() {
@@ -9001,8 +9344,14 @@ async function showSubmissionErrorModal({ category='Validation Error', friendlyM
 function mapLhdnErrorToFriendly(error) {
   try {
     const code = error?.code || error?.error?.code || (Array.isArray(error?.details) && error.details[0]?.code) || '';
-    const msg = error?.message || error?.error?.message || '';
     const details = error?.details || error?.error?.details || [];
+    const detailMsg = Array.isArray(details)
+        ? details.map((d) => d?.message || d?.originalMessage || '').filter(Boolean).join('\n')
+        : '';
+    const topMsg = error?.message || error?.error?.message || '';
+    const msg = (!topMsg || /^validation error$/i.test(String(topMsg).trim())) && detailMsg
+        ? detailMsg
+        : topMsg;
     // Categories and suggestions
     const suggestions = [];
     let category = 'System Error';
@@ -9039,8 +9388,12 @@ function mapLhdnErrorToFriendly(error) {
       suggestions.push('Use Search TIN to verify Buyer TIN where applicable.');
       suggestions.push('Re-upload the corrected file and submit again.');
     } else {
-      category = 'Submission Error';
-      friendly = msg || 'Submission failed. Review the details above for steps to resolve the issue.';
+      category = /^validation error$/i.test(String(topMsg).trim()) || /ArrayItemNotValid|DateExpected|PropertyRequired/i.test(msg)
+        ? 'Validation Error'
+        : 'Submission Error';
+      friendly = isTechnicalLhdnText(msg)
+        ? translateTechnicalLhdnMessage(msg, new Map())
+        : (msg || 'Submission failed. Review the details above for steps to resolve the issue.');
     }
     return { category, friendlyMessage: friendly, suggestions, technical: error };
   } catch(e) {
@@ -9050,13 +9403,123 @@ function mapLhdnErrorToFriendly(error) {
 
 // Global refresh helper
 function refreshOutboundTable() {
-    // Invalidate cache to force fresh data
     dataCache.invalidateCache();
-    // Refresh the table
-    if (window.invoiceTableManager && window.invoiceTableManager.table) {
-        window.invoiceTableManager.table.ajax.reload();
-    }
+    sessionStorage.setItem('forceRefreshOutboundTable', 'true');
+    const manager = window.invoiceTableManager;
+    if (!manager || !manager.table) return;
+
+    document.querySelectorAll('.quick-filters .btn[data-filter]').forEach((btn) =>
+        btn.classList.remove('active')
+    );
+    const allBtn = document.querySelector('.quick-filters .btn[data-filter="all"]');
+    if (allBtn) allBtn.classList.add('active');
+
+    manager.table.ajax.reload(() => {
+        if (typeof manager.applyQuickFilter === 'function') {
+            manager.applyQuickFilter('all');
+        }
+    }, false);
 }
+
+function highlightRowByFileId(fileId) {
+    const rowId = `file_${fileId}`;
+    const rowEl = document.getElementById(rowId);
+    if (!rowEl) return false;
+    rowEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    rowEl.classList.add('outbound-row-highlight');
+    setTimeout(() => rowEl.classList.remove('outbound-row-highlight'), 4000);
+    return true;
+}
+
+function searchTableByFilename(filename) {
+    const manager = window.invoiceTableManager;
+    if (!manager?.table || !filename) return;
+    const searchInput =
+        document.querySelector('#globalSearch') ||
+        document.querySelector('.dataTables_filter input');
+    if (searchInput) {
+        searchInput.value = filename;
+        searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    manager.table.search(filename).draw();
+}
+
+function showDuplicateBlockModal({ blockingFile, duplicateType, message }) {
+    const file = blockingFile || {};
+    const rowId = file.id;
+    const filename = file.filename || 'Unknown file';
+    const owner = file.uploadedBy || file.uploaded_by_name || 'Unknown';
+    const canDelete =
+        rowId &&
+        isOwnManualUploadRow({
+            uploadedByUserId:
+                file.uploadedByUserId ?? file.uploaded_by_user_id,
+        }) &&
+        String(file.status || '').toLowerCase() !== 'submitted';
+
+    const existing = document.getElementById('duplicateBlockModal');
+    if (existing) existing.remove();
+
+    const ownerHint =
+        !canDelete && rowId
+            ? `<p class="text-muted small mb-0">Ask <strong>${owner}</strong> to delete row ${rowId} if needed.</p>`
+            : '';
+
+    const modalHtml = `
+        <div class="excel-loading-backdrop" id="duplicateBlockModal" style="z-index:11000">
+            <div class="excel-loading-content" style="max-width:520px">
+                <div class="excel-modal-header">
+                    <div class="excel-processing-icon"><i class="bi bi-files"></i></div>
+                    <h5 class="excel-processing-title">Duplicate Upload Blocked</h5>
+                    <p class="excel-processing-subtitle">${duplicateType === 'CONTENT_DUPLICATE' ? 'Same invoice content' : 'Filename already in table'}</p>
+                </div>
+                <div class="excel-modal-body text-start px-4 pb-2">
+                    <p>${message || 'This upload is blocked by an existing row in your upload table.'}</p>
+                    <div class="border rounded p-3 mb-3 bg-light">
+                        <div><strong>Row ID:</strong> ${rowId || 'N/A'}</div>
+                        <div><strong>Filename:</strong> ${filename}</div>
+                        <div><strong>Uploaded by:</strong> ${owner}</div>
+                        <div><strong>Status:</strong> ${file.status || 'unknown'}</div>
+                    </div>
+                    ${ownerHint}
+                </div>
+                <div class="excel-modal-body d-flex gap-2 justify-content-end px-4 pb-4">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="duplicateFindBtn">
+                        <i class="bi bi-search me-1"></i>Find in table
+                    </button>
+                    <button type="button" class="btn btn-danger btn-sm" id="duplicateDeleteBtn" ${canDelete ? '' : 'disabled'} title="${canDelete ? 'Delete blocking file' : 'You can only delete your own uploads'}">
+                        <i class="bi bi-trash me-1"></i>Delete blocking file
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="duplicateCloseBtn">Close</button>
+                </div>
+            </div>
+        </div>`;
+
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+    document.getElementById('duplicateCloseBtn')?.addEventListener('click', () => {
+        document.getElementById('duplicateBlockModal')?.remove();
+    });
+    document.getElementById('duplicateFindBtn')?.addEventListener('click', () => {
+        refreshOutboundTable();
+        setTimeout(() => {
+            searchTableByFilename(filename);
+            highlightRowByFileId(rowId);
+        }, 600);
+        document.getElementById('duplicateBlockModal')?.remove();
+    });
+    document.getElementById('duplicateDeleteBtn')?.addEventListener('click', async () => {
+        if (!canDelete || !rowId) return;
+        if (window.uploadedFilesManager?.deleteFile) {
+            document.getElementById('duplicateBlockModal')?.remove();
+            await window.uploadedFilesManager.deleteFile(String(rowId));
+        }
+    });
+}
+
+window.showDuplicateBlockModal = showDuplicateBlockModal;
+window.highlightRowByFileId = highlightRowByFileId;
+window.searchTableByFilename = searchTableByFilename;
 
 // Global loading backdrop helpers (reused across manual outbound actions)
 function showLoadingBackdrop(message = 'Processing...') {

@@ -44,6 +44,63 @@ const lhdnUIHelper = (function() {
         'UNKNOWN_ERROR': 'An unknown error occurred. Please try again or contact support.'
     };
 
+    function isGenericLhdnHeadline(text) {
+        const t = String(text || '').trim();
+        return !t ||
+            /^validation error$/i.test(t) ||
+            /^badrequest$/i.test(t) ||
+            /document validation failed/i.test(t) ||
+            /there is an issue with your invoice/i.test(t);
+    }
+
+    function interpretLhdnDetailText(raw, propertyPath) {
+        const text = String(raw || '');
+        const path = String(propertyPath || '');
+        const combined = `${text} ${path}`;
+        if (/PaidDate/i.test(combined) || (/DateExpected/i.test(text) && /PrepaidPayment/i.test(combined))) {
+            return {
+                userMessage: 'Prepaid Paid Date is not a valid date. Use YYYY-MM-DD (example: 2026-08-14).',
+                fieldDescription: 'Prepaid Paid Date',
+                guidance: [
+                    'In the prepaid / paid date column, enter a real date as YYYY-MM-DD (example: 2026-08-14).',
+                    'Do not leave Excel serial numbers (for example 46248) or N/A in this cell.',
+                    'If there is no prepaid amount, leave the paid date blank so it is not sent to LHDN.'
+                ]
+            };
+        }
+        const typeMatch = text.match(/(DateExpected|StringExpected|NumberExpected|PropertyRequired):\s*([^\s}\n]+)/i);
+        if (typeMatch) {
+            const field = typeMatch[2]
+                .replace(/#\//g, '')
+                .replace(/\._+$/g, '')
+                .replace(/\[\d+\]/g, '')
+                .split('.')
+                .filter(Boolean)
+                .pop() || 'field';
+            const label = field.replace(/([A-Z])/g, ' $1').replace(/^\w/, (c) => c.toUpperCase()).trim();
+            if (typeMatch[1] === 'DateExpected') {
+                return {
+                    userMessage: `"${label}" is not a valid date. Use YYYY-MM-DD.`,
+                    fieldDescription: label,
+                    guidance: ['Enter a real date as YYYY-MM-DD, then save and submit again.']
+                };
+            }
+            if (typeMatch[1] === 'PropertyRequired') {
+                return {
+                    userMessage: `"${label}" is missing in your Excel file.`,
+                    fieldDescription: label,
+                    guidance: ['Fill in the missing field, then save and submit again.']
+                };
+            }
+            return {
+                userMessage: `"${label}" has an invalid format.`,
+                fieldDescription: label,
+                guidance: ['Check the format of this field in Excel, then save and submit again.']
+            };
+        }
+        return null;
+    }
+
     /**
      * Format LHDN error for display
      * @param {Object|String|Array} error - The error object, string, or array
@@ -77,15 +134,16 @@ const lhdnUIHelper = (function() {
                 error = error[0] || error;
             }
 
-            // Extract error details
-            const code = error.code || error.errorCode || 'UNKNOWN_ERROR';
-            const message = error.message || error.errorMessage || 'An unknown error occurred';
-            let details = error.details || error.errorDetails || [];
-            const target = error.target || '';
-            const invoiceNumber = error.invoiceNumber || '';
+            // Extract error details (LHDN often nests the useful text under error.details)
+            const nested = error.error && typeof error.error === 'object' ? error.error : null;
+            const code = String(error.code || error.errorCode || nested?.code || 'UNKNOWN_ERROR');
+            let message = error.message || error.errorMessage || nested?.message || 'An unknown error occurred';
+            let details = error.details || error.errorDetails || nested?.details || [];
+            const target = error.target || nested?.target || '';
+            const invoiceNumber = error.invoiceNumber || error.invoiceCodeNumber || nested?.target || '';
 
             // Use predefined message if available, otherwise use provided message
-            const userFriendlyMessage = ERROR_CODES[code] || message;
+            let userFriendlyMessage = ERROR_CODES[code] || message;
 
             // Format details for display
             let formattedDetails = [];
@@ -109,44 +167,43 @@ const lhdnUIHelper = (function() {
 
             // Process details based on type
             if (Array.isArray(details)) {
-                // Enhanced processing for the new user-friendly error structure
                 formattedDetails = details.map(detail => {
-                    if (typeof detail === 'object' && detail.userMessage) {
-                        // New user-friendly error structure - prioritize user messages
+                    const rawText = typeof detail === 'string'
+                        ? detail
+                        : (detail?.originalMessage || detail?.message || detail?.error || '');
+                    const propertyPath = typeof detail === 'object' ? (detail.propertyPath || detail.target || '') : '';
+                    const interpreted = interpretLhdnDetailText(rawText, propertyPath);
+
+                    if (typeof detail === 'object' && detail) {
+                        const existingUser = detail.userMessage || '';
+                        const useInterpreted = interpreted && (!existingUser || isGenericLhdnHeadline(existingUser));
                         return {
-                            userMessage: detail.userMessage,
-                            originalMessage: detail.originalMessage,
-                            guidance: detail.guidance || [],
-                            fieldDescription: detail.fieldDescription || detail.userMessage,
+                            userMessage: useInterpreted ? interpreted.userMessage : (existingUser || interpreted?.userMessage || rawText || 'There is an issue with your invoice.'),
+                            originalMessage: detail.originalMessage || rawText,
+                            guidance: useInterpreted ? interpreted.guidance : (detail.guidance || interpreted?.guidance || ['Please review your invoice information and try again.']),
+                            fieldDescription: useInterpreted ? interpreted.fieldDescription : (detail.fieldDescription || interpreted?.fieldDescription || existingUser || rawText),
                             severity: detail.severity || 'error',
                             target: detail.target,
                             propertyName: detail.propertyName,
-                            propertyPath: detail.propertyPath,
-                            errorCode: detail.errorCode,
-                            _isUserFriendly: true
-                        };
-                    } else if (typeof detail === 'object') {
-                        // Legacy error structure - convert to user-friendly
-                        const message = detail.message || detail.error || 'There is an issue with your invoice.';
-                        return {
-                            userMessage: message,
-                            guidance: ['Please review your invoice information and try again.'],
-                            fieldDescription: message,
-                            severity: 'error',
-                            _isUserFriendly: false
-                        };
-                    } else {
-                        // String detail - convert to user-friendly
-                        const message = typeof detail === 'string' ? detail : 'There is an issue with your invoice.';
-                        return {
-                            userMessage: message,
-                            guidance: ['Please review your invoice information and try again.'],
-                            fieldDescription: message,
-                            severity: 'error',
-                            _isUserFriendly: false
+                            propertyPath: detail.propertyPath || propertyPath,
+                            errorCode: detail.errorCode || detail.code,
+                            _isUserFriendly: Boolean(useInterpreted || existingUser)
                         };
                     }
+
+                    return {
+                        userMessage: interpreted?.userMessage || rawText || 'There is an issue with your invoice.',
+                        originalMessage: rawText,
+                        guidance: interpreted?.guidance || ['Please review your invoice information and try again.'],
+                        fieldDescription: interpreted?.fieldDescription || rawText,
+                        severity: 'error',
+                        _isUserFriendly: Boolean(interpreted)
+                    };
                 });
+            }
+
+            if (isGenericLhdnHeadline(userFriendlyMessage) && formattedDetails[0]?.userMessage) {
+                userFriendlyMessage = formattedDetails[0].userMessage;
             }
 
             // Generate suggestion based on error code
@@ -338,6 +395,12 @@ const lhdnUIHelper = (function() {
                                                                     <strong>Issue:</strong>
                                                                     <span>${errorText}</span>
                                                                 </div>
+                                                                ${detail.originalMessage && detail.originalMessage !== errorText ? `
+                                                                <div class="error-description mt-2">
+                                                                    <strong>LHDN:</strong>
+                                                                    <span style="white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:0.8rem;">${detail.originalMessage}</span>
+                                                                </div>
+                                                                ` : ''}
                                                                 ${guidanceHTML && Array.isArray(guidanceHTML) && guidanceHTML.length > 0 ? `
                                                                 <div class="error-guidance mt-3">
                                                                     <div class="alert alert-info">

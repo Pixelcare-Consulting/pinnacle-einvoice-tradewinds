@@ -4,7 +4,7 @@ const prisma = require('../src/lib/prisma');
 const bcrypt = require('bcryptjs');
 const moment = require('moment');
 const loggingConfig = require('../config/logging.config');
-const { checkActiveSession, updateActiveSession, removeActiveSession, checkLoginAttempts, trackLoginAttempt } = require('../middleware/auth-prisma.middleware');
+const { checkActiveSession, updateActiveSession, removeActiveSession, destroySessionsForUsername, checkLoginAttempts, trackLoginAttempt } = require('../middleware/auth-prisma.middleware');
 const passport = require('passport');
 const { LoggingService } = require('../services/logging-prisma.service');
 const { getTokenSession } = require('../services/token-prisma.service');
@@ -110,6 +110,7 @@ router.post('/login', loginSecurityMiddleware, async (req, res, next) => {
       if (reconnect === 'force') {
         // Force logout the existing session
         removeActiveSession(username);
+        await destroySessionsForUsername(username);
 
         // Log the forced logout
         await LoggingService.log({

@@ -19,7 +19,7 @@
 <link href="/assets/css/pages/outbound/validation-modal.css" rel="stylesheet">
 
 <!-- Template Main CSS Files -->
-<link href="/assets/css/pages/outbound/outbound-table.css" rel="stylesheet">
+<link href="/assets/css/pages/outbound/outbound-table.css?v=20260826" rel="stylesheet">
 <!-- Excel Loading Animation CSS -->
 <link href="/assets/css/pages/outbound/excel-loading.css" rel="stylesheet">
 <!-- Invoice Preview Modal Enhancements -->
@@ -943,6 +943,17 @@
     background-color: #1a365d;
     color: white;
     box-shadow: 0 2px 4px rgba(26,54,93,0.2);
+}
+
+.team-view-filters .btn.active {
+    background-color: #405189;
+    color: #fff;
+    border-color: #405189;
+}
+
+tr.outbound-row-highlight td {
+    background-color: #fef3c7 !important;
+    transition: background-color 0.3s ease;
 }
 
 /* Filter Tags */
@@ -2680,7 +2691,7 @@
             <span class="card-title-new">INVALID</span>
         </div>
 
-        <!-- PENDING Card -->
+        <!-- Ready to Submit Card -->
         <div class="info-card pending-card">
             <div class="card-info">
                 <div class="card-icon position-relative">
@@ -2694,7 +2705,7 @@
                     <span class="text-muted">Total</span>
                 </div>
             </div>
-            <span class="card-title-new">PENDING</span>
+            <span class="card-title-new">Ready to Submit</span>
         </div>
     </div>
 
@@ -2749,7 +2760,11 @@
                                             
                                             <!-- Quick Filters -->
                                             <div class="col-md-8">
-                                                <div class="quick-filters d-flex gap-2">
+                                                <div class="quick-filters d-flex gap-2 flex-wrap align-items-center">
+                                                    <div class="team-view-filters d-flex gap-1 me-2">
+                                                        <button class="btn btn-sm btn-outline-secondary active" data-team-view="all" type="button">All Team</button>
+                                                        <button class="btn btn-sm btn-outline-secondary" data-team-view="mine" type="button">My Uploads</button>
+                                                    </div>
                                                     <button class="btn outbound-action-btn submit active" data-filter="all">
                                                         <i class="bi bi-list me-1"></i>All List
                                                     </button>
@@ -3072,12 +3087,22 @@
 
 {% endblock %}
 {% block scripts %}
+<div id="outbound-manual-page-config"
+     data-user-id="{% if user and user.id %}{{ user.id }}{% endif %}"
+     hidden></div>
+<script>
+  (function () {
+    const configEl = document.getElementById('outbound-manual-page-config');
+    const rawUserId = configEl?.getAttribute('data-user-id');
+    window.currentUserId = rawUserId ? Number(rawUserId) : null;
+  })();
+</script>
 <!-- Toast Notification Utility -->
 <script src="/assets/js/utils/toast.js"></script>
 <!-- New submission orchestrator -->
-<script src="/assets/js/modules/submission/submission-client.js"></script>
+<script src="/assets/js/modules/submission/submission-client.js?v=20260828"></script>
 <!-- Excel validation functions -->
-<script src="/assets/js/modules/excel/outbound-manual.js?v=20260422d"></script>
+<script src="/assets/js/modules/excel/outbound-manual.js?v=20260830-1"></script>
 <!-- <script src="/assets/js/modules/tutorial/guided-tour.js"></script> -->
 <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
 

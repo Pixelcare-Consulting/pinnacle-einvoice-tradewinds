@@ -7105,10 +7105,12 @@ async function fetchInboundExportTaxTypeCodes(rows) {
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok || !data.success) {
-    throw new Error(
-      data.message || `Failed to resolve tax type codes (${response.status})`
-    );
-  }
+  console.warn(
+    "[Inbound Export] Tax type code resolve failed; exporting with partial/blank tax codes:",
+    data.message || response.status
+  );
+  return resolved;
+}
 
   return { ...resolved, ...(data.taxTypeCodes || {}) };
 }
