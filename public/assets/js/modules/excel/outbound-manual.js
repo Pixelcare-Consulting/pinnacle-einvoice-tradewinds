@@ -112,8 +112,108 @@ function partyLabel(party) {
 function partyKey(party) {
     if (!party) return '';
     if (typeof party === 'string') return party.trim().toLowerCase();
-    const tin = party.identifications?.tin || '';
+
+    let tin = '';
+    if (Array.isArray(party.identifications)) {
+        const tinId = party.identifications.find((id) => {
+            const scheme = String(id.schemeId || id.scheme || '').toUpperCase();
+            return scheme === 'TIN';
+        });
+        tin = tinId?.id || tinId?.value || '';
+    } else {
+        tin = party.identifications?.tin || '';
+    }
+
     return `${partyLabel(party)}_${tin}`.toLowerCase();
+}
+
+function receiverEntryHasId(receiver) {
+    if (!receiver || typeof receiver === 'string') return false;
+
+    const ident = receiver.identifications;
+    if (Array.isArray(ident)) {
+        return ident.some((id) => {
+            const scheme = String(id.schemeId || id.scheme || '').toUpperCase();
+            return (scheme === 'TIN' || scheme === 'BRN') && (id.id || id.value);
+        });
+    }
+
+    if (ident && typeof ident === 'object') {
+        return !!(ident.tin || ident.brn);
+    }
+
+    return false;
+}
+
+function receiversHaveFullDetails(list) {
+    return Array.isArray(list) && list.length > 0 && list.some(receiverEntryHasId);
+}
+
+function normalizeReceiverRecord(r) {
+    if (!r) return null;
+    if (typeof r === 'object') {
+        const company = r.company || r.name || r.registrationName || '';
+        let ident = r.identifications || {};
+        if (Array.isArray(ident)) {
+            const ids = {};
+            ident.forEach((id) => {
+                const scheme = (id.schemeId || id.scheme || '').toUpperCase();
+                const value = id.id || id.value || '';
+                if (scheme === 'TIN') ids.tin = value;
+                else if (scheme === 'BRN') ids.brn = value;
+                else if (scheme === 'SST') ids.sst = value;
+                else if (scheme === 'TTX') ids.ttx = value;
+            });
+            ident = ids;
+        }
+        const contact = r.contact || {};
+        const addr = r.address && typeof r.address === 'object' ? r.address : {};
+        return {
+            company,
+            identifications: ident,
+            email: r.email || contact.email || null,
+            phone: r.phone || contact.phone || null,
+            address: r.address?.line || r.address?.address || addr.line || null,
+            city: r.city || addr.city || null,
+            state: r.state || addr.state || null,
+        };
+    }
+    if (typeof r === 'string') {
+        return { company: r, identifications: {}, email: null, phone: null, address: null, city: null, state: null };
+    }
+    return null;
+}
+
+function buildReceiverCardHtml(receiver, displayIndex) {
+    return `
+        <div class="om-receiver-card receiver-item"
+            data-company="${encodeURIComponent(receiver.company || 'N/A')}"
+            data-tin="${encodeURIComponent(receiver.identifications?.tin || 'N/A')}"
+            data-brn="${encodeURIComponent(receiver.identifications?.brn || 'N/A')}"
+            data-email="${encodeURIComponent(receiver.email || 'N/A')}"
+            data-phone="${encodeURIComponent(receiver.phone || 'N/A')}"
+            data-address="${encodeURIComponent(receiver.address || 'N/A')}"
+            data-city="${encodeURIComponent(receiver.city || 'N/A')}"
+            data-state="${encodeURIComponent(receiver.state || 'N/A')}"
+            onclick="window.outboundManualExcel.copyReceiverInfo(null, this)">
+            <div class="om-receiver-card-header">
+                <span class="om-receiver-index">${displayIndex}</span>
+                <div class="om-receiver-company fw-bold text-dark">
+                    <i class="bi bi-building me-1"></i>${receiver.company || 'N/A'}
+                </div>
+                <i class="bi bi-clipboard om-receiver-copy" title="Click to copy receiver info"></i>
+            </div>
+            <div class="om-receiver-meta">
+                <div class="om-receiver-field"><i class="bi bi-hash me-1"></i><strong>TIN:</strong> ${receiver.identifications?.tin || 'N/A'}</div>
+                <div class="om-receiver-field"><i class="bi bi-card-text me-1"></i><strong>BRN:</strong> ${receiver.identifications?.brn || 'N/A'}</div>
+                <div class="om-receiver-field"><i class="bi bi-envelope me-1"></i><strong>Email:</strong> ${receiver.email || 'N/A'}</div>
+                <div class="om-receiver-field"><i class="bi bi-telephone me-1"></i><strong>Phone:</strong> ${receiver.phone || 'N/A'}</div>
+            </div>
+            <div class="om-receiver-address">
+                <i class="bi bi-geo-alt me-1"></i>${receiver.address || 'N/A'}, ${receiver.city || 'N/A'}, ${receiver.state || 'N/A'}
+            </div>
+        </div>
+    `;
 }
 
 function resolveInvoiceCount(fileData) {
@@ -3723,7 +3823,7 @@ class InvoiceTableManager {
                         orderable: true,
                         title: 'UPLOADED',
                         width: '9%',
-                        className: 'text-center',
+                        className: 'text-center outbound-date-cell',
                         render: (data, type) => {
                             if (type === 'sort' || type === 'type') {
                                 return data ? new Date(data).getTime() : 0;
@@ -3735,14 +3835,14 @@ class InvoiceTableManager {
                         data: 'invDateInfo',
                         title: 'INVOICE DATE',
                         width: '10%',
-                        className: 'text-center',
+                        className: 'text-center outbound-date-cell',
                         render: (data, type, row) => this.renderInvDateInfo(data, type, row)
                     },
                     {
                         data: 'submittedDate',
                         title: 'SUBMITTED',
                         width: '10%',
-                        className: 'text-center',
+                        className: 'text-center outbound-date-cell',
                         orderable: true,
                         render: (data, type) => {
                             if (type === 'sort' || type === 'type') {
@@ -4233,13 +4333,13 @@ class InvoiceTableManager {
         });
 
         return `
-            <div class="cell-group">
-                <div class="cell-main">
-                    <i class="bi bi-calendar-event me-1"></i>
+            <div class="cell-group cell-group--date">
+                <div class="cell-main cell-main--date">
+                    <i class="bi bi-calendar-event" aria-hidden="true"></i>
                     <span class="date-value">${formattedDate}</span>
                 </div>
-                <div class="cell-sub">
-                    <i class="bi bi-clock me-1"></i>
+                <div class="cell-sub cell-sub--date">
+                    <i class="bi bi-clock" aria-hidden="true"></i>
                     <span class="reg-text">${formattedTime}</span>
                 </div>
             </div>`;
@@ -4782,13 +4882,13 @@ class InvoiceTableManager {
             const dateList = lines.slice(1).map(date => date.trim()).join(', ');
 
             return `
-                <div class="cell-group">
-                    <div class="cell-main">
-                        <i class="bi bi-calendar-event me-1"></i>
+                <div class="cell-group cell-group--date">
+                    <div class="cell-main cell-main--date">
+                        <i class="bi bi-calendar-event" aria-hidden="true"></i>
                         <span title="${dateList}">${countLine}</span>
                     </div>
-                    <div class="cell-sub">
-                        <i class="bi bi-list-ul me-1"></i>
+                    <div class="cell-sub cell-sub--date">
+                        <i class="bi bi-list-ul" aria-hidden="true"></i>
                         <span class="reg-text">Multiple Dates</span>
                     </div>
                 </div>`;
@@ -4798,14 +4898,10 @@ class InvoiceTableManager {
         const formattedDate = formatManualInvoiceDateForDisplay(value);
         if (formattedDate) {
             return `
-                <div class="cell-group">
-                    <div class="cell-main">
-                        <i class="bi bi-calendar-event me-1"></i>
+                <div class="cell-group cell-group--date">
+                    <div class="cell-main cell-main--date">
+                        <i class="bi bi-calendar-event" aria-hidden="true"></i>
                         <span class="date-value">${formattedDate}</span>
-                    </div>
-                    <div class="cell-sub">
-                        <i class="bi bi-calendar-date me-1"></i>
-                        <span class="reg-text">Invoice Date</span>
                     </div>
                 </div>`;
         }
@@ -6533,19 +6629,22 @@ class InvoiceTableManager {
         }
 
         const stored = window.outboundRowData?.[rowKey];
-        let rawReceivers = Array.isArray(stored?.receiverData) && stored.receiverData.length > 0
-            ? stored.receiverData
-            : null;
+        let rawReceivers = null;
+        let invoiceDetails = Array.isArray(stored?.invoiceDetails) ? stored.invoiceDetails : null;
 
-        if ((!rawReceivers || rawReceivers.length === 0) && Array.isArray(stored?.invoiceDetails) && stored.invoiceDetails.length > 0) {
+        if (Array.isArray(stored?.invoiceDetails) && stored.invoiceDetails.length > 0) {
             rawReceivers = this.extractReceiverData(stored.invoiceDetails);
+        }
+
+        if ((!rawReceivers || rawReceivers.length === 0) && Array.isArray(stored?.receiverData) && stored.receiverData.length > 0) {
+            rawReceivers = stored.receiverData;
         }
 
         if ((!rawReceivers || rawReceivers.length === 0) && window.receiverModalData?.[uniqueId]) {
             rawReceivers = window.receiverModalData[uniqueId];
         }
 
-        if ((!rawReceivers || rawReceivers.length === 0) && stored?.id) {
+        if ((!rawReceivers || !receiversHaveFullDetails(rawReceivers)) && stored?.id) {
             try {
                 const response = await fetch(`/api/outbound-files-manual/uploaded-files/${stored.id}/details`, {
                     credentials: 'same-origin',
@@ -6553,15 +6652,26 @@ class InvoiceTableManager {
                 if (response.ok) {
                     const payload = await response.json();
                     const details =
-                        payload?.metadata?.listInvoiceDetails ||
-                        payload?.file?.metadata?.listInvoiceDetails ||
+                        payload?.data?.invoiceDetails ||
+                        payload?.data?.metadata?.listInvoiceDetails ||
                         [];
                     if (details.length > 0) {
-                        rawReceivers = this.extractReceiverData(details);
+                        invoiceDetails = details;
+                        const enrichedReceivers = this.extractReceiverData(details);
+                        if (enrichedReceivers.length > 0) {
+                            rawReceivers = enrichedReceivers;
+                        }
                     }
                 }
             } catch (fetchErr) {
                 console.warn('Could not load receiver details from API:', fetchErr);
+            }
+        }
+
+        if (Array.isArray(invoiceDetails) && invoiceDetails.length > 0 && !receiversHaveFullDetails(rawReceivers)) {
+            const enrichedReceivers = this.extractReceiverData(invoiceDetails);
+            if (receiversHaveFullDetails(enrichedReceivers)) {
+                rawReceivers = enrichedReceivers;
             }
         }
 
@@ -6570,44 +6680,9 @@ class InvoiceTableManager {
             return;
         }
 
-        // Normalize to objects expected by renderer
-        const normalizeReceiver = (r) => {
-            if (!r) return null;
-            if (typeof r === 'object') {
-                const company = r.company || r.name || r.registrationName || '';
-                let ident = r.identifications || {};
-                if (Array.isArray(ident)) {
-                    const ids = {};
-                    ident.forEach(id => {
-                        const scheme = (id.schemeId || '').toUpperCase();
-                        if (scheme === 'TIN') ids.tin = id.id;
-                        else if (scheme === 'BRN') ids.brn = id.id;
-                        else if (scheme === 'SST') ids.sst = id.id;
-                        else if (scheme === 'TTX') ids.ttx = id.id;
-                    });
-                    ident = ids;
-                }
-                const contact = r.contact || {};
-                const addr = r.address && typeof r.address === 'object' ? r.address : {};
-                return {
-                    company,
-                    identifications: ident,
-                    email: r.email || contact.email || null,
-                    phone: r.phone || contact.phone || null,
-                    address: r.address?.line || r.address?.address || addr.line || null,
-                    city: r.city || addr.city || null,
-                    state: r.state || addr.state || null
-                };
-            }
-            if (typeof r === 'string') {
-                return { company: r, identifications: {}, email: null, phone: null, address: null, city: null, state: null };
-            }
-            return null;
-        };
-
-        const receivers = rawReceivers.map(normalizeReceiver).filter(Boolean);
-        const hasLimitedDetails = receivers.every(
-            (r) => !r.identifications?.tin && !r.identifications?.brn
+        const receivers = rawReceivers.map(normalizeReceiverRecord).filter(Boolean);
+        const hasLimitedDetails = !receivers.some(
+            (r) => r.identifications?.tin || r.identifications?.brn
         );
 
         // Create modal HTML
@@ -6633,42 +6708,9 @@ class InvoiceTableManager {
             const endIndex = startIndex + itemsPerPage;
             const pageReceivers = filteredReceivers.slice(startIndex, endIndex);
 
-            return pageReceivers.map((receiver, index) => `
-                <div class="om-receiver-card receiver-item"
-                data-company="${encodeURIComponent(receiver.company || 'N/A')}"
-                data-tin="${encodeURIComponent(receiver.identifications?.tin || 'N/A')}"
-                data-brn="${encodeURIComponent(receiver.identifications?.brn || 'N/A')}"
-                data-email="${encodeURIComponent(receiver.email || 'N/A')}"
-                data-phone="${encodeURIComponent(receiver.phone || 'N/A')}"
-                data-address="${encodeURIComponent(receiver.address || 'N/A')}"
-                data-city="${encodeURIComponent(receiver.city || 'N/A')}"
-                data-state="${encodeURIComponent(receiver.state || 'N/A')}"
-                data-row-stripe="${(startIndex + index) % 2}"
-                onclick="window.outboundManualExcel.copyReceiverInfo(null, this, ${(startIndex + index) % 2 === 0})">
-                    <div class="d-flex align-items-start gap-3">
-                        <span class="om-receiver-index">${startIndex + index + 1}</span>
-                        <div class="flex-grow-1 om-receiver-body">
-                            <div class="fw-bold text-dark mb-1 om-receiver-company">
-                                <i class="bi bi-building me-2"></i>${receiver.company || 'N/A'}
-                            </div>
-                            <div class="row g-2 text-muted om-receiver-meta">
-                                <div class="col-md-6">
-                                    <div><i class="bi bi-hash me-1"></i><strong>TIN:</strong> ${receiver.identifications?.tin || 'N/A'}</div>
-                                    <div><i class="bi bi-card-text me-1"></i><strong>BRN:</strong> ${receiver.identifications?.brn || 'N/A'}</div>
-                                </div>
-                                <div class="col-md-6">
-                                    <div><i class="bi bi-envelope me-1"></i><strong>Email:</strong> ${receiver.email || 'N/A'}</div>
-                                    <div><i class="bi bi-telephone me-1"></i><strong>Phone:</strong> ${receiver.phone || 'N/A'}</div>
-                                </div>
-                            </div>
-                            <div class="text-muted mt-1 om-receiver-address">
-                                <i class="bi bi-geo-alt me-1"></i>${receiver.address || 'N/A'}, ${receiver.city || 'N/A'}, ${receiver.state || 'N/A'}
-                            </div>
-                        </div>
-                        <i class="bi bi-clipboard om-receiver-copy" title="Click to copy receiver info"></i>
-                    </div>
-                </div>
-            `).join('');
+            return pageReceivers.map((receiver, index) =>
+                buildReceiverCardHtml(receiver, startIndex + index + 1)
+            ).join('');
         };
 
         const createPagination = (totalPages, currentPage, filteredCount) => {
@@ -6737,7 +6779,7 @@ class InvoiceTableManager {
                             </small>
                             ${hasLimitedDetails ? `<small class="text-warning mt-1 d-block"><i class="bi bi-exclamation-circle me-1"></i>Limited details available for some receivers — TIN/BRN may show N/A for older uploads.</small>` : ''}
                         </div>
-                        <div id="receiverListContainer" style="max-height: 500px; overflow-y: auto; scrollbar-width: none; -ms-overflow-style: none;" class="hide-scrollbar">
+                        <div id="receiverListContainer" class="hide-scrollbar">
                             ${createReceiverList(receivers, 1)}
                         </div>
                         <div id="receiverPagination" class="mt-3">
@@ -6784,42 +6826,9 @@ class InvoiceTableManager {
         const endIndex = startIndex + state.itemsPerPage;
         const pageReceivers = state.filteredReceivers.slice(startIndex, endIndex);
 
-        const receiverList = pageReceivers.map((receiver, index) => `
-            <div class="om-receiver-card receiver-item"
-            data-company="${encodeURIComponent(receiver.company || 'N/A')}"
-            data-tin="${encodeURIComponent(receiver.identifications?.tin || 'N/A')}"
-            data-brn="${encodeURIComponent(receiver.identifications?.brn || 'N/A')}"
-            data-email="${encodeURIComponent(receiver.email || 'N/A')}"
-            data-phone="${encodeURIComponent(receiver.phone || 'N/A')}"
-            data-address="${encodeURIComponent(receiver.address || 'N/A')}"
-            data-city="${encodeURIComponent(receiver.city || 'N/A')}"
-            data-state="${encodeURIComponent(receiver.state || 'N/A')}"
-            data-row-stripe="${(startIndex + index) % 2}"
-            onclick="window.outboundManualExcel.copyReceiverInfo(null, this, ${(startIndex + index) % 2 === 0})">
-                <div class="d-flex align-items-start gap-3">
-                    <span class="om-receiver-index">${startIndex + index + 1}</span>
-                    <div class="flex-grow-1 om-receiver-body">
-                        <div class="fw-bold text-dark mb-1 om-receiver-company">
-                            <i class="bi bi-building me-2"></i>${receiver.company || 'N/A'}
-                        </div>
-                        <div class="row g-2 text-muted om-receiver-meta">
-                            <div class="col-md-6">
-                                <div><i class="bi bi-hash me-1"></i><strong>TIN:</strong> ${receiver.identifications?.tin || 'N/A'}</div>
-                                <div><i class="bi bi-card-text me-1"></i><strong>BRN:</strong> ${receiver.identifications?.brn || 'N/A'}</div>
-                            </div>
-                            <div class="col-md-6">
-                                <div><i class="bi bi-envelope me-1"></i><strong>Email:</strong> ${receiver.email || 'N/A'}</div>
-                                <div><i class="bi bi-telephone me-1"></i><strong>Phone:</strong> ${receiver.phone || 'N/A'}</div>
-                            </div>
-                        </div>
-                        <div class="text-muted mt-1 om-receiver-address">
-                            <i class="bi bi-geo-alt me-1"></i>${receiver.address || 'N/A'}, ${receiver.city || 'N/A'}, ${receiver.state || 'N/A'}
-                        </div>
-                    </div>
-                    <i class="bi bi-clipboard om-receiver-copy" title="Click to copy company name"></i>
-                </div>
-            </div>
-        `).join('');
+        const receiverList = pageReceivers.map((receiver, index) =>
+            buildReceiverCardHtml(receiver, startIndex + index + 1)
+        ).join('');
 
         // Update the list container
         const listContainer = document.getElementById('receiverListContainer');
@@ -6924,17 +6933,17 @@ class InvoiceTableManager {
     }
 
     // Copy receiver information to clipboard (async, matches invoice copy pattern)
-    async copyReceiverInfo(_unused, element, isEvenRow) {
+    async copyReceiverInfo(_unused, element) {
         try {
             // Build a well-formatted, multi-line receiver text from DOM/dataset
             const ds = element?.dataset || {};
             const decode = (v) => (typeof v === 'string' ? decodeURIComponent(v) : v);
-            const company = (decode(ds.company) || element.querySelector('.fw-bold')?.textContent || 'N/A').trim();
+            const company = (decode(ds.company) || element.querySelector('.om-receiver-company')?.textContent || 'N/A').trim();
 
             const infoRows = [];
-            const rowEl = element.querySelector('.row.g-2');
-            if (rowEl) {
-                rowEl.querySelectorAll('div').forEach(div => {
+            const metaEl = element.querySelector('.om-receiver-meta');
+            if (metaEl) {
+                metaEl.querySelectorAll('.om-receiver-field').forEach((div) => {
                     const t = (div.textContent || '').trim();
                     if (t && /TIN:|BRN:|Email:|Phone:/i.test(t)) infoRows.push(t);
                 });
@@ -6950,7 +6959,7 @@ class InvoiceTableManager {
                 if (phone && phone !== 'N/A') infoRows.push(`Phone: ${phone}`);
             }
 
-            const addrEl = element.querySelector('.text-muted.mt-1');
+            const addrEl = element.querySelector('.om-receiver-address');
             let addressLine = (addrEl?.textContent || '').trim();
             if (!addressLine && (ds.address || ds.city || ds.state)) {
                 const addrParts = [decode(ds.address), decode(ds.city), decode(ds.state)].filter(Boolean).join(', ');
@@ -6968,12 +6977,11 @@ class InvoiceTableManager {
             await this.copyTextWithFallback(textToCopy);
 
             // Visual feedback
-            const originalBg = isEvenRow ? '#fefdf8' : '#ffffff';
-            element.style.background = '#fef3c7';
+            element.style.boxShadow = '0 0 0 2px #f59e0b';
             element.style.transform = 'scale(0.98)';
             setTimeout(() => {
-                element.style.background = originalBg;
-                element.style.transform = 'translateX(0)';
+                element.style.boxShadow = '';
+                element.style.transform = '';
             }, 1000);
 
             // Show toast notification (uses global ToastManager pattern)

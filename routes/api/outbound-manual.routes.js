@@ -162,11 +162,20 @@ function buildListInvoiceDetailsFromProcessedData(processedData) {
     }));
 }
 
-function loadInvoiceDetailsForList(file, metadata) {
-    if (Array.isArray(metadata?.listInvoiceDetails) && metadata.listInvoiceDetails.length > 0) {
-        return metadata.listInvoiceDetails;
-    }
+function metadataHasLimitedPartyDetails(list) {
+    if (!Array.isArray(list) || list.length === 0) return true;
 
+    return list.every((inv) => {
+        const buyer = inv?.buyer;
+        if (!buyer) return true;
+        if (typeof buyer === 'string') return true;
+
+        const ids = normalizeIds(buyer.identifications);
+        return !ids.tin && !ids.brn;
+    });
+}
+
+function loadSimplifiedLogInvoices(file) {
     try {
         const logs =
             typeof file.processing_logs === 'string'
@@ -202,6 +211,27 @@ function loadInvoiceDetailsForList(file, metadata) {
         }
     } catch (e) {
         console.warn('Failed to read simplified log for file:', file.filename, e.message);
+    }
+
+    return [];
+}
+
+function loadInvoiceDetailsForList(file, metadata) {
+    const metadataList = Array.isArray(metadata?.listInvoiceDetails)
+        ? metadata.listInvoiceDetails
+        : [];
+    const simplifiedInvoices = loadSimplifiedLogInvoices(file);
+
+    if (metadataList.length > 0 && !metadataHasLimitedPartyDetails(metadataList)) {
+        return metadataList;
+    }
+
+    if (simplifiedInvoices.length > 0) {
+        return simplifiedInvoices;
+    }
+
+    if (metadataList.length > 0) {
+        return metadataList;
     }
 
     return [];
@@ -3365,18 +3395,20 @@ router.get(
       }
 
       // Convert BigInt to string for JSON serialization
+      const parsedMetadata = file.metadata ? JSON.parse(file.metadata) : null;
       const fileDetails = {
         ...file,
         file_size: file.file_size.toString(),
         processing_logs: file.processing_logs
           ? JSON.parse(file.processing_logs)
           : null,
-        metadata: file.metadata ? JSON.parse(file.metadata) : null,
+        metadata: parsedMetadata,
         lhdn_response: file.lhdn_response
           ? JSON.parse(file.lhdn_response)
           : null,
         status: resolveManualListStatus(file),
         error_message: file.error_message,
+        invoiceDetails: loadInvoiceDetailsForList(file, parsedMetadata),
       };
 
       res.json({

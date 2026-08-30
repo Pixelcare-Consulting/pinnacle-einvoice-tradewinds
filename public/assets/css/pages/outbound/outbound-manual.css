@@ -82,17 +82,17 @@
 .outbound-table-responsive table th:nth-child(8),
 .outbound-table-responsive table td:nth-child(8),
 #invoiceTable th:nth-child(8),
-#invoiceTable td:nth-child(8) { width: 100px; text-align: center; }
+#invoiceTable td:nth-child(8) { width: 118px; min-width: 118px; text-align: center; }
 
 .outbound-table-responsive table th:nth-child(9),
 .outbound-table-responsive table td:nth-child(9),
 #invoiceTable th:nth-child(9),
-#invoiceTable td:nth-child(9) { width: 100px; text-align: center; }
+#invoiceTable td:nth-child(9) { width: 110px; min-width: 110px; text-align: center; }
 
 .outbound-table-responsive table th:nth-child(10),
 .outbound-table-responsive table td:nth-child(10),
 #invoiceTable th:nth-child(10),
-#invoiceTable td:nth-child(10) { width: 100px; text-align: center; }
+#invoiceTable td:nth-child(10) { width: 118px; min-width: 118px; text-align: center; }
 
 /* columns 11–12 hidden (statusPriority, id) */
 
@@ -301,6 +301,47 @@
     font-size: 0.8rem;
     color: #6b7280;
     font-weight: 500;
+    white-space: nowrap;
+}
+
+/* Compact date cells — prevent truncation at narrow column widths */
+.outbound-date-cell {
+    padding-left: 0.35rem !important;
+    padding-right: 0.35rem !important;
+}
+
+.outbound-date-cell .cell-group--date {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    width: 100%;
+}
+
+.outbound-date-cell .cell-main--date,
+.outbound-date-cell .cell-sub--date {
+    width: auto;
+    max-width: none;
+    overflow: visible;
+    text-overflow: unset;
+    white-space: nowrap;
+    justify-content: center;
+    gap: 4px;
+    font-size: 0.8125rem;
+    padding-left: 0;
+}
+
+.outbound-date-cell .cell-main--date i,
+.outbound-date-cell .cell-sub--date i {
+    flex-shrink: 0;
+    font-size: 0.75rem;
+    width: 12px;
+}
+
+.outbound-date-cell .cell-sub--date {
+    font-size: 0.7rem;
+    color: #6c757d;
 }
 
 /* Text Utilities */
@@ -325,6 +366,18 @@ input[type="checkbox"] {
 }
 
 /* Responsive Adjustments */
+@media (max-width: 1400px) {
+    .outbound-date-cell .cell-main--date i,
+    .outbound-date-cell .cell-sub--date i {
+        display: none;
+    }
+
+    .outbound-date-cell .cell-main--date,
+    .outbound-date-cell .cell-sub--date {
+        gap: 0;
+    }
+}
+
 @media (max-width: 992px) {
     .outbound-table-responsive thead th,
     #invoiceTable thead th {
@@ -662,43 +715,62 @@ input[type="checkbox"] {
     flex: 0 0 auto;
 }
 
-.outbound-btn-upload {
-    background: #405189;
-    border: 1px solid #405189;
-    color: #fff;
+.outbound-toolbar-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border-radius: 12px;
+    padding: 0.65rem 1.25rem;
     font-weight: 600;
+    transition: all 0.3s ease;
+    white-space: nowrap;
 }
 
-.outbound-btn-upload:hover:not(:disabled) {
-    background: #364574;
-    border-color: #364574;
+.outbound-toolbar-btn--primary {
+    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+    border: none;
     color: #fff;
 }
 
-.outbound-btn-bulk-submit {
-    background: #fff;
-    border: 1px solid #94a3b8;
-    color: #475569;
-    font-weight: 600;
+.outbound-toolbar-btn--primary:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(30, 60, 114, 0.3);
+    color: #fff;
 }
 
-.outbound-btn-bulk-submit:hover:not(:disabled) {
-    background: #f8fafc;
-    border-color: #64748b;
-    color: #334155;
+.outbound-toolbar-btn--secondary {
+    background: #fff;
+    border: 1px solid #1e3c72;
+    color: #1e3c72;
 }
 
-.outbound-btn-bulk-delete {
+.outbound-toolbar-btn--secondary:hover:not(:disabled) {
+    transform: translateY(-2px);
+    background: #f0f4fa;
+    border-color: #2a5298;
+    color: #1e3c72;
+    box-shadow: 0 4px 12px rgba(30, 60, 114, 0.15);
+}
+
+.outbound-toolbar-btn--danger {
     background: #fff;
-    border: 1px solid #f87171;
+    border: 1px solid #dc2626;
     color: #dc2626;
-    font-weight: 600;
 }
 
-.outbound-btn-bulk-delete:hover:not(:disabled) {
+.outbound-toolbar-btn--danger:hover:not(:disabled) {
+    transform: translateY(-2px);
     background: #fef2f2;
-    border-color: #ef4444;
+    border-color: #b91c1c;
     color: #b91c1c;
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.15);
+}
+
+.outbound-toolbar-btn:disabled {
+    opacity: 0.65;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
 }
 
 @media (max-width: 992px) {
@@ -750,57 +822,99 @@ input[type="checkbox"] {
     }
 }
 
+#receiverModal #receiverListContainer {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1rem;
+    max-height: 60vh;
+    overflow-y: auto;
+    padding: 4px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+}
+
 #receiverModal .om-receiver-card {
     position: relative;
-    padding: 12px 12px 12px 16px;
-    margin: 4px 0;
-    border-radius: 8px;
-    border-left: 4px solid #f59e0b;
-    transition: background 0.2s ease, transform 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    padding: 1rem;
+    margin: 0;
+    transition: box-shadow 0.2s ease, transform 0.2s ease;
     cursor: pointer;
 }
 
-#receiverModal .om-receiver-card[data-row-stripe="0"] {
-    background: #fefdf8;
-}
-
-#receiverModal .om-receiver-card[data-row-stripe="1"] {
-    background: #ffffff;
-}
-
 #receiverModal .om-receiver-card:hover {
-    background: #fef3c7;
-    transform: translateX(4px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.1);
+    transform: translateY(-2px);
+}
+
+#receiverModal .om-receiver-card-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #f1f5f9;
 }
 
 #receiverModal .om-receiver-index {
     background: #f59e0b;
-    color: white;
+    color: #fff;
     padding: 4px 8px;
     border-radius: 6px;
     font-size: 11px;
     font-weight: 600;
-    min-width: 35px;
+    min-width: 28px;
     text-align: center;
+    flex-shrink: 0;
 }
 
 #receiverModal .om-receiver-company {
     font-size: 14px;
+    flex: 1;
+    min-width: 0;
+    word-break: break-word;
 }
 
 #receiverModal .om-receiver-meta {
     font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+#receiverModal .om-receiver-field {
+    color: #64748b;
+}
+
+#receiverModal .om-receiver-field strong {
+    color: #475569;
 }
 
 #receiverModal .om-receiver-address {
     font-size: 11px;
+    color: #64748b;
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid #f1f5f9;
 }
 
 #receiverModal .om-receiver-copy {
     color: #6b7280;
     font-size: 14px;
     flex-shrink: 0;
-    padding-right: 4px;
+    padding: 2px;
+}
+
+@media (max-width: 768px) {
+    #receiverModal #receiverListContainer {
+        grid-template-columns: 1fr;
+    }
 }
 
 #receiverListContainer.hide-scrollbar {
