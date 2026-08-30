@@ -20,6 +20,7 @@
 
 <!-- Template Main CSS Files -->
 <link href="/assets/css/pages/outbound/outbound-table.css?v=20260826" rel="stylesheet">
+<link href="/assets/css/pages/outbound/outbound-manual.css?v=20260830" rel="stylesheet">
 <!-- Excel Loading Animation CSS -->
 <link href="/assets/css/pages/outbound/excel-loading.css" rel="stylesheet">
 <!-- Invoice Preview Modal Enhancements -->
@@ -943,138 +944,6 @@
     background-color: #1a365d;
     color: white;
     box-shadow: 0 2px 4px rgba(26,54,93,0.2);
-}
-
-/* Outbound toolbar — two-row layout */
-.outbound-toolbar {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-}
-
-.outbound-toolbar-filters {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.75rem;
-}
-
-.outbound-toolbar-search {
-    flex: 1 1 280px;
-    min-width: 200px;
-}
-
-.team-view-filters {
-    display: inline-flex;
-    align-items: stretch;
-    border-bottom: 2px solid #e5e7eb;
-    gap: 0;
-}
-
-.team-view-filters button {
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -2px;
-    padding: 0.5rem 1rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: #64748b;
-    cursor: pointer;
-    transition: color 0.15s ease, border-color 0.15s ease;
-    white-space: nowrap;
-}
-
-.team-view-filters button:hover {
-    color: #405189;
-}
-
-.team-view-filters button.active {
-    color: #405189;
-    border-bottom-color: #405189;
-    font-weight: 600;
-}
-
-.outbound-action-bar {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 0.5rem;
-}
-
-.outbound-btn-upload {
-    background: #405189;
-    border: 1px solid #405189;
-    color: #fff;
-    font-weight: 600;
-}
-
-.outbound-btn-upload:hover:not(:disabled) {
-    background: #364574;
-    border-color: #364574;
-    color: #fff;
-}
-
-.outbound-btn-bulk-submit {
-    background: #fff;
-    border: 1px solid #94a3b8;
-    color: #475569;
-    font-weight: 600;
-}
-
-.outbound-btn-bulk-submit:hover:not(:disabled) {
-    background: #f8fafc;
-    border-color: #64748b;
-    color: #334155;
-}
-
-.outbound-btn-bulk-delete {
-    background: #fff;
-    border: 1px solid #f87171;
-    color: #dc2626;
-    font-weight: 600;
-}
-
-.outbound-btn-bulk-delete:hover:not(:disabled) {
-    background: #fef2f2;
-    border-color: #ef4444;
-    color: #b91c1c;
-}
-
-@media (max-width: 992px) {
-    .outbound-toolbar-filters {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    .outbound-toolbar-search {
-        flex: 1 1 100%;
-        width: 100%;
-    }
-
-    .team-view-filters {
-        width: 100%;
-        justify-content: flex-start;
-    }
-
-    .outbound-action-bar {
-        justify-content: stretch;
-    }
-
-    .outbound-action-bar .btn {
-        flex: 1 1 calc(33.333% - 0.5rem);
-    }
-}
-
-@media (max-width: 768px) {
-    .outbound-action-bar {
-        flex-direction: column;
-    }
-
-    .outbound-action-bar .btn {
-        flex: 1 1 100%;
-        width: 100%;
-    }
 }
 
 tr.outbound-row-highlight td {
@@ -2856,44 +2725,37 @@ tr.outbound-row-highlight td {
 
 
                     </div>
-                    <div class="table-controls">
-                        <div class="d-flex align-items-center gap-1">
-                            <div class="modern-length">
-                                <!-- Length control will be inserted by DataTables -->
-                            </div>
-                            <div class="modern-search">
-                                <!-- Search control will be inserted by DataTables -->
-                            </div>
-                        </div>
-                    </div>
                     <div class="table-body-container">
                         <div class="responsive-table-container">
                             <div class="table-section">
                                 <div class="outbound-table-container">
                                     <div>
-                                        <!-- Toolbar: filters row + actions row -->
+                                        <!-- Toolbar: length + tabs (left), search + actions (right) -->
                                         <div class="outbound-toolbar mb-3">
-                                            <div class="outbound-toolbar-filters">
-                                                <div class="search-wrapper position-relative outbound-toolbar-search">
-                                                    <i class="bi bi-search position-absolute top-50 start-0 translate-middle-y ms-3 text-muted"></i>
-                                                    <input type="text" class="form-control form-control-lg ps-5" id="globalSearch"
-                                                        placeholder="Search documents...">
-                                                </div>
+                                            <div class="outbound-length-slot" id="outboundLengthSlot" aria-label="Table page size"></div>
+                                            <div class="outbound-toolbar-tabs">
                                                 <div class="team-view-filters">
                                                     <button type="button" class="active" data-team-view="mine">My Uploads</button>
                                                     <button type="button" data-team-view="all">All Team</button>
                                                 </div>
                                             </div>
-                                            <div class="outbound-action-bar">
-                                                <button class="btn outbound-btn-upload btn-sm" id="openExcelUploadModalBtn" data-bs-toggle="modal" data-bs-target="#flatFileUploadModal" title="Upload Excel template for processing">
-                                                    <i class="bi bi-file-earmark-excel me-1"></i>Upload Excel Template
-                                                </button>
-                                                <button class="btn outbound-btn-bulk-submit btn-sm" id="bulkSubmitBtn" disabled title="Submit selected files to LHDN">
-                                                    <i class="bi bi-cloud-upload me-1"></i>Bulk Submit
-                                                </button>
-                                                <button class="btn outbound-btn-bulk-delete btn-sm" id="bulkDeleteBtn" disabled title="Delete selected files">
-                                                    <i class="bi bi-trash me-1"></i>Bulk Delete
-                                                </button>
+                                            <div class="outbound-toolbar-actions">
+                                                <div class="search-wrapper position-relative outbound-toolbar-search">
+                                                    <i class="bi bi-search position-absolute top-50 start-0 translate-middle-y ms-3 text-muted"></i>
+                                                    <input type="text" class="form-control form-control-lg ps-5" id="globalSearch"
+                                                        placeholder="Search documents..." aria-label="Search documents">
+                                                </div>
+                                                <div class="outbound-action-bar">
+                                                    <button class="btn outbound-btn-upload btn-sm" id="openExcelUploadModalBtn" data-bs-toggle="modal" data-bs-target="#flatFileUploadModal" title="Upload Excel template for processing">
+                                                        <i class="bi bi-file-earmark-excel me-1"></i>Upload Excel Template
+                                                    </button>
+                                                    <button class="btn outbound-btn-bulk-submit btn-sm" id="bulkSubmitBtn" disabled title="Submit selected files to LHDN">
+                                                        <i class="bi bi-cloud-upload me-1"></i>Bulk Submit
+                                                    </button>
+                                                    <button class="btn outbound-btn-bulk-delete btn-sm" id="bulkDeleteBtn" disabled title="Delete selected files">
+                                                        <i class="bi bi-trash me-1"></i>Bulk Delete
+                                                    </button>
+                                                </div>
                                             </div>
                                         </div>
 
@@ -3203,7 +3065,7 @@ tr.outbound-row-highlight td {
 <!-- New submission orchestrator -->
 <script src="/assets/js/modules/submission/submission-client.js?v=20260828"></script>
 <!-- Excel validation functions -->
-<script src="/assets/js/modules/excel/outbound-manual.js?v=20260830-1"></script>
+<script src="/assets/js/modules/excel/outbound-manual.js?v=20260830-2"></script>
 <!-- <script src="/assets/js/modules/tutorial/guided-tour.js"></script> -->
 <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
 
@@ -3227,7 +3089,9 @@ tr.outbound-row-highlight td {
                     <i class="bi bi-shield-check"></i>
                     TIN Validation Results
                 </h5>
-                <button type="button" class="btn-lhdn d-flex align-items-center justify-content-center" data-bs-dismiss="modal"></button>
+                <button type="button" class="btn-lhdn d-flex align-items-center justify-content-center" data-bs-dismiss="modal">
+                    <span class="visually-hidden">Close</span>
+                </button>
 
             </div>
             <div class="modal-body">
@@ -3251,7 +3115,7 @@ tr.outbound-row-highlight td {
                     <i class="bi bi-exclamation-triangle"></i>
                     Validation Error
                 </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
                 <div id="validationErrorList">
@@ -3339,7 +3203,8 @@ tr.outbound-row-highlight td {
             <span id="currentStepIndicator">1</span>/<span id="totalStepsIndicator">6</span>
         </div>
         <button type="button" class="tooltip-close-btn" id="closeTourBtn">
-            <i class="bi bi-x"></i>
+            <i class="bi bi-x" aria-hidden="true"></i>
+            <span class="visually-hidden">Close tour</span>
         </button>
     </div>
     <div class="tooltip-body">
@@ -3350,7 +3215,7 @@ tr.outbound-row-highlight td {
     </div>
     <div class="tooltip-progress">
         <div class="progress">
-            <div class="progress-bar" id="tourProgressBar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+            <div class="progress-bar" id="tourProgressBar" role="progressbar" style="width: 0%;" aria-label="Guided tour progress" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
         </div>
         <div class="step-indicators d-flex justify-content-between px-3 mt-2" id="stepIndicators">
             <!-- Step indicators will be dynamically inserted -->
@@ -3358,7 +3223,8 @@ tr.outbound-row-highlight td {
     </div>
     <div class="tooltip-footer">
         <button type="button" class="tooltip-btn tooltip-btn-prev" id="prevStepBtn" disabled>
-            <i class="bi bi-arrow-left"></i>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i>
+            <span class="visually-hidden">Previous step</span>
         </button>
         <button type="button" class="tooltip-btn tooltip-btn-skip" id="skipTourBtn">
             Skip

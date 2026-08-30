@@ -3617,6 +3617,31 @@ class InvoiceTableManager {
 
         this.initializeTable();
         this.initializeTeamViewFilter();
+        this.initializeGlobalSearch();
+    }
+
+    initializeGlobalSearch() {
+        const globalSearch = document.getElementById('globalSearch');
+        if (!globalSearch) return;
+        globalSearch.addEventListener('input', (e) => {
+            if (this.table) {
+                this.table.search(e.target.value).draw();
+            }
+        });
+    }
+
+    relocateLengthControl() {
+        const slot = document.getElementById('outboundLengthSlot');
+        const lengthControl = document.querySelector('.outbound-length-control');
+        const controls = document.querySelector('.outbound-controls');
+
+        if (slot && lengthControl && !slot.contains(lengthControl)) {
+            slot.appendChild(lengthControl);
+        }
+
+        if (controls) {
+            controls.remove();
+        }
     }
 
     initializeTable() {
@@ -3764,6 +3789,9 @@ class InvoiceTableManager {
                 autoWidth: false,
                 pageLength: 10,
                 dom: '<"outbound-controls"<"outbound-length-control"l>><"outbound-table-responsive"t><"outbound-bottom"<"outbound-info"i><"outbound-pagination"p>>',
+                initComplete: () => {
+                    this.relocateLengthControl();
+                },
                 processing: true,
                 serverSide: false,
                 ajax: {
@@ -3947,13 +3975,11 @@ class InvoiceTableManager {
                         });
                     }
 
-                        // Ensure table sits below controls with visual separation
+                        // Keep visual separation between toolbar and table
                         try {
-                            const controls = document.querySelector('.outbound-controls');
-                            if (controls) {
-                                controls.style.marginBottom = '12px';
-                                controls.style.paddingBottom = '6px';
-                                controls.style.borderBottom = '1px solid #e5e7eb';
+                            const toolbar = document.querySelector('.outbound-toolbar');
+                            if (toolbar && !toolbar.style.borderBottom) {
+                                toolbar.style.marginBottom = '12px';
                             }
                             const wrap = document.querySelector('.outbound-table-responsive');
                             if (wrap) {
