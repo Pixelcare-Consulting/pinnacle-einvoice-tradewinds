@@ -3957,7 +3957,6 @@ class InvoiceTableManager {
                     {
                         data: 'submittedDate',
                         title: 'SUBMITTED',
-                        className: 'text-center outbound-date-cell',
                         orderable: true,
                         render: (data, type) => {
                             if (type === 'sort' || type === 'type') {
@@ -3979,14 +3978,12 @@ class InvoiceTableManager {
                     {
                         data: 'status',
                         title: 'STATUS',
-                        className: 'text-center om-status-cell',
                         render: (data, type, row) => this.renderStatus(data, type, row)
                     },
                     {
                         data: 'totalAmount',
                         title: 'TOTAL AMOUNT',
                         width: '15%',
-                        className: 'text-end om-amount-cell',
                         render: (data) => this.renderTotalAmount(data)
                     },
                     {
