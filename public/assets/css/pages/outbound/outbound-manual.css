@@ -15,18 +15,26 @@
 }
 
 /* Table Body Container */
-.table-body-container {
-    overflow-x: auto;
+.table-body-container,
+.table-container-wrapper .table-body-container {
+    overflow-x: hidden;
     min-height: 400px;
     position: relative;
     border-radius: 8px;
-    border: 1px solid #e9ecef;
+    border: none;
+    box-shadow: none;
 }
 
 /* Responsive Table Container */
-.responsive-table-container {
-    overflow-x: auto;
+.responsive-table-container,
+.table-container-wrapper .responsive-table-container {
+    overflow-x: hidden;
     border-radius: 8px;
+}
+
+#invoiceTable {
+    width: 100% !important;
+    table-layout: fixed;
 }
 
 /* Main Table Styling */
@@ -47,69 +55,69 @@
 .outbound-table-responsive table th:nth-child(1),
 .outbound-table-responsive table td:nth-child(1),
 #invoiceTable th:nth-child(1),
-#invoiceTable td:nth-child(1) { width: 40px; text-align: center; }
+#invoiceTable td:nth-child(1) { width: 3%; text-align: center; }
 
 .outbound-table-responsive table th:nth-child(2),
 .outbound-table-responsive table td:nth-child(2),
 #invoiceTable th:nth-child(2),
-#invoiceTable td:nth-child(2) { width: 50px; text-align: center; }
+#invoiceTable td:nth-child(2) { width: 3%; text-align: center; }
 
 .outbound-table-responsive table th:nth-child(3),
 .outbound-table-responsive table td:nth-child(3),
 #invoiceTable th:nth-child(3),
-#invoiceTable td:nth-child(3) { width: 180px; text-align: left; }
+#invoiceTable td:nth-child(3) { width: 12%; text-align: left; }
 
 .outbound-table-responsive table th:nth-child(4),
 .outbound-table-responsive table td:nth-child(4),
 #invoiceTable th:nth-child(4),
-#invoiceTable td:nth-child(4) { width: 160px; text-align: left; }
+#invoiceTable td:nth-child(4) { width: 10%; text-align: left; }
 
 .outbound-table-responsive table th:nth-child(5),
 .outbound-table-responsive table td:nth-child(5),
 #invoiceTable th:nth-child(5),
-#invoiceTable td:nth-child(5) { width: 150px; text-align: left; }
+#invoiceTable td:nth-child(5) { width: 9%; text-align: left; }
 
 .outbound-table-responsive table th:nth-child(6),
 .outbound-table-responsive table td:nth-child(6),
 #invoiceTable th:nth-child(6),
-#invoiceTable td:nth-child(6) { width: 150px; text-align: left; }
+#invoiceTable td:nth-child(6) { width: 9%; text-align: left; }
 
 .outbound-table-responsive table th:nth-child(7),
 .outbound-table-responsive table td:nth-child(7),
 #invoiceTable th:nth-child(7),
-#invoiceTable td:nth-child(7) { width: 110px; text-align: center; }
+#invoiceTable td:nth-child(7) { width: 7%; text-align: center; }
 
 .outbound-table-responsive table th:nth-child(8),
 .outbound-table-responsive table td:nth-child(8),
 #invoiceTable th:nth-child(8),
-#invoiceTable td:nth-child(8) { width: 118px; min-width: 118px; text-align: center; }
+#invoiceTable td:nth-child(8) { width: 9%; min-width: unset; text-align: center; }
 
 .outbound-table-responsive table th:nth-child(9),
 .outbound-table-responsive table td:nth-child(9),
 #invoiceTable th:nth-child(9),
-#invoiceTable td:nth-child(9) { width: 110px; min-width: 110px; text-align: center; }
+#invoiceTable td:nth-child(9) { width: 10%; min-width: unset; text-align: center; }
 
 .outbound-table-responsive table th:nth-child(10),
 .outbound-table-responsive table td:nth-child(10),
 #invoiceTable th:nth-child(10),
-#invoiceTable td:nth-child(10) { width: 118px; min-width: 118px; text-align: center; }
+#invoiceTable td:nth-child(10) { width: 9%; min-width: unset; text-align: center; }
 
 /* columns 11–12 hidden (statusPriority, id) */
 
 .outbound-table-responsive table th:nth-child(13),
 .outbound-table-responsive table td:nth-child(13),
 #invoiceTable th:nth-child(13),
-#invoiceTable td:nth-child(13) { width: 120px; text-align: center; }
+#invoiceTable td:nth-child(13) { width: 8%; text-align: center; }
 
 .outbound-table-responsive table th:nth-child(14),
 .outbound-table-responsive table td:nth-child(14),
 #invoiceTable th:nth-child(14),
-#invoiceTable td:nth-child(14) { width: 120px; text-align: right; }
+#invoiceTable td:nth-child(14) { width: 8%; text-align: right; }
 
 .outbound-table-responsive table th:nth-child(15),
 .outbound-table-responsive table td:nth-child(15),
 #invoiceTable th:nth-child(15),
-#invoiceTable td:nth-child(15) { width: 180px; text-align: center; }
+#invoiceTable td:nth-child(15) { width: 9%; text-align: center; }
 
 /* Modern Table Header */
 .outbound-table-responsive thead th,
@@ -302,6 +310,11 @@
     color: #6b7280;
     font-weight: 500;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    display: inline-block;
+    vertical-align: bottom;
 }
 
 /* Compact date cells — prevent truncation at narrow column widths */
@@ -321,10 +334,10 @@
 
 .outbound-date-cell .cell-main--date,
 .outbound-date-cell .cell-sub--date {
-    width: auto;
-    max-width: none;
-    overflow: visible;
-    text-overflow: unset;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
     justify-content: center;
     gap: 4px;
@@ -597,24 +610,79 @@ input[type="checkbox"] {
    OUTBOUND TOOLBAR & RECEIVER MODAL
    =================================== */
 
-.outbound-toolbar {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas:
-        "length actions"
-        "tabs actions";
-    gap: 0.5rem 1.5rem;
-    align-items: start;
-    padding-bottom: 0.75rem;
+/* Zone 1: Search outside cards */
+.outbound-table-search-outer {
+    margin-bottom: 1rem;
+    width: 100%;
+}
+
+.outbound-table-search-outer .outbound-toolbar-search {
+    width: 100%;
+    max-width: none;
+}
+
+/* Flatten outer wrapper — inner zones provide card styling */
+.table-container-wrapper .table-card {
+    background: transparent;
+    box-shadow: none;
+    border: none;
+    overflow: visible;
+    padding: 0;
+}
+
+/* Zone 2: Actions card (entries + buttons only) */
+.outbound-actions-card {
+    background: #fff;
+    border: 1px solid #e9ecef;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+    padding: 1rem 1.25rem;
     margin-bottom: 0.75rem;
-    border-bottom: 1px solid #e5e7eb;
+}
+
+/* Zone 3: Team tabs flush above table headers */
+.outbound-table-tabs {
+    padding: 0 0.25rem;
+    margin-bottom: 0;
+}
+
+.outbound-table-tabs .team-view-filters {
+    width: 100%;
+}
+
+/* Zone 4: Table grid */
+.outbound-table-grid {
+    margin-top: 0;
+    padding: 0 1rem 1.25rem;
+    border-top: none;
+    border-radius: 0 0 12px 12px;
+    overflow-x: hidden;
+}
+
+.outbound-toolbar {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.outbound-toolbar-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem 1.5rem;
+    width: 100%;
 }
 
 .outbound-length-slot {
-    grid-area: length;
     min-height: 38px;
     display: flex;
     align-items: center;
+    flex: 0 0 auto;
 }
 
 .outbound-length-slot .outbound-length-control,
@@ -642,26 +710,9 @@ input[type="checkbox"] {
     min-width: 80px;
 }
 
-.outbound-toolbar-tabs {
-    grid-area: tabs;
-}
-
-.outbound-toolbar-actions {
-    grid-area: actions;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    justify-self: end;
-    width: 100%;
-    max-width: max-content;
-}
-
 .outbound-toolbar-search {
-    flex: 0 1 320px;
-    min-width: 200px;
-    max-width: 360px;
+    width: 100%;
+    max-width: 480px;
 }
 
 .outbound-toolbar-search .form-control {
@@ -774,26 +825,13 @@ input[type="checkbox"] {
 }
 
 @media (max-width: 992px) {
-    .outbound-toolbar {
-        grid-template-columns: 1fr;
-        grid-template-areas:
-            "length"
-            "tabs"
-            "actions";
-        gap: 0.75rem;
-    }
-
-    .outbound-toolbar-actions {
-        justify-self: stretch;
-        max-width: none;
+    .outbound-toolbar-row {
         flex-direction: column;
         align-items: stretch;
     }
 
-    .outbound-toolbar-search {
-        flex: 1 1 100%;
+    .outbound-table-search-outer .outbound-toolbar-search {
         max-width: none;
-        width: 100%;
     }
 
     .team-view-filters {

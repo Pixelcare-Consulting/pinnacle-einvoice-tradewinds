@@ -4075,17 +4075,7 @@ class InvoiceTableManager {
                         });
                     }
 
-                        // Keep visual separation between toolbar and table
-                        try {
-                            const toolbar = document.querySelector('.outbound-toolbar');
-                            if (toolbar && !toolbar.style.borderBottom) {
-                                toolbar.style.marginBottom = '12px';
-                            }
-                            const wrap = document.querySelector('.outbound-table-responsive');
-                            if (wrap) {
-                                wrap.style.marginTop = '12px';
-                            }
-                        } catch (e) { /* noop */ }
+                        // Visual separation handled by CSS zone classes
 
 
                     // Initialize checkbox event handlers for bulk actions
@@ -4336,7 +4326,7 @@ class InvoiceTableManager {
             <div class="cell-group cell-group--date">
                 <div class="cell-main cell-main--date">
                     <i class="bi bi-calendar-event" aria-hidden="true"></i>
-                    <span class="date-value">${formattedDate}</span>
+                    <span class="date-value" title="${formattedDate}">${formattedDate}</span>
                 </div>
                 <div class="cell-sub cell-sub--date">
                     <i class="bi bi-clock" aria-hidden="true"></i>
@@ -4901,7 +4891,7 @@ class InvoiceTableManager {
                 <div class="cell-group cell-group--date">
                     <div class="cell-main cell-main--date">
                         <i class="bi bi-calendar-event" aria-hidden="true"></i>
-                        <span class="date-value">${formattedDate}</span>
+                        <span class="date-value" title="${formattedDate}">${formattedDate}</span>
                     </div>
                 </div>`;
         }
