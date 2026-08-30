@@ -36,65 +36,6 @@ function extractInvDateIsoFromProcessedData(processedData, filenameValidation) {
     return null;
 }
 
-function resolveManualListStatus(file) {
-    const s = String(file?.processing_status || '').toLowerCase();
-    if (s === 'submitted' || s === 'cancelled') return s;
-    if (s === 'processed' || s === 'ready to submit') return 'processed';
-    if (['error', 'pending', 'processing', 'uploaded'].includes(s)) {
-        return s === 'pending' ? 'pending' : s;
-    }
-    return s || 'uploaded';
-}
-
-function buildFailureLhdnResponse(errorLike) {
-    if (
-        errorLike &&
-        typeof errorLike === 'object' &&
-        (errorLike.status || errorLike.error || errorLike.success === false || errorLike.details)
-    ) {
-        return {
-            success: false,
-            status: errorLike.status || 'failed',
-            error: errorLike.error || {
-                message: errorLike.message || 'Submission failed',
-                details: errorLike.details || [],
-            },
-            details: errorLike.details || errorLike.error?.details || [],
-            validationFailed:
-                errorLike.validationFailed ||
-                errorLike.code === 'PRE_SUBMISSION_VALIDATION_FAILED',
-            timestamp: new Date(),
-        };
-    }
-    const message =
-        typeof errorLike === 'string'
-            ? errorLike
-            : errorLike?.message || 'Submission failed';
-    return {
-        success: false,
-        status: 'failed',
-        error: { message },
-        timestamp: new Date(),
-    };
-}
-
-async function markManualSubmitFailedKeepReady(fileId, errorLike) {
-    const lhdnResponse = buildFailureLhdnResponse(errorLike);
-    const message =
-        lhdnResponse.error?.message ||
-        errorLike?.message ||
-        'Submission failed';
-    await prisma.wP_UPLOADED_EXCEL_FILES.update({
-        where: { id: fileId },
-        data: {
-            processing_status: 'processed',
-            error_message: String(message),
-            lhdn_response: JSON.stringify(lhdnResponse),
-            updated_at: new Date(),
-        },
-    });
-}
-
 /** Compact invoice rows for table display (persisted in metadata). */
 function buildListInvoiceDetailsFromProcessedData(processedData) {
     return (processedData || []).map((doc) => ({
@@ -185,7 +126,7 @@ const LHDNSubmitter = require('../../services/lhdn/lhdnSubmitter');
 const { mapToLHDNFormat } = require('../../services/lhdn/lhdnMapper');
 // Duplicate Detection Services
 const ContentHasher = require('../../services/duplicateDetection/contentHasher');
-const ManualDuplicateService = require('../../services/duplicateDetection/manualDuplicateService');
+const InvoiceDuplicateChecker = require('../../services/duplicateDetection/invoiceDuplicateChecker');
 // Using LHDNSubmitter for submissions; token management is handled in token.service
 // const { getTokenAsTaxPayer, submitDocument } = require('../../services/lhdn/einvoice-sdk');
 
@@ -261,82 +202,6 @@ const excelUpload = multer({
     }
 });
 
-const INCOMING_EXCEL_DIR = 'C:\\SFTPRoot_Consolidation\\Incoming';
-
-function unlinkManualExcelFiles(file) {
-    const status = String(file?.processing_status || '').toLowerCase();
-    if (status === 'submitted' || status === 'cancelled') {
-        return;
-    }
-    const names = [file?.filename, file?.original_filename].filter(Boolean);
-    const paths = new Set();
-    if (file?.file_path) paths.add(file.file_path);
-    names.forEach((name) => paths.add(path.join(INCOMING_EXCEL_DIR, name)));
-    paths.forEach((filePath) => {
-        try {
-            if (filePath && fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
-            }
-        } catch (err) {
-            console.warn(`Failed to remove Excel file ${filePath}:`, err.message);
-        }
-    });
-}
-
-function manualStatusLabel(processingStatus) {
-    const status = String(processingStatus || '').toLowerCase();
-    if (status === 'submitted') return 'Submitted';
-    if (status === 'processed') return 'Ready to Submit';
-    if (status === 'processing') return 'Processing';
-    if (status === 'uploaded' || status === 'error') return 'Failed to upload';
-    if (status === 'pending') return 'Pending';
-    return processingStatus || 'already uploaded';
-}
-
-function formatExistingUploadBlock(existingFile, filename) {
-    const rowId = existingFile?.id;
-    const status = String(existingFile?.processing_status || '').toLowerCase();
-    const label = manualStatusLabel(existingFile?.processing_status);
-    const rowRef = rowId
-        ? `Delete row ${rowId} (${filename}) from your upload table`
-        : `Delete ${filename} from your upload table`;
-
-    if (status === 'submitted') {
-        return `Row ${rowId}: "${filename}" was already submitted. You cannot upload that same filename again. ${rowRef} only if you need to remove a non-submitted duplicate — submitted rows cannot be deleted.`;
-    }
-    return `Row ${rowId}: A file named "${filename}" is still in your upload table (${label}). ${rowRef} first (All List filter, search the filename). Changing the Excel name does not remove that row.`;
-}
-
-function buildDuplicateFilePayload(existingFile) {
-    if (!existingFile) return null;
-    return {
-        id: existingFile.id,
-        filename: existingFile.filename,
-        uploadDate: existingFile.upload_date,
-        status: existingFile.processing_status,
-        uploadedBy: existingFile.uploaded_by_name,
-        uploadedByUserId: existingFile.uploaded_by_user_id,
-    };
-}
-
-async function assertManualFileOwner(fileId, userId, actionLabel = 'modify') {
-    const file = await prisma.wP_UPLOADED_EXCEL_FILES.findFirst({
-        where: { id: fileId },
-    });
-    if (!file) {
-        return { ok: false, status: 404, error: 'File not found', file: null };
-    }
-    if (file.uploaded_by_user_id !== userId) {
-        return {
-            ok: false,
-            status: 403,
-            error: `You can only ${actionLabel} files you uploaded`,
-            file,
-        };
-    }
-    return { ok: true, file };
-}
-
 // API endpoint to validate Excel filename
 router.post('/validate-excel-filename', [auth.isApiAuthenticated], async (req, res) => {
     try {
@@ -392,6 +257,7 @@ router.post('/upload-consolidated', [auth.isApiAuthenticated, (req, res, next) =
         const existingFile = await prisma.wP_UPLOADED_EXCEL_FILES.findFirst({
             where: {
                 filename: req.file.originalname,
+                uploaded_by_user_id: req.user.id,
                 processing_status: { not: 'error' }
             }
         });
@@ -404,9 +270,12 @@ router.post('/upload-consolidated', [auth.isApiAuthenticated, (req, res, next) =
 
             return res.status(400).json({
                 success: false,
-                error: formatExistingUploadBlock(existingFile, req.file.originalname),
-                duplicateType: 'FILENAME_DUPLICATE',
-                duplicateFile: buildDuplicateFilePayload(existingFile),
+                error: `File '${req.file.originalname}' has already been uploaded. Please use a different filename or delete the existing file first.`,
+                duplicateFile: {
+                    id: existingFile.id,
+                    uploadDate: existingFile.upload_date,
+                    status: existingFile.processing_status
+                }
             });
         }
 
@@ -486,9 +355,8 @@ router.post('/upload-consolidated', [auth.isApiAuthenticated, (req, res, next) =
                 uploaded_by_user_id: req.user.id,
                 uploaded_by_name: req.user.username || req.user.FullName || 'Unknown',
                 upload_date: new Date(),
-                processing_status: 'uploaded',
+                processing_status: 'Pending',
                 invoice_count: dataRows.length,
-                processed_date: new Date(),
                 metadata: JSON.stringify({
                     headers,
                     totalAmount,
@@ -1504,6 +1372,11 @@ router.post('/upload-excel-template', [auth.isApiAuthenticated, excelUpload.sing
         // Additional file validations
         const maxFileSize = 10 * 1024 * 1024; // 10MB
         if (fileSize > maxFileSize) {
+            // Clean up uploaded file
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+
             return res.status(400).json({
                 success: false,
                 error: `File size (${(fileSize / 1024 / 1024).toFixed(2)}MB) exceeds maximum allowed size of 10MB`
@@ -1513,6 +1386,11 @@ router.post('/upload-excel-template', [auth.isApiAuthenticated, excelUpload.sing
         // Validate filename format
         const filenameValidation = validateExcelFilename(filename);
         if (!filenameValidation.isValid) {
+            // Clean up uploaded file
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+
             return res.status(400).json({
                 success: false,
                 error: filenameValidation.error
@@ -1523,18 +1401,20 @@ router.post('/upload-excel-template', [auth.isApiAuthenticated, excelUpload.sing
         const existingFile = await prisma.wP_UPLOADED_EXCEL_FILES.findFirst({
             where: {
                 filename: filename,
+                uploaded_by_user_id: req.user.id,
                 processing_status: { not: 'error' }
             }
         });
 
         if (existingFile) {
-            // Keep Incoming. A retry of the same name must not wipe the
-            // Excel that the existing Ready to Submit row still points at.
+            // Clean up uploaded file
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+
             return res.status(400).json({
                 success: false,
-                error: formatExistingUploadBlock(existingFile, filename),
-                duplicateType: 'FILENAME_DUPLICATE',
-                duplicateFile: buildDuplicateFilePayload(existingFile),
+                error: `A file with the name "${filename}" has already been uploaded and processed. Please use a different filename or delete the existing file first.`
             });
         }
 
@@ -1626,44 +1506,32 @@ router.post('/upload-excel-template', [auth.isApiAuthenticated, excelUpload.sing
             if (existingFileWithHash) {
                 console.log(`🔍 [DUPLICATE CHECK] Content duplicate found: File ID ${existingFileWithHash.id}`);
 
-                const ownerNote =
-                    existingFileWithHash.uploaded_by_user_id !== req.user.id &&
-                    existingFileWithHash.uploaded_by_name
-                        ? ` Uploaded by: ${existingFileWithHash.uploaded_by_name}.`
-                        : '';
+                // Clean up uploaded file
+                if (fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath);
+                }
 
-                const errorMessage =
-                    `This Excel has the same invoices as "${existingFileWithHash.filename}" (row ${existingFileWithHash.id}, still in your upload table).` +
-                    ` Not the file you just uploaded — delete the other row listed above.${ownerNote}` +
-                    ` If those invoices were already Submitted to LHDN, you cannot send them again even with a new filename.`;
-
-                // Keep Incoming + a Failed to upload row so she can trash from Outbound.
-                await prisma.wP_UPLOADED_EXCEL_FILES.update({
-                    where: { id: uploadedFile.id },
-                    data: {
-                        processing_status: 'error',
-                        error_message: errorMessage,
-                        metadata: JSON.stringify({
-                            originalPath: filePath,
-                            filenameValidation: filenameValidation,
-                            blockingFileId: existingFileWithHash.id,
-                        }),
-                        updated_at: new Date(),
-                    },
+                // Delete the database record we just created
+                await prisma.wP_UPLOADED_EXCEL_FILES.delete({
+                    where: { id: uploadedFile.id }
                 });
 
                 return res.status(409).json({
                     success: false,
-                    error: errorMessage,
+                    error: 'Duplicate content detected: This file contains the same invoice data as a previously uploaded file.',
                     duplicateType: 'CONTENT_DUPLICATE',
-                    existingFile: buildDuplicateFilePayload(existingFileWithHash),
-                    duplicateFile: buildDuplicateFilePayload(existingFileWithHash),
+                    existingFile: {
+                        id: existingFileWithHash.id,
+                        filename: existingFileWithHash.filename,
+                        uploadDate: existingFileWithHash.upload_date,
+                        uploadedBy: existingFileWithHash.uploaded_by_name
+                    }
                 });
             }
         }
 
         // Check for invoice-level duplicates
-        const duplicateCheck = await ManualDuplicateService.checkManualInvoiceDuplicates(
+        const duplicateCheck = await InvoiceDuplicateChecker.checkInvoiceDuplicates(
             processedData,
             req.user.id,
             uploadedFile.id
@@ -1679,36 +1547,23 @@ router.post('/upload-excel-template', [auth.isApiAuthenticated, excelUpload.sing
 
             console.log(`🔍 [DUPLICATE CHECK] Blocking upload due to ${criticalDuplicates.length} critical duplicates`);
 
-            const errorMessage =
-                'Some invoice numbers in this file were already processed or submitted. Delete the blocking row in your upload table (All List filter) or use new invoice numbers. A new filename alone does not make them new invoices.';
+            // Clean up uploaded file
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
 
-            // Keep Incoming + a Failed to upload row so she can trash from Outbound.
-            await prisma.wP_UPLOADED_EXCEL_FILES.update({
-                where: { id: uploadedFile.id },
-                data: {
-                    processing_status: 'error',
-                    error_message: errorMessage,
-                    updated_at: new Date(),
-                },
+            // Delete the database record we just created
+            await prisma.wP_UPLOADED_EXCEL_FILES.delete({
+                where: { id: uploadedFile.id }
             });
 
             return res.status(409).json({
                 success: false,
-                error: errorMessage,
+                error: 'Critical duplicates detected: Some invoices have already been processed or submitted to LHDN.',
                 duplicateType: 'INVOICE_DUPLICATE',
                 duplicates: criticalDuplicates,
                 warnings: duplicateCheck.warnings,
-                summary: duplicateCheck.summary,
-                duplicateFile: criticalDuplicates[0]?.existingSubmission
-                    ? {
-                          id: criticalDuplicates[0].existingSubmission.id,
-                          filename: criticalDuplicates[0].existingSubmission.filename,
-                          uploadedBy: criticalDuplicates[0].existingSubmission.uploaded_by_name,
-                          uploadedByUserId:
-                              criticalDuplicates[0].existingSubmission.uploaded_by_user_id,
-                          status: 'submitted',
-                      }
-                    : undefined,
+                summary: duplicateCheck.summary
             });
         }
 
@@ -1796,6 +1651,11 @@ router.post('/upload-excel-template', [auth.isApiAuthenticated, excelUpload.sing
 
     } catch (error) {
         console.error('Excel upload error:', error);
+
+        // Clean up uploaded file on error
+        if (req.file && fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+        }
 
         res.status(500).json({
             success: false,
@@ -2281,8 +2141,10 @@ router.get('/uploaded-files', [auth.isApiAuthenticated], async (req, res) => {
         const { page = 1, limit = 10, status, search } = req.query;
         const offset = (page - 1) * limit;
 
-        // Build where clause — team-wide list
-        const where = {};
+        // Build where clause
+        const where = {
+            uploaded_by_user_id: req.user.id // Only show files uploaded by current user
+        };
 
         if (status && status !== 'all') {
             where.processing_status = status;
@@ -2357,10 +2219,13 @@ router.get('/download-excel-template', [auth.isApiAuthenticated], (req, res) => 
 // API endpoint to list uploaded Excel files for table display
 router.get('/list-fixed-paths', [auth.isApiAuthenticated], async (req, res) => {
     try {
-        console.log('Fetching uploaded Excel files (team view) for user:', req.user.id);
+        console.log('Fetching uploaded Excel files for user:', req.user.id);
 
-        // Shared team table — all users' uploads
+        // Get uploaded Excel files for the current user
         const uploadedFiles = await prisma.wP_UPLOADED_EXCEL_FILES.findMany({
+            where: {
+                uploaded_by_user_id: req.user.id
+            },
             orderBy: {
                 upload_date: 'desc'
             }
@@ -2442,7 +2307,7 @@ router.get('/list-fixed-paths', [auth.isApiAuthenticated], async (req, res) => {
                     filenameValidation,
                     invoiceDetails
                 ),
-                status: resolveManualListStatus(file),
+                status: file.processing_status,
                 source: 'Excel Upload',
                 totalAmount: totalAmount,
 
@@ -2451,7 +2316,6 @@ router.get('/list-fixed-paths', [auth.isApiAuthenticated], async (req, res) => {
                 filePath: file.file_path,
                 fileSize: file.file_size.toString(),
                 uploadedBy: file.uploaded_by_name,
-                uploadedByUserId: file.uploaded_by_user_id,
                 uploadDate: file.upload_date,
                 invoiceDetails: invoiceDetails, // Include detailed invoice data
                 processedDate: file.processed_date,
@@ -3024,32 +2888,14 @@ router.post(
         });
       }
 
-      const ids = fileIds.map((id) => parseInt(id)).filter(Number.isFinite);
-      if (ids.length === 0) {
-        return res.status(400).json({
-          success: false,
-          error: "No valid file IDs",
-        });
-      }
-
-      const requestedFiles = await prisma.wP_UPLOADED_EXCEL_FILES.findMany({
-        where: { id: { in: ids } },
-      });
-      const notOwned = requestedFiles.filter(
-        (f) => f.uploaded_by_user_id !== req.user.id
-      );
-      if (notOwned.length > 0) {
-        return res.status(403).json({
-          success: false,
-          error: "You can only submit files you uploaded",
-          forbiddenFileIds: notOwned.map((f) => f.id),
-        });
-      }
-
       // Get files from database
-      const files = requestedFiles.filter(
-        (f) => f.processing_status === "processed"
-      );
+      const files = await prisma.wP_UPLOADED_EXCEL_FILES.findMany({
+        where: {
+          id: { in: fileIds.map((id) => parseInt(id)) },
+          uploaded_by_user_id: req.user.id,
+          processing_status: "processed",
+        },
+      });
 
       if (files.length === 0) {
         return res.status(400).json({
@@ -3083,8 +2929,11 @@ router.post(
         console.log(`Bulk submit: ${totalDocuments} total documents — will auto-split into batches of 100`);
       }
 
-      // Keep Ready to Submit while LHDN runs. Flipping to submitting/uploaded
-      // makes a failed attempt look like Pending and leaves the eye icon empty.
+      // Update files status to submitting
+      await prisma.wP_UPLOADED_EXCEL_FILES.updateMany({
+        where: { id: { in: fileIds.map((id) => parseInt(id)) } },
+        data: { processing_status: "submitting" },
+      });
 
       // Process bulk submission in background with enhanced validation and real-time status updates
       // Get session ID from request headers or generate one
@@ -3152,18 +3001,29 @@ router.delete(
           .json({ success: false, error: "Invalid file ID" });
       }
 
-      // Get file details — team view allows lookup; owner required to delete
-      const ownership = await assertManualFileOwner(id, req.user.id, 'delete');
-      if (!ownership.ok) {
-        return res.status(ownership.status).json({
+      // Get file details
+      const file = await prisma.wP_UPLOADED_EXCEL_FILES.findFirst({
+        where: {
+          id,
+          uploaded_by_user_id: req.user.id,
+        },
+      });
+
+      if (!file) {
+        return res.status(404).json({
           success: false,
-          error: ownership.error,
+          error: "File not found",
         });
       }
-      const file = ownership.file;
 
-      // Delete physical Excel (file_path and Incoming\<filename>)
-      unlinkManualExcelFiles(file);
+      // Delete physical file if it exists (guard path)
+      if (
+        file.file_path &&
+        typeof file.file_path === "string" &&
+        fs.existsSync(file.file_path)
+      ) {
+        fs.unlinkSync(file.file_path);
+      }
 
       // Delete database record
       await prisma.wP_UPLOADED_EXCEL_FILES.delete({
@@ -3214,22 +3074,13 @@ router.delete(
           .json({ success: false, error: "No valid file IDs" });
       }
 
-      // Get files to delete — enforce owner on each requested id
-      const allRequested = await prisma.wP_UPLOADED_EXCEL_FILES.findMany({
-        where: { id: { in: ids } },
+      // Get files to delete (ensure they belong to the current user)
+      const files = await prisma.wP_UPLOADED_EXCEL_FILES.findMany({
+        where: {
+          id: { in: ids },
+          uploaded_by_user_id: req.user.id,
+        },
       });
-      const notOwned = allRequested.filter(
-        (f) => f.uploaded_by_user_id !== req.user.id
-      );
-      if (notOwned.length > 0) {
-        return res.status(403).json({
-          success: false,
-          error: "You can only delete files you uploaded",
-          forbiddenFileIds: notOwned.map((f) => f.id),
-        });
-      }
-
-      const files = allRequested;
 
       if (files.length === 0) {
         return res.status(404).json({
@@ -3244,7 +3095,14 @@ router.delete(
       // Delete physical files and database records
       for (const file of files) {
         try {
-          unlinkManualExcelFiles(file);
+          // Delete physical file if it exists (guard path)
+          if (
+            file.file_path &&
+            typeof file.file_path === "string" &&
+            fs.existsSync(file.file_path)
+          ) {
+            fs.unlinkSync(file.file_path);
+          }
 
           // Delete database record
           await prisma.wP_UPLOADED_EXCEL_FILES.delete({
@@ -3298,6 +3156,7 @@ router.get(
       const file = await prisma.wP_UPLOADED_EXCEL_FILES.findFirst({
         where: {
           id: parseInt(fileId),
+          uploaded_by_user_id: req.user.id,
         },
       });
 
@@ -3319,8 +3178,6 @@ router.get(
         lhdn_response: file.lhdn_response
           ? JSON.parse(file.lhdn_response)
           : null,
-        status: resolveManualListStatus(file),
-        error_message: file.error_message,
       };
 
       res.json({
@@ -3341,14 +3198,14 @@ router.post(
   "/uploaded-files/:fileId/submit-single",
   [auth.isApiAuthenticated],
   async (req, res) => {
-    let file = null;
     try {
       const { fileId } = req.params;
       const version = "1.0";
 
-      file = await prisma.wP_UPLOADED_EXCEL_FILES.findFirst({
+      const file = await prisma.wP_UPLOADED_EXCEL_FILES.findFirst({
         where: {
           id: parseInt(fileId),
+          uploaded_by_user_id: req.user.id,
         },
       });
 
@@ -3358,25 +3215,7 @@ router.post(
           .json({ success: false, error: "File not found" });
       }
 
-      if (file.uploaded_by_user_id !== req.user.id) {
-        return res.status(403).json({
-          success: false,
-          error: "You can only submit files you uploaded",
-        });
-      }
-
-      const currentStatus = (file.processing_status || "").toLowerCase();
-      if (currentStatus === "submitted" || currentStatus === "cancelled") {
-        return res.status(400).json({
-          success: false,
-          error: "This file has already been submitted.",
-        });
-      }
-      const isReady =
-        currentStatus === "processed" ||
-        currentStatus === "ready to submit" ||
-        Boolean(file.processed_date);
-      if (!isReady) {
+      if ((file.processing_status || "").toLowerCase() !== "processed") {
         return res.status(400).json({
           success: false,
           error:
@@ -3390,14 +3229,9 @@ router.post(
       }
 
       if (!fs.existsSync(file.file_path)) {
-        await markManualSubmitFailedKeepReady(
-          file.id,
-          `File not found: ${file.file_path}`
-        );
-        return res.status(404).json({
-          success: false,
-          error: "Physical file not found",
-        });
+        return res
+          .status(404)
+          .json({ success: false, error: "Physical file not found" });
       }
 
       // Prefer pre-generated documents from metadata (prepared step)
@@ -3499,21 +3333,31 @@ router.post(
         }
       }
 
+      // Update DB quickly with result snapshot
+      // Do not flip status to "error" for pre-submission validation failures.
+      // Keep it as "processed" (which renders as "Ready to Submit") so users can fix and retry.
+      const _nonSuccessCode = result && result.error && result.error.code;
+      const _desiredStatus =
+        result.status === "success"
+          ? "submitted"
+          : _nonSuccessCode === "PRE_SUBMISSION_VALIDATION_FAILED"
+          ? "processed"
+          : "error";
+
+      await prisma.wP_UPLOADED_EXCEL_FILES.update({
+        where: { id: file.id },
+        data: {
+          processing_status: _desiredStatus,
+          submitted_date:
+            result.status === "success" ? new Date() : file.submitted_date,
+          lhdn_response: JSON.stringify(result),
+          updated_at: new Date(),
+        },
+      });
+
       if (result.status === "success") {
-        await prisma.wP_UPLOADED_EXCEL_FILES.update({
-          where: { id: file.id },
-          data: {
-            processing_status: "submitted",
-            submitted_date: new Date(),
-            error_message: null,
-            lhdn_response: JSON.stringify(result),
-            updated_at: new Date(),
-          },
-        });
         return res.json({ success: true, lhdnResponse: result });
       }
-
-      await markManualSubmitFailedKeepReady(file.id, result);
       return res.status(400).json({
         success: false,
         error: result.error?.message || "LHDN submission failed",
@@ -3521,13 +3365,6 @@ router.post(
       });
     } catch (err) {
       console.error("Single submission error:", err);
-      try {
-        if (file?.id) {
-          await markManualSubmitFailedKeepReady(file.id, err);
-        }
-      } catch (saveErr) {
-        console.error("Failed to persist submit error:", saveErr);
-      }
       return res.status(500).json({
         success: false,
         error: err.message || "Failed to submit file to LHDN",
@@ -3546,18 +3383,12 @@ router.post(
       const version = "1.0";
 
       const file = await prisma.wP_UPLOADED_EXCEL_FILES.findFirst({
-        where: { id: parseInt(fileId) },
+        where: { id: parseInt(fileId), uploaded_by_user_id: req.user.id },
       });
       if (!file)
         return res
           .status(404)
           .json({ success: false, error: "File not found" });
-      if (file.uploaded_by_user_id !== req.user.id) {
-        return res.status(403).json({
-          success: false,
-          error: "You can only prepare files you uploaded",
-        });
-      }
       if (!fs.existsSync(file.file_path))
         return res
           .status(404)
@@ -3643,7 +3474,7 @@ router.post(
       const { fileId } = req.params;
 
       const file = await prisma.wP_UPLOADED_EXCEL_FILES.findFirst({
-        where: { id: parseInt(fileId) },
+        where: { id: parseInt(fileId), uploaded_by_user_id: req.user.id },
       });
       if (!file) {
         console.log("check-duplicates: file not found", fileId);
@@ -3672,21 +3503,87 @@ router.post(
         invoiceNumbers.length
       );
 
+      // LHDN Best Practice: Check for duplicates in multiple sources
       const duplicates = [];
       const warnings = [];
 
       if (invoiceNumbers.length > 0) {
-        const manualDupes =
-          await ManualDuplicateService.checkPreparedInvoiceNumbers(
-            invoiceNumbers,
-            parseInt(fileId)
-          );
-        duplicates.push(...manualDupes.duplicates);
-        warnings.push(...manualDupes.warnings);
+        // 1. Check against WP_OUTBOUND_STATUS (our local submissions)
+        const existingSubmissions = await prisma.wP_OUTBOUND_STATUS.findMany({
+          where: {
+            invoice_number: { in: invoiceNumbers },
+            status: { not: "Cancelled" },
+          },
+          select: {
+            invoice_number: true,
+            status: true,
+            date_submitted: true,
+            UUID: true,
+          },
+        });
 
         console.log(
-          "check-duplicates: found manual excel submission duplicates",
-          manualDupes.duplicates.length
+          "check-duplicates: found existing submissions in WP_OUTBOUND_STATUS",
+          existingSubmissions.length
+        );
+
+        // 2. Check against recent submissions in same table (within 10 minutes - LHDN duplicate detection window)
+        const recentCutoff = new Date(Date.now() - 10 * 60 * 1000); // 10 minutes ago
+        const recentSubmissions = await prisma.wP_UPLOADED_EXCEL_FILES.findMany(
+          {
+            where: {
+              uploaded_by_user_id: req.user.id,
+              submitted_date: { gte: recentCutoff },
+              processing_status: "submitted",
+              id: { not: parseInt(fileId) }, // exclude current file
+            },
+            select: {
+              id: true,
+              filename: true,
+              submitted_date: true,
+              metadata: true,
+            },
+          }
+        );
+
+        console.log(
+          "check-duplicates: found recent submissions",
+          recentSubmissions.length
+        );
+
+        // Check for invoice number overlaps in recent submissions
+        for (const recent of recentSubmissions) {
+          try {
+            const recentMeta = recent.metadata
+              ? JSON.parse(recent.metadata)
+              : {};
+            const recentInvoices = recentMeta?.prepared?.invoiceNumbers || [];
+            const overlap = invoiceNumbers.filter((inv) =>
+              recentInvoices.includes(inv)
+            );
+            if (overlap.length > 0) {
+              warnings.push({
+                type: "recent_submission",
+                message: `Similar invoices submitted recently in file: ${recent.filename}`,
+                invoiceNumbers: overlap,
+                submittedAt: recent.submitted_date,
+              });
+            }
+          } catch (_) {
+            /* ignore metadata parse errors */
+          }
+        }
+
+        // Add confirmed duplicates
+        duplicates.push(
+          ...existingSubmissions.map((sub) => ({
+            invoiceNumber: sub.invoice_number,
+            status: sub.status,
+            dateSubmitted: sub.date_submitted,
+            uuid: sub.UUID,
+            source: "WP_OUTBOUND_STATUS",
+            severity: "error",
+          }))
         );
       }
 
@@ -3795,18 +3692,19 @@ router.post(
     try {
       const { fileId } = req.params;
 
-      const ownership = await assertManualFileOwner(
-        parseInt(fileId, 10),
-        req.user.id,
-        'reprocess'
-      );
-      if (!ownership.ok) {
-        return res.status(ownership.status).json({
+      const file = await prisma.wP_UPLOADED_EXCEL_FILES.findFirst({
+        where: {
+          id: parseInt(fileId),
+          uploaded_by_user_id: req.user.id,
+        },
+      });
+
+      if (!file) {
+        return res.status(404).json({
           success: false,
-          error: ownership.error,
+          error: "File not found",
         });
       }
-      const file = ownership.file;
 
       if (!fs.existsSync(file.file_path)) {
         return res.status(404).json({
@@ -4099,32 +3997,16 @@ async function processBulkSubmissionEnhanced(files, user, sessionId) {
           );
 
           // Create detailed error response
-          const detailedErrors = Array.isArray(validationError?.details)
-            ? validationError.details.map((detail) => ({
+          const detailedErrors = validationError.details.map((detail) => ({
             invoiceNumber: detail.invoiceNumber,
             index: detail.index,
-            errors: (detail.errors || []).map((err) => ({
+            errors: detail.errors.map((err) => ({
               code: err.code,
               field: err.field || "Unknown",
               message: err.message,
               value: err.value,
             })),
-          }))
-            : [
-                {
-                  invoiceNumber: file.filename,
-                  index: 0,
-                  errors: [
-                    {
-                      message:
-                        validationError?.message ||
-                        "Validation failed for one or more invoices",
-                    },
-                  ],
-                },
-              ];
-
-          const failedInvoiceCount = detailedErrors.length;
+          }));
 
           // Update status with validation failure details
           updateStatus(file.id, {
@@ -4133,8 +4015,9 @@ async function processBulkSubmissionEnhanced(files, user, sessionId) {
             errors: detailedErrors,
             validationSummary: {
               totalDocuments: processedData.length,
-              failedDocuments: failedInvoiceCount,
-              validDocuments: processedData.length - failedInvoiceCount,
+              failedDocuments: validationError.details.length,
+              validDocuments:
+                processedData.length - validationError.details.length,
             },
           });
 
@@ -4144,19 +4027,19 @@ async function processBulkSubmissionEnhanced(files, user, sessionId) {
           );
           console.error(`   📊 Total Documents: ${processedData.length}`);
           console.error(
-            `   ❌ Failed Documents: ${failedInvoiceCount}`
+            `   ❌ Failed Documents: ${validationError.details.length}`
           );
           console.error(
             `   ✅ Valid Documents: ${
-              processedData.length - failedInvoiceCount
+              processedData.length - validationError.details.length
             }`
           );
 
-          detailedErrors.forEach((detail) => {
+          validationError.details.forEach((detail, index) => {
             console.error(
               `   📄 Invoice ${detail.invoiceNumber}:`
             );
-            (detail.errors || []).forEach((err) => {
+            detail.errors.forEach((err) => {
               console.error(
                 `      ❌ ${err.code}: ${err.field} - ${err.message}`
               );
@@ -4168,7 +4051,7 @@ async function processBulkSubmissionEnhanced(files, user, sessionId) {
             message: validationError.message,
             details: detailedErrors,
             totalDocuments: processedData.length,
-            failedDocuments: failedInvoiceCount,
+            failedDocuments: validationError.details.length,
           };
         }
 
@@ -4209,11 +4092,11 @@ async function processBulkSubmissionEnhanced(files, user, sessionId) {
           if (failedDocuments === 0 && validDocuments > 0) {
             finalStatus = "submitted"; // All successful
           } else if (validDocuments === 0 && failedDocuments > 0) {
-            finalStatus = "processed"; // Keep Ready to Submit so they can fix and retry
+            finalStatus = "error"; // All failed
           } else if (validDocuments > 0 && failedDocuments > 0) {
             finalStatus = "submitted"; // Partial success - still mark as submitted since some succeeded
           } else {
-            finalStatus = "processed";
+            finalStatus = "error"; // No documents processed
           }
 
           // Create enhanced response with summary for frontend display
@@ -4281,15 +4164,9 @@ async function processBulkSubmissionEnhanced(files, user, sessionId) {
             console.warn('Failed to store invoice submission tracking (table may not exist yet):', trackErr.message);
           }
         } else {
-          // Complete failure — stay Ready to Submit and store the LHDN error
+          // Complete failure
           failedDocuments = totalDocuments;
-          await markManualSubmitFailedKeepReady(file.id, {
-            code: "SUBMISSION_FAILED",
-            message: submissionResult.error?.message || "LHDN submission failed",
-            details: submissionResult.error?.details || [],
-            error: submissionResult.error,
-            status: "failed",
-          });
+          finalStatus = "error";
 
           throw {
             code: "SUBMISSION_FAILED",
@@ -4378,17 +4255,17 @@ async function processBulkSubmissionEnhanced(files, user, sessionId) {
         console.error(`❌ Error processing file ${file.filename}:`, fileError);
 
         // Determine the appropriate status based on error type
+        let processingStatus = "error";
         let errorResponse = {
           success: false,
-          status: "failed",
           error: fileError.message || "Unknown error",
           timestamp: new Date(),
         };
 
         if (fileError.code === "PRE_SUBMISSION_VALIDATION_FAILED") {
+          processingStatus = "processed"; // Keep as processed so user can fix and retry
           errorResponse = {
             success: false,
-            status: "failed",
             validationFailed: true,
             error: fileError.message,
             details: fileError.details,
@@ -4402,8 +4279,6 @@ async function processBulkSubmissionEnhanced(files, user, sessionId) {
             status: "validation_failed",
             phase: "completed_with_errors",
             finalResult: "validation_failed",
-            error: fileError.message,
-            errors: Array.isArray(fileError.details) ? fileError.details : [],
           });
         } else if (fileError.code === "SUBMISSION_FAILED") {
           errorResponse = {
@@ -4421,8 +4296,6 @@ async function processBulkSubmissionEnhanced(files, user, sessionId) {
             status: "error",
             phase: "completed_with_errors",
             finalResult: "error",
-            error: fileError.message,
-            errors: Array.isArray(fileError.details) ? fileError.details : [],
           });
         } else {
           // Update global status for other errors
@@ -4430,28 +4303,14 @@ async function processBulkSubmissionEnhanced(files, user, sessionId) {
             status: "error",
             phase: "completed_with_errors",
             finalResult: "error",
-            error: fileError.message,
-            errors: Array.isArray(fileError.details)
-              ? fileError.details
-              : [
-                  {
-                    invoiceNumber: file.filename,
-                    index: 0,
-                    errors: [
-                      {
-                        message: fileError.message || "Submission failed",
-                      },
-                    ],
-                  },
-                ],
           });
         }
 
-        // Keep Ready to Submit and store the error for the eye icon
+        // Update file status with detailed error information
         await prisma.wP_UPLOADED_EXCEL_FILES.update({
           where: { id: file.id },
           data: {
-            processing_status: "processed",
+            processing_status: processingStatus,
             error_message: fileError.message || "Processing failed",
             lhdn_response: JSON.stringify(errorResponse),
           },
@@ -4512,14 +4371,13 @@ async function processBulkSubmissionEnhanced(files, user, sessionId) {
   } catch (error) {
     console.error("Enhanced bulk submission process error:", error);
 
-    // Keep Ready to Submit and store the error for the eye icon
+    // Update all files to error status
     const fileIds = files.map((f) => f.id);
     await prisma.wP_UPLOADED_EXCEL_FILES.updateMany({
       where: { id: { in: fileIds } },
       data: {
-        processing_status: "processed",
+        processing_status: "error",
         error_message: `Bulk submission failed: ${error.message}`,
-        lhdn_response: JSON.stringify(buildFailureLhdnResponse(error)),
       },
     });
 
@@ -4664,13 +4522,15 @@ async function processBulkSubmission(files, user) {
         await prisma.wP_UPLOADED_EXCEL_FILES.update({
           where: { id: file.id },
           data: {
-            processing_status: "processed",
+            // If the error is a pre-submission validation error, keep status as processed
+            processing_status:
+              fileError && fileError.code === "PRE_SUBMISSION_VALIDATION_FAILED"
+                ? "processed"
+                : "error",
             error_message: fileError.message,
             lhdn_response: JSON.stringify({
               success: false,
-              status: "failed",
               error: fileError.message,
-              details: fileError.details || [],
               timestamp: new Date(),
             }),
           },
@@ -4693,13 +4553,13 @@ async function processBulkSubmission(files, user) {
   } catch (error) {
     console.error("Bulk submission process error:", error);
 
+    // Update all files to error status
     const fileIds = files.map((f) => f.id);
     await prisma.wP_UPLOADED_EXCEL_FILES.updateMany({
       where: { id: { in: fileIds } },
       data: {
-        processing_status: "processed",
+        processing_status: "error",
         error_message: `Bulk submission failed: ${error.message}`,
-        lhdn_response: JSON.stringify(buildFailureLhdnResponse(error)),
       },
     });
   }
@@ -4770,6 +4630,7 @@ router.get(
       const file = await prisma.wP_UPLOADED_EXCEL_FILES.findFirst({
         where: {
           id: fileId,
+          uploaded_by_user_id: req.user.id,
         },
       });
 

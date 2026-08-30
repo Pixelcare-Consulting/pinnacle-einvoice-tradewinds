@@ -1,7 +1,6 @@
 const fs = require('fs');
 const path = require('path');
 const { getCertificatesHashedParams } = require('./lhdnService');
-const { convertExcelDate } = require('./excelDate');
 
 /**
  * Logger configuration for mapping process
@@ -119,34 +118,7 @@ const wrapNumericValue = (value) => {
     "_": numValue
   }];
 };
-/** LHDN date field: YYYY-MM-DD only. Empty / N/A / serials are omitted, not sent as "". */
-const wrapOptionalLhdnDate = (value) => {
-  const ymd = convertExcelDate(value);
-  return ymd ? wrapValue(ymd) : undefined;
-};
 
-const hasPeriodText = (value) => {
-  if (value === null || value === undefined) return false;
-  const s = String(value).trim();
-  return s.length > 0;
-};
-
-/**
- * InvoicePeriod start/end are optional. Do not send blank dates (DateExpected).
- * IssueDate / IssueTime must not be passed through this helper.
- */
-const mapInvoicePeriod = (invoicePeriod) => {
-  if (!invoicePeriod) return undefined;
-  const period = {};
-  const start = wrapOptionalLhdnDate(invoicePeriod.startDate);
-  const end = wrapOptionalLhdnDate(invoicePeriod.endDate);
-  if (start) period.StartDate = start;
-  if (end) period.EndDate = end;
-  if (hasPeriodText(invoicePeriod.description)) {
-    period.Description = wrapValue(invoicePeriod.description);
-  }
-  return Object.keys(period).length > 0 ? [period] : undefined;
-};
 // Normalize Malaysian state to official 2-digit code (per LHDN StateCodes)
 const STATE_NAME_TO_CODE = {
   'JOHOR': '01',
@@ -550,7 +522,11 @@ const mapToLHDNFormat = (excelData, version) => {
         }],
         "DocumentCurrencyCode": wrapValue(doc.header.documentCurrencyCode),
         "TaxCurrencyCode": wrapValue(doc.header.taxCurrencyCode),
-      "InvoicePeriod": mapInvoicePeriod(doc.header.invoicePeriod),
+        "InvoicePeriod": [{
+          "StartDate": wrapValue(doc.header.invoicePeriod.startDate),
+          "EndDate": wrapValue(doc.header.invoicePeriod.endDate),
+          "Description": wrapValue(doc.header.invoicePeriod.description)
+        }],
         "BillingReference": doc.header.documentReference?.billingReference ? [{
           "InvoiceDocumentReference": [{
             "ID": wrapValue(doc.header.InvoiceDocumentReference_ID || ""),
@@ -686,8 +662,12 @@ const mapToLHDNFormat = (excelData, version) => {
         "PrepaidPayment": [{
           "ID": wrapValue(doc.payment.prepaidPayment.id),
           "PaidAmount": wrapValue(doc.payment.prepaidPayment.amount, doc.header.documentCurrencyCode),
-          "PaidDate": wrapValue(doc.payment.prepaidPayment.date),
-          "PaidTime": wrapValue(doc.payment.prepaidPayment.time)
+          ...(doc.payment.prepaidPayment.date
+  ? { PaidDate: wrapValue(doc.payment.prepaidPayment.date) }
+  : {}),
+...(doc.payment.prepaidPayment.time
+  ? { PaidTime: wrapValue(doc.payment.prepaidPayment.time) }
+  : {})
         }],
         "AllowanceCharge": mapAllowanceCharges(doc.allowanceCharge),
         "TaxTotal": mapTaxTotal(doc.summary?.taxTotal, doc.header.documentCurrencyCode, doc.header.taxCurrencyCode),

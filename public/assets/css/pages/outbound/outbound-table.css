@@ -550,33 +550,6 @@
     line-height: 1.5;
 }
 
-.om-error-lhdn-reported {
-    background: #fff7ed;
-    border: 1px solid #fdba74;
-    border-radius: 10px;
-    padding: 0.75rem 1rem;
-    margin: 0 0 0.75rem;
-}
-
-.om-error-lhdn-reported-title {
-    font-size: 0.8rem;
-    font-weight: 700;
-    color: #9a3412;
-    margin-bottom: 0.35rem;
-}
-
-.om-error-lhdn-reported-pre {
-    margin: 0;
-    padding: 0;
-    background: transparent;
-    border: none;
-    font-size: 0.78rem;
-    color: #7c2d12;
-    white-space: pre-wrap;
-    word-break: break-word;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-
 .om-error-tech-details summary {
     cursor: pointer;
     font-size: 0.75rem;

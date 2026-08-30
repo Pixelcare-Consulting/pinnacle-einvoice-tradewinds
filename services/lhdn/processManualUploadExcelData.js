@@ -513,11 +513,11 @@ const processManualUploadExcelData = (rawData) => {
             },
             issueDate: [{ _: formattedDate }],
             issueTime: [{ _: formattedTime }],
-          invoicePeriod: {
-               startDate: toLhdnDate(invoiceRow.InvoicePeriod),
-                endDate: toLhdnDate(getField(invoiceRow, '8')),
-               description: getField(invoiceRow, '9') || ''
-            },
+            invoicePeriod: {
+              startDate: convertExcelDate(invoiceRow.InvoicePeriod) || '',
+              endDate: convertExcelDate(getField(invoiceRow, '8')) || '',
+              description: getField(invoiceRow, '9') || ''
+            }
           },
           supplier: {
             id: getField(invoiceRow, '15'),  // Supplier TIN from __EMPTY_15

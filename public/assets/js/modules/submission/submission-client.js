@@ -553,7 +553,6 @@
       return new Promise((resolve, reject) => {
         let monitoringActive = true;
         let lastProgress = 70;
-        let seenActive = false;
         let finalResult = res; // Start with initial success response
 
         // Start polling for real-time status
@@ -575,7 +574,6 @@
               statusRes.data?.success &&
               statusRes.data?.data?.hasActiveSubmission
             ) {
-              seenActive = true;
               const status = statusRes.data.data;
 
               // Update progress based on current phase
@@ -600,69 +598,57 @@
                   monitoringActive = false;
                   clearInterval(statusPoller);
 
-                  const files = status.files || [];
-                  const failedFiles = files.filter((f) =>
-                    ["validation_failed", "error", "failed"].includes(
-                      String(f.status || "").toLowerCase()
-                    )
-                  );
-                  const notFullySuccessful =
-                    status.overallStatus !== "completed_successfully" ||
-                    failedFiles.length > 0;
-
-                  if (notFullySuccessful) {
-                    const allErrors = [];
-                    failedFiles.forEach((file) => {
-                      if (file.errors && Array.isArray(file.errors)) {
-                        allErrors.push(
-                          ...file.errors.map((err) => ({
-                            ...err,
-                            filename: file.filename,
-                          }))
-                        );
-                      } else if (file.error || file.message) {
-                        allErrors.push({
-                          invoiceNumber: file.filename,
-                          index: 0,
-                          filename: file.filename,
-                          errors: [
-                            {
-                              message:
-                                file.error ||
-                                file.message ||
-                                "Submission failed",
-                            },
-                          ],
-                        });
-                      }
-                    });
-
-                    const uniqueFailedInvoices = new Set();
-                    allErrors.forEach((error) => {
-                      if (error.invoiceNumber) {
-                        uniqueFailedInvoices.add(error.invoiceNumber);
-                      }
-                    });
-
-                    const err = new Error(
-                      "Bulk submission completed with errors"
+                  if (status.overallStatus === "completed_with_errors") {
+                    // Check for validation failures
+                    const validationFailures = status.files.filter(
+                      (f) => f.status === "validation_failed"
                     );
-                    err.payload = {
-                      validationFailed: true,
-                      details: allErrors,
-                      totalDocuments: files.reduce(
-                        (sum, f) => sum + (f.invoiceCount || 0),
-                        0
-                      ),
-                      failedDocuments:
-                        uniqueFailedInvoices.size || failedFiles.length,
-                      summary: status.summary,
-                      completionStatus: status.overallStatus,
-                    };
-                    reject(err);
-                    return;
+                    if (validationFailures.length > 0) {
+                      // Aggregate all validation errors
+                      const allErrors = [];
+                      validationFailures.forEach((file) => {
+                        if (file.errors && Array.isArray(file.errors)) {
+                          allErrors.push(
+                            ...file.errors.map((err) => ({
+                              ...err,
+                              filename: file.filename,
+                            }))
+                          );
+                        }
+                      });
+
+                      // Count unique failed invoices instead of total errors
+                      const uniqueFailedInvoices = new Set();
+                      allErrors.forEach(error => {
+                        if (error.invoiceNumber) {
+                          uniqueFailedInvoices.add(error.invoiceNumber);
+                        }
+                      });
+
+                      const err = new Error(
+                        "Validation failed for one or more files"
+                      );
+                      err.payload = {
+                        validationFailed: true,
+                        details: allErrors,
+                        totalDocuments: status.files.reduce(
+                          (sum, f) => sum + (f.invoiceCount || 0),
+                          0
+                        ),
+                        failedDocuments: uniqueFailedInvoices.size,
+                        summary: status.summary,
+                      };
+                      reject(err);
+                      return;
+                    }
                   }
 
+                  message =
+                    status.overallStatus === "completed_successfully"
+                      ? "All files processed successfully!"
+                      : "Processing completed with some issues";
+
+                  // Update final result with completion status
                   finalResult = {
                     ...finalResult,
                     completionStatus: status.overallStatus,
@@ -693,21 +679,10 @@
                   });
               }
             } else if (statusRes.data?.data?.hasActiveSubmission === false) {
-              if (!seenActive) return;
+              // No active submission found, stop monitoring and resolve with initial result
               monitoringActive = false;
               clearInterval(statusPoller);
-              const err = new Error(
-                "Bulk submission ended before completion"
-              );
-              err.payload = {
-                validationFailed: true,
-                details: [],
-                totalDocuments: fileIds.length,
-                failedDocuments: 1,
-                summary: finalResult?.summary,
-                completionStatus: "error",
-              };
-              reject(err);
+              resolve(finalResult);
             }
           } catch (statusErr) {
             console.warn(LOG_PREFIX, "Status polling error:", statusErr);
@@ -724,17 +699,7 @@
               LOG_PREFIX,
               "Status monitoring timed out after 5 minutes"
             );
-            const err = new Error(
-              "Status monitoring timed out after 5 minutes"
-            );
-            err.payload = {
-              validationFailed: true,
-              details: [],
-              totalDocuments: fileIds.length,
-              failedDocuments: fileIds.length,
-              completionStatus: "error",
-            };
-            reject(err);
+            resolve(finalResult);
           }
         }, 5 * 60 * 1000);
 
