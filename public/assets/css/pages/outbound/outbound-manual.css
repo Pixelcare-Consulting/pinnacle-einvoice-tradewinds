@@ -8,12 +8,12 @@
     --om-col-index: 3%;
     --om-col-filename: 10%;
     --om-col-invoice: 9%;
-    --om-col-supplier: 8%;
-    --om-col-receiver: 8%;
+    --om-col-supplier: 7%;
+    --om-col-receiver: 7%;
     --om-col-uploaded: 8%;
     --om-col-inv-date: 9%;
     --om-col-submitted: 8%;
-    --om-col-status: 13%;
+    --om-col-status: 15%;
     --om-col-amount: 12%;
     --om-col-action: 9%;
 
@@ -74,10 +74,29 @@
 #outbound-manual-page #invoiceTable td:nth-child(9) { width: var(--om-col-submitted); text-align: center; }
 
 #outbound-manual-page #invoiceTable th:nth-child(12),
-#outbound-manual-page #invoiceTable td:nth-child(12) { width: var(--om-col-status); text-align: center; }
+#outbound-manual-page #invoiceTable td:nth-child(12) {
+    width: var(--om-col-status);
+    text-align: center;
+    overflow: visible;
+    white-space: normal;
+    max-width: none;
+}
 
 #outbound-manual-page #invoiceTable th:nth-child(13),
-#outbound-manual-page #invoiceTable td:nth-child(13) { width: var(--om-col-amount); text-align: right; }
+#outbound-manual-page #invoiceTable td:nth-child(13) {
+    width: var(--om-col-amount);
+    text-align: right;
+}
+
+#outbound-manual-page #invoiceTable th:nth-child(13) {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: unset;
+    line-height: 1.2;
+    word-break: break-word;
+    vertical-align: middle;
+    hyphens: auto;
+}
 
 #outbound-manual-page #invoiceTable th:nth-child(14),
 #outbound-manual-page #invoiceTable td:nth-child(14) { width: var(--om-col-action); text-align: center; }
@@ -98,12 +117,25 @@
 }
 
 #outbound-manual-page .outbound-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25rem;
     max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow: visible;
+    text-overflow: unset;
+    white-space: normal;
+    line-height: 1.25;
+    text-align: center;
     font-size: var(--om-status-font-size);
-    padding: 4px 8px;
+    padding: 4px 6px;
+    border-radius: 9999px;
+    font-weight: 600;
+}
+
+#outbound-manual-page .outbound-status i {
+    flex-shrink: 0;
+    font-size: 0.8rem;
 }
 
 #outbound-manual-page .table-section.outbound-table-grid {
