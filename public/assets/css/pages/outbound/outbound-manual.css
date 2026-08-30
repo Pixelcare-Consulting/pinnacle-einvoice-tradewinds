@@ -7,14 +7,14 @@
     --om-col-check: 3%;
     --om-col-index: 3%;
     --om-col-filename: 8%;
-    --om-col-invoice: 7%;
+    --om-col-invoice: 8%;
     --om-col-supplier: 11%;
     --om-col-receiver: 11%;
-    --om-col-uploaded: 6%;
+    --om-col-uploaded: 9%;
     --om-col-inv-date: 9%;
     --om-col-submitted: 8%;
-    --om-col-status: 15%;
-    --om-col-amount: 13%;
+    --om-col-status: 12%;
+    --om-col-amount: 12%;
     --om-col-action: 6%;
 
     /* Cell containment — overrides outbound-table.css globals */
@@ -111,12 +111,28 @@
 #outbound-manual-page #invoiceTable th.om-col-submitted {
     white-space: normal;
     text-overflow: unset;
+    overflow: visible;
     line-height: 1.2;
     vertical-align: middle;
+    word-break: normal;
+    hyphens: none;
+}
+
+#outbound-manual-page #invoiceTable th.om-col-uploaded,
+#outbound-manual-page #invoiceTable th.om-col-inv-date {
+    padding-left: 0.35rem;
+    padding-right: 0.35rem;
+}
+
+#outbound-manual-page #invoiceTable td.om-col-status {
+    padding-left: 0.35rem;
+    padding-right: 0.35rem;
 }
 
 #outbound-manual-page #invoiceTable .om-col-status .outbound-status {
     white-space: nowrap;
+    max-width: 100%;
+    margin: 0 auto;
 }
 
 /* Reset shared outbound-table.css conflicts */
@@ -362,10 +378,14 @@
 }
 
 #outbound-manual-page #invoiceTable thead th.om-col-status,
-#outbound-manual-page #invoiceTable thead th.om-col-amount {
+#outbound-manual-page #invoiceTable thead th.om-col-amount,
+#outbound-manual-page #invoiceTable thead th.om-col-uploaded,
+#outbound-manual-page #invoiceTable thead th.om-col-inv-date,
+#outbound-manual-page #invoiceTable thead th.om-col-submitted {
     white-space: normal !important;
     overflow: visible !important;
     text-overflow: unset !important;
+    word-break: normal !important;
 }
 
 /* Table Body Cells */

@@ -8,6 +8,14 @@ export interface Release {
 
 export const releases: Release[] = [
   {
+    version: '3.1.10',
+    date: '30/08/2026',
+    fix: [
+      'Uploaded and invoice date column headers on the outbound manual table no longer overlap',
+      'Status column no longer leaves extra empty space around status badges',
+    ],
+  },
+  {
     version: '3.1.9',
     date: '30/08/2026',
     improvement: [
