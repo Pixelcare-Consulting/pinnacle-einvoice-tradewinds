@@ -10,20 +10,19 @@
     --om-col-invoice: 9%;
     --om-col-supplier: 8%;
     --om-col-receiver: 8%;
-    --om-col-uploaded-by: 7%;
     --om-col-uploaded: 8%;
     --om-col-inv-date: 9%;
     --om-col-submitted: 8%;
-    --om-col-status: 10%;
-    --om-col-amount: 9%;
-    --om-col-action: 8%;
+    --om-col-status: 13%;
+    --om-col-amount: 12%;
+    --om-col-action: 9%;
 
     /* Cell containment — overrides outbound-table.css globals */
     --om-cell-pad-x: 0.5rem;
     --om-cell-pad-y: 0.6rem;
     --om-cell-overflow: hidden;
     --om-inner-max-width: 100%;
-    --om-status-font-size: 0.7rem;
+    --om-status-font-size: 0.75rem;
 }
 
 #outbound-manual-page #invoiceTable {
@@ -66,25 +65,22 @@
 #outbound-manual-page #invoiceTable td:nth-child(6) { width: var(--om-col-receiver); text-align: left; }
 
 #outbound-manual-page #invoiceTable th:nth-child(7),
-#outbound-manual-page #invoiceTable td:nth-child(7) { width: var(--om-col-uploaded-by); text-align: center; }
+#outbound-manual-page #invoiceTable td:nth-child(7) { width: var(--om-col-uploaded); text-align: center; }
 
 #outbound-manual-page #invoiceTable th:nth-child(8),
-#outbound-manual-page #invoiceTable td:nth-child(8) { width: var(--om-col-uploaded); text-align: center; }
+#outbound-manual-page #invoiceTable td:nth-child(8) { width: var(--om-col-inv-date); text-align: center; }
 
 #outbound-manual-page #invoiceTable th:nth-child(9),
-#outbound-manual-page #invoiceTable td:nth-child(9) { width: var(--om-col-inv-date); text-align: center; }
+#outbound-manual-page #invoiceTable td:nth-child(9) { width: var(--om-col-submitted); text-align: center; }
 
-#outbound-manual-page #invoiceTable th:nth-child(10),
-#outbound-manual-page #invoiceTable td:nth-child(10) { width: var(--om-col-submitted); text-align: center; }
+#outbound-manual-page #invoiceTable th:nth-child(12),
+#outbound-manual-page #invoiceTable td:nth-child(12) { width: var(--om-col-status); text-align: center; }
 
 #outbound-manual-page #invoiceTable th:nth-child(13),
-#outbound-manual-page #invoiceTable td:nth-child(13) { width: var(--om-col-status); text-align: center; }
+#outbound-manual-page #invoiceTable td:nth-child(13) { width: var(--om-col-amount); text-align: right; }
 
 #outbound-manual-page #invoiceTable th:nth-child(14),
-#outbound-manual-page #invoiceTable td:nth-child(14) { width: var(--om-col-amount); text-align: right; }
-
-#outbound-manual-page #invoiceTable th:nth-child(15),
-#outbound-manual-page #invoiceTable td:nth-child(15) { width: var(--om-col-action); text-align: center; }
+#outbound-manual-page #invoiceTable td:nth-child(14) { width: var(--om-col-action); text-align: center; }
 
 /* Reset shared outbound-table.css conflicts */
 #outbound-manual-page .cell-main {
@@ -140,6 +136,41 @@
     color: #64748b;
     font-weight: 600;
     white-space: nowrap;
+}
+
+#outbound-manual-page .total-amount-wrapper {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.om-eye-meta-block {
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.om-eye-meta-block .detail-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 0;
+}
+
+.om-eye-meta-block .detail-item .label {
+    flex-shrink: 0;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: #64748b;
+    min-width: 6.5rem;
+}
+
+.om-eye-meta-block .detail-item .value {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: #1e293b;
+    min-width: 0;
 }
 
 /* ===================================

@@ -3909,12 +3909,6 @@ class InvoiceTableManager {
                         render: (data, type, row) => this.renderReceiver(data, type, row)
                     },
                     {
-                        data: 'uploadedBy',
-                        title: 'UPLOADED BY',
-                        className: 'text-center',
-                        render: (data, type, row) => this.renderUploadedBy(data, type, row)
-                    },
-                    {
                         data: 'date',
                         orderable: true,
                         title: 'UPLOADED',
@@ -4439,6 +4433,25 @@ class InvoiceTableManager {
             <span class="reg-text" title="Read-only — uploaded by another user">${name}</span>
             <span class="om-readonly-badge">read-only</span>
         </div>`;
+    }
+
+    renderEyeModalUploaderBlock(fileData) {
+        const name = fileData?.uploadedBy || fileData?.uploaded_by_name || 'Unknown';
+        const isOwn = isOwnManualUploadRow({
+            uploadedByUserId: fileData?.uploadedByUserId ?? fileData?.uploaded_by_user_id,
+        });
+        const safeName = escapeHtml(name);
+        const valueContent = isOwn
+            ? `<span title="Your upload">${safeName}</span>`
+            : `<span title="Read-only — uploaded by another user">${safeName}</span>
+               <span class="om-readonly-badge">read-only</span>`;
+        return `
+            <div class="om-eye-meta-block">
+                <div class="detail-item">
+                    <span class="label">Uploaded By</span>
+                    <span class="value">${valueContent}</span>
+                </div>
+            </div>`;
     }
 
     renderStatus(data, type, row) {
@@ -5475,6 +5488,8 @@ class InvoiceTableManager {
                                 processedDate: d.processedDate || d.processed_date,
                                 submittedDate: d.submittedDate || d.submitted_date,
                                 invoiceNumber: d.invoiceNumber || d.invoice_count,
+                                uploadedBy: d.uploadedBy || d.uploaded_by_name,
+                                uploadedByUserId: d.uploadedByUserId || d.uploaded_by_user_id,
                                 errorMessage: d.error_message || d.errorMessage,
                                 error_message: d.error_message || d.errorMessage,
                             };
@@ -5608,6 +5623,8 @@ class InvoiceTableManager {
             modalContent = this.generateFileInfoContent(fileData);
         }
 
+        const uploaderBlock = this.renderEyeModalUploaderBlock(fileData);
+
         // Create modal HTML
         const modalHTML = `
             <div id="lhdnDetailsModal" class="lhdn-details-modal">
@@ -5628,6 +5645,7 @@ class InvoiceTableManager {
                         </button>
                     </div>
                     <div class="lhdn-details-body">
+                        ${uploaderBlock}
                         ${statusInfo}
                         ${modalContent}
                     </div>

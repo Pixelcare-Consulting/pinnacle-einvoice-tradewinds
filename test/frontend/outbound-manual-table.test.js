@@ -184,11 +184,11 @@ function testTableColumns() {
 
     const expectedColumns = [
         'checkbox', '#', 'FILE NAME', 'INVOICE NO.', 'SUPPLIER',
-        'RECEIVER', 'UPLOADED BY', 'UPLOADED', 'INVOICE DATE', 'SUBMITTED',
+        'RECEIVER', 'UPLOADED', 'INVOICE DATE', 'SUBMITTED',
         'statusPriority', 'id', 'STATUS', 'TOTAL AMOUNT', 'ACTION'
     ];
 
-    console.assert(expectedColumns.length === 15, 'Expected 15 table columns');
+    console.assert(expectedColumns.length === 14, 'Expected 14 table columns');
     console.log('Expected columns:', expectedColumns);
     console.log('✅ Table columns test passed');
 }
