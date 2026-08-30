@@ -150,6 +150,25 @@
     font-size: 0.8rem;
 }
 
+#outbound-manual-page #invoiceTable .om-status-cell,
+#outbound-manual-page #invoiceTable .om-amount-cell {
+    max-width: none !important;
+    overflow: visible !important;
+}
+
+#outbound-manual-page #invoiceTable thead th.om-status-cell,
+#outbound-manual-page #invoiceTable thead th.om-amount-cell {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: unset !important;
+    line-height: 1.2;
+    vertical-align: middle;
+}
+
+#outbound-manual-page #invoiceTable .om-status-cell .outbound-status {
+    white-space: nowrap;
+}
+
 #outbound-manual-page .table-section.outbound-table-grid {
     background: #fff;
     border: 1px solid #e9ecef;
@@ -272,7 +291,7 @@
 
 /* Modern Table Header */
 .outbound-table-responsive thead th,
-#invoiceTable thead th {
+#outbound-manual-page #invoiceTable thead th {
     background: #f8f9fa;
     color: #495057;
     font-weight: 600;
@@ -288,6 +307,13 @@
     text-align: left;
     vertical-align: middle;
     box-shadow: none;
+}
+
+#outbound-manual-page #invoiceTable thead th.om-status-cell,
+#outbound-manual-page #invoiceTable thead th.om-amount-cell {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: unset !important;
 }
 
 /* Table Body Cells */

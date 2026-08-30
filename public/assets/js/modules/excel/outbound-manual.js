@@ -3847,6 +3847,30 @@ class InvoiceTableManager {
         }
     }
 
+    applyOutboundTableColumnLayout() {
+        const table = document.getElementById('invoiceTable');
+        if (!table) return;
+
+        table.querySelectorAll('thead th.om-status-cell, thead th.om-amount-cell').forEach((th) => {
+            th.style.whiteSpace = 'normal';
+            th.style.overflow = 'visible';
+            th.style.textOverflow = 'clip';
+            th.style.lineHeight = '1.2';
+            th.style.verticalAlign = 'middle';
+        });
+
+        table.querySelectorAll('td.om-status-cell, th.om-status-cell').forEach((el) => {
+            el.style.maxWidth = 'none';
+            el.style.overflow = 'visible';
+            el.style.whiteSpace = 'normal';
+        });
+
+        table.querySelectorAll('td.om-amount-cell, th.om-amount-cell').forEach((el) => {
+            el.style.maxWidth = 'none';
+            el.style.overflow = 'visible';
+        });
+    }
+
     initializeTable() {
         try {
             // Destroy existing table if it exists
@@ -3863,6 +3887,7 @@ class InvoiceTableManager {
                         orderable: false,
                         searchable: false,
                         className: 'text-center',
+                        width: '3%',
                         render: function (data, type, row) {
                             const status = (row.status || 'uploaded').toLowerCase();
                             const disabledStatus = ['submitted', 'cancelled', 'rejected', 'invalid'].includes(status);
@@ -3882,6 +3907,7 @@ class InvoiceTableManager {
                         orderable: false,
                         searchable: false,
                         className: 'text-center',
+                        width: '3%',
                         render: function (data, type, row, meta) {
                             const pageInfo = meta.settings._iDisplayStart;
                             const index = pageInfo + meta.row + 1;
@@ -3891,27 +3917,32 @@ class InvoiceTableManager {
                     {
                         data: 'fileName',
                         title: 'FILE NAME',
+                        width: '9%',
                         render: (data, type, row) => this.renderFileName(data, type, row)
                     },
                     {
                         data: 'invoiceNumber',
                         title: 'INVOICE NO.',
+                        width: '8%',
                         render: (data, type, row) => this.renderInvoiceNumber(data, type, row)
                     },
                     {
                         data: 'supplier',
                         title: 'SUPPLIER',
+                        width: '7%',
                         render: (data, type, row) => this.renderSupplier(data, type, row)
                     },
                     {
                         data: 'receiver',
                         title: 'RECEIVER',
+                        width: '7%',
                         render: (data, type, row) => this.renderReceiver(data, type, row)
                     },
                     {
                         data: 'date',
                         orderable: true,
                         title: 'UPLOADED',
+                        width: '8%',
                         className: 'text-center outbound-date-cell',
                         render: (data, type) => {
                             if (type === 'sort' || type === 'type') {
@@ -3923,12 +3954,14 @@ class InvoiceTableManager {
                     {
                         data: 'invDateInfo',
                         title: 'INVOICE DATE',
+                        width: '8%',
                         className: 'text-center outbound-date-cell',
                         render: (data, type, row) => this.renderInvDateInfo(data, type, row)
                     },
                     {
                         data: 'submittedDate',
                         title: 'SUBMITTED',
+                        width: '6%',
                         className: 'text-center outbound-date-cell',
                         orderable: true,
                         render: (data, type) => {
@@ -3951,19 +3984,22 @@ class InvoiceTableManager {
                     {
                         data: 'status',
                         title: 'STATUS',
-                        className: 'text-center',
+                        width: '18%',
+                        className: 'text-center om-status-cell',
                         render: (data, type, row) => this.renderStatus(data, type, row)
                     },
                     {
                         data: 'totalAmount',
                         title: 'TOTAL AMOUNT',
-                        className: 'text-end',
+                        width: '15%',
+                        className: 'text-end om-amount-cell',
                         render: (data) => this.renderTotalAmount(data)
                     },
                     {
                         data: null,
                         title: 'ACTION',
                         orderable: false,
+                        width: '8%',
                         className: 'text-center',
                         render: (data, type, row) => this.renderActions(row)
                     }
@@ -3975,6 +4011,10 @@ class InvoiceTableManager {
                 dom: '<"outbound-controls"<"outbound-length-control"l>><"outbound-table-responsive"t><"outbound-bottom"<"outbound-info"i><"outbound-pagination"p>>',
                 initComplete: () => {
                     this.relocateLengthControl();
+                    this.applyOutboundTableColumnLayout();
+                },
+                drawCallback: () => {
+                    this.applyOutboundTableColumnLayout();
                 },
                 processing: true,
                 serverSide: false,
