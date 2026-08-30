@@ -3923,19 +3923,16 @@ class InvoiceTableManager {
                     {
                         data: 'invoiceNumber',
                         title: 'INVOICE NO.',
-                        width: '8%',
                         render: (data, type, row) => this.renderInvoiceNumber(data, type, row)
                     },
                     {
                         data: 'supplier',
                         title: 'SUPPLIER',
-                        width: '7%',
                         render: (data, type, row) => this.renderSupplier(data, type, row)
                     },
                     {
                         data: 'receiver',
                         title: 'RECEIVER',
-                        width: '7%',
                         render: (data, type, row) => this.renderReceiver(data, type, row)
                     },
                     {
@@ -3954,14 +3951,12 @@ class InvoiceTableManager {
                     {
                         data: 'invDateInfo',
                         title: 'INVOICE DATE',
-                        width: '8%',
                         className: 'text-center outbound-date-cell',
                         render: (data, type, row) => this.renderInvDateInfo(data, type, row)
                     },
                     {
                         data: 'submittedDate',
                         title: 'SUBMITTED',
-                        width: '6%',
                         className: 'text-center outbound-date-cell',
                         orderable: true,
                         render: (data, type) => {
@@ -3984,7 +3979,6 @@ class InvoiceTableManager {
                     {
                         data: 'status',
                         title: 'STATUS',
-                        width: '18%',
                         className: 'text-center om-status-cell',
                         render: (data, type, row) => this.renderStatus(data, type, row)
                     },
