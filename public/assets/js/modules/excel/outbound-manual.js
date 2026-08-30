@@ -4343,10 +4343,12 @@ class InvoiceTableManager {
         const name = data || row?.uploadedBy || 'Unknown';
         const isOwn = isOwnManualUploadRow(row);
         if (isOwn) {
-            return `<span class="reg-text" title="Your upload">${name}</span>`;
+            return `<div class="om-uploaded-by-cell"><span class="reg-text" title="Your upload">${name}</span></div>`;
         }
-        return `<span class="reg-text" title="Read-only — uploaded by another user">${name}</span>
-            <span style="font-size:10px;padding:2px 6px;border-radius:8px;background:#f1f5f9;color:#64748b;font-weight:600;margin-left:4px;white-space:nowrap;">read-only</span>`;
+        return `<div class="om-uploaded-by-cell">
+            <span class="reg-text" title="Read-only — uploaded by another user">${name}</span>
+            <span class="om-readonly-badge">read-only</span>
+        </div>`;
     }
 
     renderStatus(data, type, row) {
@@ -4400,6 +4402,7 @@ class InvoiceTableManager {
         let icon = icons[statusClass] || 'question-circle';
         let color = statusColors[statusClass] || '#6c757d';
         let displayName = statusDisplayNames[statusClass] || raw;
+        let titleText = displayName;
 
         // Only overlay LHDN success counts on files that actually submitted.
         // A rejected submit stays Ready to Submit; the eye icon shows the error.
@@ -4416,17 +4419,20 @@ class InvoiceTableManager {
                     if (totalDocuments > 0) {
                         if (failedDocuments === 0) {
                             // All successful
-                            displayName = `${validDocuments} of ${totalDocuments} Submitted`;
+                            titleText = `${validDocuments} of ${totalDocuments} Submitted`;
+                            displayName = `${validDocuments}/${totalDocuments}`;
                             icon = 'check-circle-fill';
                             color = '#198754';
                         } else if (validDocuments === 0) {
                             // All failed
-                            displayName = `${failedDocuments} of ${totalDocuments} Failed`;
+                            titleText = `${failedDocuments} of ${totalDocuments} Failed`;
+                            displayName = `${failedDocuments}/${totalDocuments}`;
                             icon = 'exclamation-triangle-fill';
                             color = '#dc3545';
                         } else {
                             // Partial success
-                            displayName = `${validDocuments} of ${totalDocuments} Submitted`;
+                            titleText = `${validDocuments} of ${totalDocuments} Submitted`;
+                            displayName = `${validDocuments}/${totalDocuments}`;
                             icon = 'exclamation-circle';
                             color = '#ff8307';
                         }
@@ -4434,11 +4440,13 @@ class InvoiceTableManager {
                 } else if (lhdnData && lhdnData.status === 'success') {
                     // Single document success
                     displayName = 'Submitted';
+                    titleText = 'Submitted';
                     icon = 'check-circle-fill';
                     color = '#198754';
                 } else if (lhdnData && lhdnData.status === 'failed' && lhdnData.error) {
                     // Single document failure
                     displayName = 'Failed';
+                    titleText = 'Failed';
                     icon = 'exclamation-triangle-fill';
                     color = '#dc3545';
                 }
@@ -4447,8 +4455,8 @@ class InvoiceTableManager {
             }
         }
 
-        return `<span class="outbound-status ${statusClass.replace(/\s+/g,'-')}" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 6px; background: ${color}15; color: ${color}; font-weight: 500; transition: all 0.2s ease;">
-            <i class="bi bi-${icon}" style="font-size: 14px;"></i>${displayName}</span>`;
+        return `<span class="outbound-status ${statusClass.replace(/\s+/g,'-')}" title="${titleText}" style="background: ${color}15; color: ${color};">
+            <i class="bi bi-${icon}"></i>${displayName}</span>`;
     }
 
     renderSource(data) {

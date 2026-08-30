@@ -1,4 +1,137 @@
 /* ===================================
+   OUTBOUND MANUAL PAGE SCOPE & TOKENS
+   =================================== */
+
+#outbound-manual-page {
+    /* Column widths — MUST sum to 100% */
+    --om-col-check: 3%;
+    --om-col-index: 2%;
+    --om-col-filename: 11%;
+    --om-col-invoice: 9%;
+    --om-col-supplier: 8%;
+    --om-col-receiver: 8%;
+    --om-col-uploaded-by: 8%;
+    --om-col-uploaded: 8%;
+    --om-col-inv-date: 8%;
+    --om-col-submitted: 8%;
+    --om-col-status: 10%;
+    --om-col-amount: 8%;
+    --om-col-action: 9%;
+
+    /* Cell containment — overrides outbound-table.css globals */
+    --om-cell-pad-x: 0.5rem;
+    --om-cell-pad-y: 0.6rem;
+    --om-cell-overflow: hidden;
+    --om-inner-max-width: 100%;
+    --om-status-font-size: 0.7rem;
+}
+
+#outbound-manual-page #invoiceTable {
+    width: 100% !important;
+    table-layout: fixed;
+}
+
+#outbound-manual-page #invoiceTable th,
+#outbound-manual-page #invoiceTable td {
+    overflow: var(--om-cell-overflow);
+    text-overflow: ellipsis;
+    max-width: 0;
+    padding: var(--om-cell-pad-y) var(--om-cell-pad-x);
+}
+
+#outbound-manual-page #invoiceTable th:nth-child(1),
+#outbound-manual-page #invoiceTable td:nth-child(1) { width: var(--om-col-check); text-align: center; }
+
+#outbound-manual-page #invoiceTable th:nth-child(2),
+#outbound-manual-page #invoiceTable td:nth-child(2) { width: var(--om-col-index); text-align: center; }
+
+#outbound-manual-page #invoiceTable th:nth-child(3),
+#outbound-manual-page #invoiceTable td:nth-child(3) { width: var(--om-col-filename); text-align: left; }
+
+#outbound-manual-page #invoiceTable th:nth-child(4),
+#outbound-manual-page #invoiceTable td:nth-child(4) { width: var(--om-col-invoice); text-align: left; }
+
+#outbound-manual-page #invoiceTable th:nth-child(5),
+#outbound-manual-page #invoiceTable td:nth-child(5) { width: var(--om-col-supplier); text-align: left; }
+
+#outbound-manual-page #invoiceTable th:nth-child(6),
+#outbound-manual-page #invoiceTable td:nth-child(6) { width: var(--om-col-receiver); text-align: left; }
+
+#outbound-manual-page #invoiceTable th:nth-child(7),
+#outbound-manual-page #invoiceTable td:nth-child(7) { width: var(--om-col-uploaded-by); text-align: center; }
+
+#outbound-manual-page #invoiceTable th:nth-child(8),
+#outbound-manual-page #invoiceTable td:nth-child(8) { width: var(--om-col-uploaded); text-align: center; }
+
+#outbound-manual-page #invoiceTable th:nth-child(9),
+#outbound-manual-page #invoiceTable td:nth-child(9) { width: var(--om-col-inv-date); text-align: center; }
+
+#outbound-manual-page #invoiceTable th:nth-child(10),
+#outbound-manual-page #invoiceTable td:nth-child(10) { width: var(--om-col-submitted); text-align: center; }
+
+#outbound-manual-page #invoiceTable th:nth-child(13),
+#outbound-manual-page #invoiceTable td:nth-child(13) { width: var(--om-col-status); text-align: center; }
+
+#outbound-manual-page #invoiceTable th:nth-child(14),
+#outbound-manual-page #invoiceTable td:nth-child(14) { width: var(--om-col-amount); text-align: right; }
+
+#outbound-manual-page #invoiceTable th:nth-child(15),
+#outbound-manual-page #invoiceTable td:nth-child(15) { width: var(--om-col-action); text-align: center; }
+
+/* Reset shared outbound-table.css conflicts */
+#outbound-manual-page .cell-main {
+    width: var(--om-inner-max-width);
+    max-width: var(--om-inner-max-width);
+}
+
+#outbound-manual-page .reg-text {
+    max-width: 100%;
+    display: inline-block;
+    vertical-align: bottom;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#outbound-manual-page .outbound-status {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--om-status-font-size);
+    padding: 4px 8px;
+}
+
+#outbound-manual-page .table-section.outbound-table-grid {
+    padding: 0 1rem 1.25rem;
+    box-shadow: none;
+}
+
+#outbound-manual-page .om-uploaded-by-cell {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    max-width: 100%;
+}
+
+#outbound-manual-page .om-uploaded-by-cell .reg-text {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+#outbound-manual-page .om-readonly-badge {
+    flex-shrink: 0;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 8px;
+    background: #f1f5f9;
+    color: #64748b;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* ===================================
    OUTBOUND MANUAL PAGE SPECIFIC STYLES
    =================================== */
 
@@ -610,17 +743,6 @@ input[type="checkbox"] {
    OUTBOUND TOOLBAR & RECEIVER MODAL
    =================================== */
 
-/* Zone 1: Search outside cards */
-.outbound-table-search-outer {
-    margin-bottom: 1rem;
-    width: 100%;
-}
-
-.outbound-table-search-outer .outbound-toolbar-search {
-    width: 100%;
-    max-width: none;
-}
-
 /* Flatten outer wrapper — inner zones provide card styling */
 .table-container-wrapper .table-card {
     background: transparent;
@@ -630,7 +752,42 @@ input[type="checkbox"] {
     padding: 0;
 }
 
-/* Zone 2: Actions card (entries + buttons only) */
+/* Zone 2: Browse row (search + entries, no card) */
+.outbound-table-browse {
+    margin-bottom: 0.75rem;
+    padding: 0 0.25rem;
+    width: 100%;
+}
+
+.outbound-browse-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem 1.5rem;
+    width: 100%;
+}
+
+.outbound-browse-search {
+    flex: 1 1 280px;
+    min-width: 0;
+}
+
+.outbound-browse-search .outbound-toolbar-search {
+    width: 100%;
+    max-width: none;
+}
+
+.outbound-browse-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    flex: 0 0 auto;
+}
+
+/* Zone 1: Actions card (upload buttons only) */
 .outbound-actions-card {
     background: #fff;
     border: 1px solid #e9ecef;
@@ -673,7 +830,7 @@ input[type="checkbox"] {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: 0.5rem 1.5rem;
     width: 100%;
 }
@@ -825,13 +982,19 @@ input[type="checkbox"] {
 }
 
 @media (max-width: 992px) {
-    .outbound-toolbar-row {
+    .outbound-browse-row {
         flex-direction: column;
         align-items: stretch;
     }
 
-    .outbound-table-search-outer .outbound-toolbar-search {
-        max-width: none;
+    .outbound-browse-controls {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .outbound-toolbar-row {
+        flex-direction: column;
+        align-items: stretch;
     }
 
     .team-view-filters {

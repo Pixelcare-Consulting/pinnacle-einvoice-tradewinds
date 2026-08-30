@@ -20,7 +20,7 @@
 
 <!-- Template Main CSS Files -->
 <link href="/assets/css/pages/outbound/outbound-table.css?v=20260826" rel="stylesheet">
-<link href="/assets/css/pages/outbound/outbound-manual.css?v=20260830-5" rel="stylesheet">
+<link href="/assets/css/pages/outbound/outbound-manual.css?v=20260830-6" rel="stylesheet">
 <!-- Excel Loading Animation CSS -->
 <link href="/assets/css/pages/outbound/excel-loading.css" rel="stylesheet">
 <!-- Invoice Preview Modal Enhancements -->
@@ -2703,66 +2703,16 @@ tr.outbound-row-highlight td {
     </div>
 
             <!-- Table Section -->
+            <div id="outbound-manual-page" class="om-page">
             <div class="table-container-wrapper">
-                <!-- Zone 1: Search (outside card) -->
-                <div class="outbound-table-search-outer">
-                    <div class="search-wrapper position-relative outbound-toolbar-search">
-                        <i class="bi bi-search position-absolute top-50 start-0 translate-middle-y ms-3 text-muted"></i>
-                        <input type="text" class="form-control form-control-lg ps-5" id="globalSearch"
-                            placeholder="Search documents..." aria-label="Search documents">
-                    </div>
-
-                    <!-- Advanced Filters (Collapsible) -->
-                    <div class="collapse" id="advancedFilters">
-                        <div class="advanced-filters-content border-top pt-3 mt-3">
-                            <div class="row g-3">
-                                <!-- Date Range -->
-                                <div class="col-md-6">
-                                    <label class="form-label d-flex align-items-center">
-                                        <i class="bi bi-calendar-range me-2"></i>Date Range
-                                    </label>
-                                    <div class="input-group">
-                                        <input type="date" class="form-control" id="startDate" placeholder="Start date">
-                                        <span class="input-group-text bg-light">to</span>
-                                        <input type="date" class="form-control" id="endDate" placeholder="End date">
-                                    </div>
-                                    <small class="text-muted mt-1">
-                                        <i class="bi bi-info-circle me-1"></i>
-                                        Filter documents by their upload date
-                                    </small>
-                                </div>
-                            </div>
-
-                            <!-- Filter Note -->
-                            <div class="filter-note alert alert-info mt-3" role="alert">
-                                <i class="bi bi-info-circle me-2"></i>
-                                <small>
-                                    Use the filters above to narrow down your results. Active filters will appear below as tags that you can easily remove. Click the 'x' on any tag to remove that filter, or use 'Clear all filters' to reset.
-                                </small>
-                            </div>
-
-                            <!-- Active Filters Display -->
-                            <div class="active-filters mt-3 pt-3 border-top">
-                                <div class="d-flex align-items-center">
-                                    <small class="text-muted me-2">Active Filters:</small>
-                                    <div class="active-filter-tags" id="activeFilterTags">
-                                        <!-- Active filter tags will be added here dynamically -->
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
                 <div class="table-card outbound-manual-table-card">
                     <div class="table-body-container">
                         <div class="responsive-table-container">
 
-                            <!-- Zone 2: Actions card only -->
+                            <!-- Zone 1: Actions card (upload buttons only) -->
                             <div class="outbound-actions-card">
                                 <div class="outbound-toolbar">
                                     <div class="outbound-toolbar-row">
-                                        <div class="outbound-length-slot" id="outboundLengthSlot" aria-label="Table page size"></div>
                                         <div class="outbound-action-bar">
                                             <button class="btn outbound-toolbar-btn outbound-toolbar-btn--primary" id="openExcelUploadModalBtn" data-bs-toggle="modal" data-bs-target="#flatFileUploadModal" title="Upload Excel template for processing">
                                                 <i class="bi bi-file-earmark-excel me-1"></i>Upload Excel Template
@@ -2778,6 +2728,66 @@ tr.outbound-row-highlight td {
                                 </div>
                             </div>
 
+                            <!-- Zone 2: Browse row (search + filters + entries) -->
+                            <div class="outbound-table-browse">
+                                <div class="outbound-browse-row">
+                                    <div class="outbound-browse-search">
+                                        <div class="search-wrapper position-relative outbound-toolbar-search">
+                                            <i class="bi bi-search position-absolute top-50 start-0 translate-middle-y ms-3 text-muted"></i>
+                                            <input type="text" class="form-control form-control-lg ps-5" id="globalSearch"
+                                                placeholder="Search documents..." aria-label="Search documents">
+                                        </div>
+                                    </div>
+                                    <div class="outbound-browse-controls">
+                                        <button class="btn outbound-action-btn submit" type="button" data-bs-toggle="collapse" data-bs-target="#advancedFilters" aria-expanded="false" aria-controls="advancedFilters">
+                                            <i class="bi bi-sliders me-1"></i>Advanced
+                                        </button>
+                                        <div class="outbound-length-slot" id="outboundLengthSlot" aria-label="Table page size"></div>
+                                    </div>
+                                </div>
+
+                                <!-- Advanced Filters (Collapsible) -->
+                                <div class="collapse" id="advancedFilters">
+                                    <div class="advanced-filters-content border-top pt-3 mt-3">
+                                        <div class="row g-3">
+                                            <!-- Date Range -->
+                                            <div class="col-md-6">
+                                                <label class="form-label d-flex align-items-center">
+                                                    <i class="bi bi-calendar-range me-2"></i>Date Range
+                                                </label>
+                                                <div class="input-group">
+                                                    <input type="date" class="form-control" id="startDate" placeholder="Start date">
+                                                    <span class="input-group-text bg-light">to</span>
+                                                    <input type="date" class="form-control" id="endDate" placeholder="End date">
+                                                </div>
+                                                <small class="text-muted mt-1">
+                                                    <i class="bi bi-info-circle me-1"></i>
+                                                    Filter documents by their upload date
+                                                </small>
+                                            </div>
+                                        </div>
+
+                                        <!-- Filter Note -->
+                                        <div class="filter-note alert alert-info mt-3" role="alert">
+                                            <i class="bi bi-info-circle me-2"></i>
+                                            <small>
+                                                Use the filters above to narrow down your results. Active filters will appear below as tags that you can easily remove. Click the 'x' on any tag to remove that filter, or use 'Clear all filters' to reset.
+                                            </small>
+                                        </div>
+
+                                        <!-- Active Filters Display -->
+                                        <div class="active-filters mt-3 pt-3 border-top">
+                                            <div class="d-flex align-items-center">
+                                                <small class="text-muted me-2">Active Filters:</small>
+                                                <div class="active-filter-tags" id="activeFilterTags">
+                                                    <!-- Active filter tags will be added here dynamically -->
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
                             <!-- Zone 3: Tabs above table headers -->
                             <div class="outbound-table-tabs">
                                 <div class="team-view-filters">
@@ -2788,7 +2798,7 @@ tr.outbound-row-highlight td {
 
                             <!-- Zone 4: Table grid -->
                             <div class="table-section outbound-table-grid">
-                                <table id="invoiceTable" class="">
+                                <table id="invoiceTable" class="outbound-manual-table">
                                             <thead>
                                                 <tr>
                                                     <th class="outbound-checkbox-column">
@@ -3023,6 +3033,8 @@ tr.outbound-row-highlight td {
                         </div>
                 </div>
             </div>
+            </div>
+            </div>
 
 
 {% endblock %}
@@ -3042,7 +3054,7 @@ tr.outbound-row-highlight td {
 <!-- New submission orchestrator -->
 <script src="/assets/js/modules/submission/submission-client.js?v=20260828"></script>
 <!-- Excel validation functions -->
-<script src="/assets/js/modules/excel/outbound-manual.js?v=20260830-5"></script>
+<script src="/assets/js/modules/excel/outbound-manual.js?v=20260830-6"></script>
 <!-- <script src="/assets/js/modules/tutorial/guided-tour.js"></script> -->
 <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
 
