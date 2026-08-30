@@ -76,6 +76,79 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Check if CAPTCHA is required on page load
     checkCaptchaRequired();
+    function performLoginRequest(reconnectValue) {
+  if (reconnectField) {
+    reconnectField.value = reconnectValue;
+  }
+
+  const username = document.getElementById('username')?.value?.trim();
+  const password = document.getElementById('password')?.value || '';
+
+  if (!username || !password) {
+    showLoginError('Please enter username and password first');
+    return;
+  }
+
+  if (spinner && buttonText) {
+    loginButton.disabled = true;
+    spinner.classList.remove('d-none');
+    buttonText.textContent = 'Signing in...';
+  }
+
+  const body = {
+    username,
+    password,
+    reconnect: reconnectValue,
+  };
+
+  if (hcaptchaToken) {
+    body.hcaptchaToken = hcaptchaToken;
+  }
+
+  fetch('/auth/login', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(body),
+    credentials: 'include',
+  })
+    .then((response) => {
+      if (!response.ok) throw response;
+      return response.json();
+    })
+    .then((data) => {
+      if (data.success) {
+        showLoginSuccess();
+        setTimeout(() => {
+          window.location.replace(data.redirectUrl || '/dashboard');
+        }, 500);
+        return;
+      }
+      if (data.activeSession) {
+        showAlreadyLoggedInModal();
+      } else {
+        showLoginError(data.message || 'Login failed');
+      }
+    })
+    .catch((error) => {
+  console.error('Force login error:', error?.status || error);
+  if (error && error.status === 409) {
+    showLoginError('Server still reports an active session. Please try Force New Login again, or ask admin to clear sessions.');
+    return;
+  }
+  showLoginError('Force login failed. Please try again.');
+})
+    .finally(() => {
+      if (spinner && buttonText) {
+        loginButton.disabled = false;
+        spinner.classList.add('d-none');
+        buttonText.textContent = 'Sign In';
+      }
+    });
+}
+
 
     // Password visibility toggle
     if (togglePassword) {
@@ -210,11 +283,19 @@ document.addEventListener('DOMContentLoaded', function() {
                 setTimeout(() => {
                     sessionReconnect.classList.remove('show');
                     // Submit the form after animation completes
-                    loginForm.submit();
+                    if (typeof loginForm.requestSubmit === 'function') {
+  loginForm.requestSubmit();
+} else {
+  loginForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+}
                 }, 500);
             } else {
                 // Submit the form immediately if animation not possible
-                loginForm.submit();
+                if (typeof loginForm.requestSubmit === 'function') {
+  loginForm.requestSubmit();
+} else {
+  loginForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+}
             }
         });
     }
@@ -633,7 +714,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
 
                 // Submit the form
-                loginForm.submit();
+                if (typeof loginForm.requestSubmit === 'function') {
+  loginForm.requestSubmit();
+} else {
+  loginForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+}
             });
         });
 
@@ -755,9 +840,9 @@ document.addEventListener('DOMContentLoaded', function() {
                         <p class="text-muted small">If you're having trouble accessing your account, try forcing a new login.</p>
                     </div>
                     <div class="already-logged-in-footer">
-                        <button class="btn btn-outline-secondary" data-action="cancel">Cancel</button>
-                        <button class="btn btn-success" data-action="dashboard">Go to Dashboard</button>
-                        <button class="btn btn-primary" data-action="force-login">Force New Login</button>
+                        <button type="button" class="btn btn-outline-secondary" data-action="cancel">Cancel</button>
+<button type="button" class="btn btn-success" data-action="dashboard">Go to Dashboard</button>
+<button type="button" class="btn btn-primary" data-action="force-login">Force New Login</button>
                     </div>
                     <div class="modal-help">
                         <a href="/help/login-issues">Having login issues?</a>
@@ -792,25 +877,17 @@ document.addEventListener('DOMContentLoaded', function() {
         const forceLoginBtn = modal.querySelector('[data-action="force-login"]');
         const cancelBtn = modal.querySelector('[data-action="cancel"]');
 
-        dashboardBtn?.addEventListener('click', () => {
-            closeAlreadyLoggedInModalWithAnimation(() => {
-                // Show success message and redirect to dashboard
-                showLoginSuccess();
-                setTimeout(() => {
-                    window.location.href = '/dashboard';
-                }, 1000);
-            });
-        });
+       dashboardBtn?.addEventListener('click', () => {
+    closeAlreadyLoggedInModalWithAnimation(() => {
+        performLoginRequest('force');
+    });
+});
 
-        forceLoginBtn?.addEventListener('click', () => {
-            closeAlreadyLoggedInModalWithAnimation(() => {
-                // Set the reconnect field to 'force' and submit the form
-                if (reconnectField) {
-                    reconnectField.value = 'force';
-                }
-                loginForm.submit();
-            });
-        });
+forceLoginBtn?.addEventListener('click', () => {
+    closeAlreadyLoggedInModalWithAnimation(() => {
+        performLoginRequest('force');
+    });
+});
 
         cancelBtn?.addEventListener('click', () => {
             closeAlreadyLoggedInModalWithAnimation();

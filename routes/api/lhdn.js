@@ -1458,6 +1458,9 @@ async function enrichInboundDocumentsFromLhdnDetails(documents, req) {
       if (details.dateTimeValidated) {
         data.dateTimeValidated = formatInboundDateField(details.dateTimeValidated);
       }
+      if (details.longId) {
+  data.longId = details.longId;
+}
 
       await prisma.wP_INBOUND_STATUS.update({
         where: { uuid },
@@ -1475,6 +1478,7 @@ async function enrichInboundDocumentsFromLhdnDetails(documents, req) {
               : documents[idx].documentStatusReason,
           dateTimeValidated:
             data.dateTimeValidated ?? documents[idx].dateTimeValidated,
+            longId: data.longId ?? documents[idx].longId,
         };
       }
 
@@ -3228,20 +3232,51 @@ router.post("/documents/export-tax-codes", async (req, res) => {
     const rowByUuid = Object.fromEntries(rows.map((row) => [row.uuid, row]));
 
     const taxTypeCodes = {};
-    for (let i = 0; i < uuids.length; i++) {
-      const uuid = uuids[i];
+const missing = [];
+
+// First pass: resolve from DB-only fields (fast, no LHDN calls)
+for (const uuid of uuids) {
+  const row = rowByUuid[uuid] || { uuid };
+  try {
+    const local = extractInboundTaxTypeFromRow(row);
+    if (local) {
+      taxTypeCodes[uuid] = local;
+    } else {
+      missing.push(uuid);
+    }
+  } catch {
+    missing.push(uuid);
+  }
+}
+
+// Second pass: LHDN /raw for small batches only (max 10)
+const MAX_REMOTE_EXPORT_TAX_LOOKUPS = 10;
+let warning = null;
+
+if (missing.length && missing.length <= MAX_REMOTE_EXPORT_TAX_LOOKUPS) {
+  for (let i = 0; i < missing.length; i++) {
+    const uuid = missing[i];
+    try {
       taxTypeCodes[uuid] = await resolveInboundTaxTypeCodeForExport(
         uuid,
         rowByUuid[uuid] || { uuid },
         accessToken,
         lhdnConfig
       );
-      if (i < uuids.length - 1) {
-        await wait(350);
-      }
+    } catch (e) {
+      taxTypeCodes[uuid] = "";
     }
+  }
+} else if (missing.length) {
+  for (const uuid of missing) {
+    taxTypeCodes[uuid] = "";
+  }
+  warning =
+    `Skipped live LHDN tax code lookup for ${missing.length} document(s) to keep export fast. ` +
+    `Exported with blank tax codes where missing.`;
+}
 
-    return res.json({ success: true, taxTypeCodes });
+return res.json({ success: true, taxTypeCodes, warning });
   } catch (error) {
     console.error("[Export tax] Error resolving tax type codes:", error);
     return res.status(500).json({
@@ -4572,6 +4607,7 @@ function buildDocumentDataFromInboundRow(row) {
   return { document: null };
 }
 
+const inflightDisplayDetailsByUuid = new Map();
 // Enhanced display-details endpoint with intelligent caching
 router.get("/documents/:uuid/display-details", async (req, res) => {
   const lhdnConfig = await getLHDNConfig();
@@ -4636,40 +4672,69 @@ router.get("/documents/:uuid/display-details", async (req, res) => {
     }
 
     // Fetch fresh data from LHDN API
-    console.log("Fetching fresh data from LHDN API...");
+ console.log("Fetching fresh data from LHDN API...");
 
-    // Get raw document with correct headers per LHDN SDK
-    console.log("Fetching raw document from LHDN API...");
-    const rawResponse = await axios.get(
-      `${lhdnConfig.baseUrl}/api/v1.0/documents/${uuid}/raw`,
-      {
-        headers: {
-          Authorization: `Bearer ${req.session.accessToken}`,
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        timeout: 30000,
-      }
-    );
+async function fetchInboundDocumentFromLhdn(accessToken) {
+  const inflightKey = `${uuid}:${forceRefresh ? "force" : "normal"}`;
+  let inflight = inflightDisplayDetailsByUuid.get(inflightKey);
 
-    const documentData = rawResponse.data;
-    console.log("Raw document data received");
+  if (!inflight) {
+    inflight = (async () => {
+      console.log(`[ViewDetails] Fetching fresh LHDN data for ${uuid}`);
 
-    // Get document details with correct headers per LHDN SDK
-    const detailsResponse = await axios.get(
-      `${lhdnConfig.baseUrl}/api/v1.0/documents/${uuid}/details`,
-      {
-        headers: {
-          Authorization: `Bearer ${req.session.accessToken}`,
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        timeout: 30000,
-      }
-    );
+      const headers = {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      };
 
-    const detailsData = detailsResponse.data;
-    console.log("Document details received");
+      const rawResponse = await axios.get(
+        `${lhdnConfig.baseUrl}/api/v1.0/documents/${uuid}/raw`,
+        { headers, timeout: 30000 }
+      );
+
+      const detailsResponse = await axios.get(
+        `${lhdnConfig.baseUrl}/api/v1.0/documents/${uuid}/details`,
+        { headers, timeout: 30000 }
+      );
+
+      return {
+        documentData: rawResponse.data,
+        detailsData: detailsResponse.data,
+      };
+    })().finally(() => {
+      inflightDisplayDetailsByUuid.delete(inflightKey);
+    });
+
+    inflightDisplayDetailsByUuid.set(inflightKey, inflight);
+  } else {
+    console.log(`[ViewDetails] Reusing in-flight fetch for ${uuid}`);
+  }
+
+  return await inflight;
+}
+
+let documentData;
+let detailsData;
+
+try {
+  const firstTry = await fetchInboundDocumentFromLhdn(req.session.accessToken);
+  documentData = firstTry.documentData;
+  detailsData = firstTry.detailsData;
+} catch (err) {
+  if (err.response?.status === 401 || err.response?.status === 403) {
+    console.log("[Inbound View] LHDN 401/403 — refreshing token and retrying once");
+    await refreshLhdnTokenAfter401(req);
+    const secondTry = await fetchInboundDocumentFromLhdn(req.session.accessToken);
+    documentData = secondTry.documentData;
+    detailsData = secondTry.detailsData;
+  } else {
+    throw err;
+  }
+}
+
+console.log("Raw document data received");
+console.log("Document details received");
 
     // Cache the fresh data
     lhdnCache.set("document-raw", uuid, documentData, userId);
@@ -4696,6 +4761,10 @@ router.get("/documents/:uuid/display-details", async (req, res) => {
         const updateData = {
           updated_at: currentTime
         };
+
+        if (detailsData.longId) {
+          updateData.longId = detailsData.longId;
+        }
 
         // If we have fresh status information from the details API, update it
         if (detailsData.status && detailsData.status !== existingDoc.status) {

@@ -19,7 +19,7 @@
 <link href="/assets/css/pages/outbound/validation-modal.css" rel="stylesheet">
 
 <!-- Template Main CSS Files -->
-<link href="/assets/css/pages/outbound/outbound-table.css" rel="stylesheet">
+<link href="/assets/css/pages/outbound/outbound-table.css?v=20260826" rel="stylesheet">
 <!-- Excel Loading Animation CSS -->
 <link href="/assets/css/pages/outbound/excel-loading.css" rel="stylesheet">
 <!-- Invoice Preview Modal Enhancements -->
@@ -943,6 +943,143 @@
     background-color: #1a365d;
     color: white;
     box-shadow: 0 2px 4px rgba(26,54,93,0.2);
+}
+
+/* Outbound toolbar — two-row layout */
+.outbound-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.outbound-toolbar-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.outbound-toolbar-search {
+    flex: 1 1 280px;
+    min-width: 200px;
+}
+
+.team-view-filters {
+    display: inline-flex;
+    align-items: stretch;
+    border-bottom: 2px solid #e5e7eb;
+    gap: 0;
+}
+
+.team-view-filters button {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #64748b;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+    white-space: nowrap;
+}
+
+.team-view-filters button:hover {
+    color: #405189;
+}
+
+.team-view-filters button.active {
+    color: #405189;
+    border-bottom-color: #405189;
+    font-weight: 600;
+}
+
+.outbound-action-bar {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.outbound-btn-upload {
+    background: #405189;
+    border: 1px solid #405189;
+    color: #fff;
+    font-weight: 600;
+}
+
+.outbound-btn-upload:hover:not(:disabled) {
+    background: #364574;
+    border-color: #364574;
+    color: #fff;
+}
+
+.outbound-btn-bulk-submit {
+    background: #fff;
+    border: 1px solid #94a3b8;
+    color: #475569;
+    font-weight: 600;
+}
+
+.outbound-btn-bulk-submit:hover:not(:disabled) {
+    background: #f8fafc;
+    border-color: #64748b;
+    color: #334155;
+}
+
+.outbound-btn-bulk-delete {
+    background: #fff;
+    border: 1px solid #f87171;
+    color: #dc2626;
+    font-weight: 600;
+}
+
+.outbound-btn-bulk-delete:hover:not(:disabled) {
+    background: #fef2f2;
+    border-color: #ef4444;
+    color: #b91c1c;
+}
+
+@media (max-width: 992px) {
+    .outbound-toolbar-filters {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .outbound-toolbar-search {
+        flex: 1 1 100%;
+        width: 100%;
+    }
+
+    .team-view-filters {
+        width: 100%;
+        justify-content: flex-start;
+    }
+
+    .outbound-action-bar {
+        justify-content: stretch;
+    }
+
+    .outbound-action-bar .btn {
+        flex: 1 1 calc(33.333% - 0.5rem);
+    }
+}
+
+@media (max-width: 768px) {
+    .outbound-action-bar {
+        flex-direction: column;
+    }
+
+    .outbound-action-bar .btn {
+        flex: 1 1 100%;
+        width: 100%;
+    }
+}
+
+tr.outbound-row-highlight td {
+    background-color: #fef3c7 !important;
+    transition: background-color 0.3s ease;
 }
 
 /* Filter Tags */
@@ -2680,7 +2817,7 @@
             <span class="card-title-new">INVALID</span>
         </div>
 
-        <!-- PENDING Card -->
+        <!-- Ready to Submit Card -->
         <div class="info-card pending-card">
             <div class="card-info">
                 <div class="card-icon position-relative">
@@ -2694,7 +2831,7 @@
                     <span class="text-muted">Total</span>
                 </div>
             </div>
-            <span class="card-title-new">PENDING</span>
+            <span class="card-title-new">Ready to Submit</span>
         </div>
     </div>
 
@@ -2734,52 +2871,29 @@
                             <div class="table-section">
                                 <div class="outbound-table-container">
                                     <div>
-                                        <!-- Primary Filters Row -->
-                                        <div class="row g-3 mb-3">
-                                        
-                                            <!-- Global Search -->
-                                            <div class="col-md-4">
-                                                <div class="search-wrapper position-relative">
+                                        <!-- Toolbar: filters row + actions row -->
+                                        <div class="outbound-toolbar mb-3">
+                                            <div class="outbound-toolbar-filters">
+                                                <div class="search-wrapper position-relative outbound-toolbar-search">
                                                     <i class="bi bi-search position-absolute top-50 start-0 translate-middle-y ms-3 text-muted"></i>
                                                     <input type="text" class="form-control form-control-lg ps-5" id="globalSearch"
                                                         placeholder="Search documents...">
                                                 </div>
-                                                
+                                                <div class="team-view-filters">
+                                                    <button type="button" class="active" data-team-view="mine">My Uploads</button>
+                                                    <button type="button" data-team-view="all">All Team</button>
+                                                </div>
                                             </div>
-                                            
-                                            <!-- Quick Filters -->
-                                            <div class="col-md-8">
-                                                <div class="quick-filters d-flex gap-2">
-                                                    <button class="btn outbound-action-btn submit active" data-filter="all">
-                                                        <i class="bi bi-list me-1"></i>All List
-                                                    </button>
-                                                    <button class="btn outbound-action-btn submit" data-filter="submitted">
-                                                        <i class="bi bi-check-circle me-1"></i>Submitted
-                                                    </button>
-                                                    <!-- <button class="btn outbound-action-btn submit" data-filter="pending">
-                                                        <i class="bi bi-clock-history me-1"></i>Pending
-                                                    </button> -->
-                                                    <div class="ms-auto">
-                                                        <!-- Manual page specific buttons can go here if needed -->
-
-                                                       <!-- Upload Excel Template Button -->
-                                <button class="btn outbound-action-btn submit btn-sm me-2" id="openExcelUploadModalBtn" data-bs-toggle="modal" data-bs-target="#flatFileUploadModal" title="Upload Excel template for processing">
-                                    <i class="bi bi-file-earmark-excel me-1"></i>Upload Excel Template
-                                </button>
-
-                                <!-- Bulk Submit Button -->
-                                <button class="btn outbound-action-btn submit btn-sm me-2" id="bulkSubmitBtn" disabled title="Submit selected files to LHDN">
-                                    <i class="bi bi-cloud-upload me-1"></i>Bulk Submit
-                                </button>
-
-                                <!-- Bulk Delete Button -->
-                                <button class="btn outbound-action-btn cancel btn-sm" id="bulkDeleteBtn" disabled title="Delete selected files">
-                                    <i class="bi bi-trash me-1"></i>Bulk Delete
-                                </button>
-
-                                                
-                                                 </div>
-
+                                            <div class="outbound-action-bar">
+                                                <button class="btn outbound-btn-upload btn-sm" id="openExcelUploadModalBtn" data-bs-toggle="modal" data-bs-target="#flatFileUploadModal" title="Upload Excel template for processing">
+                                                    <i class="bi bi-file-earmark-excel me-1"></i>Upload Excel Template
+                                                </button>
+                                                <button class="btn outbound-btn-bulk-submit btn-sm" id="bulkSubmitBtn" disabled title="Submit selected files to LHDN">
+                                                    <i class="bi bi-cloud-upload me-1"></i>Bulk Submit
+                                                </button>
+                                                <button class="btn outbound-btn-bulk-delete btn-sm" id="bulkDeleteBtn" disabled title="Delete selected files">
+                                                    <i class="bi bi-trash me-1"></i>Bulk Delete
+                                                </button>
                                             </div>
                                         </div>
 
@@ -2842,13 +2956,15 @@
                                                         </div>
                                                     </th>
                                                     <th>#</th>
-                                                    <th>FILE NAME.</th>
+                                                    <th>FILE NAME</th>
                                                     <th>INVOICE NO.</th>
                                                     <th>SUPPLIER</th>
                                                     <th>RECEIVER</th>
-                                                    <th>Uploaded</th>
-                                                    <th>Invoice date</th>
-                                                    <th>Submitted</th>
+                                                    <th>UPLOADED BY</th>
+                                                    <th>UPLOADED</th>
+                                                    <th>INVOICE DATE</th>
+                                                    <th>SUBMITTED</th>
+                                                    <th style="display:none"></th>
                                                     <th style="display:none"></th>
                                                     <th>STATUS</th>
                                                     <th>TOTAL AMOUNT</th>
@@ -3072,12 +3188,22 @@
 
 {% endblock %}
 {% block scripts %}
+<div id="outbound-manual-page-config"
+     data-user-id="{% if user and user.id %}{{ user.id }}{% endif %}"
+     hidden></div>
+<script>
+  (function () {
+    const configEl = document.getElementById('outbound-manual-page-config');
+    const rawUserId = configEl?.getAttribute('data-user-id');
+    window.currentUserId = rawUserId ? Number(rawUserId) : null;
+  })();
+</script>
 <!-- Toast Notification Utility -->
 <script src="/assets/js/utils/toast.js"></script>
 <!-- New submission orchestrator -->
-<script src="/assets/js/modules/submission/submission-client.js"></script>
+<script src="/assets/js/modules/submission/submission-client.js?v=20260828"></script>
 <!-- Excel validation functions -->
-<script src="/assets/js/modules/excel/outbound-manual.js?v=20260422d"></script>
+<script src="/assets/js/modules/excel/outbound-manual.js?v=20260830-1"></script>
 <!-- <script src="/assets/js/modules/tutorial/guided-tour.js"></script> -->
 <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
 

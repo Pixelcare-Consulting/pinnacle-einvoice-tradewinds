@@ -130,3 +130,12 @@ security-report.json
 vulnerability-report.json
 fix-windows-permissions.bat
 test-pdf-generation.js
+
+# ================================
+# CURSOR
+# ================================
+.cursor/
+.cursorrules
+.cursor/*
+.cursor/plans
+.cursor/plans/*
