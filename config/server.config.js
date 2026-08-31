@@ -38,7 +38,22 @@ const sessionConfig = {
   rolling: true
 };
 
+function resolvePort() {
+  const parsed = parseInt(process.env.PORT, 10);
+  const port = Number.isFinite(parsed) ? parsed : 3000;
+
+  // IIS/reverse-proxy setups terminate TLS on 443 and forward to Node on 3000 (see web.config).
+  if (port === 443 && process.env.TRUST_PROXY === 'true') {
+    console.warn(
+      '[server.config] PORT=443 with TRUST_PROXY=true conflicts with IIS on 443. Using port 3000 instead.'
+    );
+    return 3000;
+  }
+
+  return port;
+}
+
 module.exports = {
-  port: process.env.PORT || 3000,
+  port: resolvePort(),
   sessionConfig
 }; 
