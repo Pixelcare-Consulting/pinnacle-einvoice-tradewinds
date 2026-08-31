@@ -20,8 +20,10 @@ module.exports = {
       max_memory_restart: "512M", // Reduce from 1G → 512M to prevent memory bloat
       // Default profile is production. Use `pm2 start ecosystem.config.js --env development` for local PM2.
       // Default: Node serves HTTPS directly (no IIS reverse proxy).
-      // For Willis IIS (willis-einvoice.ddns.net): use --env iis so Node listens HTTP on 3000
-      // while IIS terminates TLS on 443 and reverse-proxies via web.config.
+      // Willis (willis-einvoice.ddns.net): use --env willis so Node listens HTTPS on 443
+      // with Willis SSL certs — no IIS reverse proxy. Run PM2 as Administrator.
+      // Legacy IIS proxy mode: use --env iis so Node listens HTTP on 3000 while IIS
+      // terminates TLS on 443 and reverse-proxies via web.config.
       env: {
         NODE_ENV: "production",
         PORT: "3000",
@@ -64,7 +66,23 @@ module.exports = {
         SSL_KEY_PATH: "./ssl/e-invoice_tradewindscorp-insbrok_com.key",
         SSL_CERT_PATH: "./ssl/e-invoice_tradewindscorp-insbrok_com.crt",
         SSL_CA_PATH: "./ssl/DigiCertCA.crt",
-      },      
+      },
+      // Willis PM2 direct HTTPS (no IIS proxy): Node serves HTTPS on 443.
+      // Requires: IIS must NOT bind port 443; run PM2 from an Administrator session.
+      // .env: PORT=443, NODE_DIRECT_HTTPS=true, TRUST_PROXY=false,
+      // COOKIE_DOMAIN=willis-einvoice.ddns.net, SECURE_COOKIE=true, SSL_* paths below.
+      // Start: pm2 start ecosystem.config.js --env willis  (NOT --env iis)
+      env_willis: {
+        NODE_ENV: "production",
+        PORT: "443",
+        SECURE_COOKIE: "true",
+        TRUST_PROXY: "false",
+        NODE_DIRECT_HTTPS: "true",
+        UV_THREADPOOL_SIZE: 2,
+        SSL_KEY_PATH: "./ssl/willis-einvoice.ddns.net.key",
+        SSL_CERT_PATH: "./ssl/willis-einvoice.ddns.net.crt",
+        SSL_CA_PATH: "./ssl/DigiCertCA.crt",
+      },
 
       // === Logging: Reduce I/O impact ===
       log_file: "./logs/combined.log",

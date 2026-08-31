@@ -8,6 +8,13 @@ export interface Release {
 
 export const releases: Release[] = [
   {
+    version: '3.1.14',
+    date: '31/08/2026',
+    improvement: [
+      'Willis servers can now run the portal directly on secure HTTPS without needing IIS in front',
+    ],
+  },
+  {
     version: '3.1.13',
     date: '31/08/2026',
     fix: [

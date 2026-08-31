@@ -127,7 +127,39 @@ echo.
 echo IMPORTANT: Complete these manual steps on the target server.
 echo.
 echo ========================================
-echo   WILLIS IIS DEPLOYMENT (pinnacle-einvoice-willis)
+echo   WILLIS PM2 DIRECT HTTPS (recommended)
+echo ========================================
+echo.
+echo Site path: C:\inetpub\wwwroot\pinnacle-einvoice-willis
+echo Public URL: https://willis-einvoice.ddns.net  (no :3000)
+echo.
+echo 1. Stop IIS Default Web Site OR remove HTTPS :443 bindings (port conflict).
+echo.
+echo 2. Update .env:
+echo    PORT=443
+echo    NODE_DIRECT_HTTPS=true
+echo    TRUST_PROXY=false
+echo    SECURE_COOKIE=true
+echo    COOKIE_DOMAIN=willis-einvoice.ddns.net
+echo    SSL_KEY_PATH=./ssl/willis-einvoice.ddns.net.key
+echo    SSL_CERT_PATH=./ssl/willis-einvoice.ddns.net.crt
+echo    SSL_CA_PATH=./ssl/DigiCertCA.crt
+echo.
+echo 3. Run as Administrator:
+echo    cd C:\inetpub\wwwroot\pinnacle-einvoice-willis
+echo    scripts\willis-pm2-setup.bat
+echo    Or: pm2 start ecosystem.config.js --env willis
+echo.
+echo 4. Verify PM2 logs:
+echo    "Starting in HTTPS mode (direct Node SSL)"
+echo    "Server started on https://localhost:443"
+echo.
+echo 5. Firewall/router: allow and forward port 443 to Willis server.
+echo.
+echo 6. Test: https://willis-einvoice.ddns.net/auth/login
+echo.
+echo ========================================
+echo   WILLIS IIS DEPLOYMENT (optional alternative)
 echo ========================================
 echo.
 echo Site path: C:\inetpub\wwwroot\pinnacle-einvoice-willis
@@ -142,7 +174,7 @@ echo    TRUST_PROXY=true
 echo    NODE_DIRECT_HTTPS=false
 echo    SECURE_COOKIE=true
 echo    COOKIE_DOMAIN=willis-einvoice.ddns.net
-echo    (See .env.template "WILLIS IIS PRODUCTION" section for full example.)
+echo    (See .env.template "WILLIS IIS REVERSE PROXY EXAMPLE" section for full example.)
 echo.
 echo 3. Start the app with the IIS PM2 profile (Node listens HTTP on 3000):
 echo    cd C:\inetpub\wwwroot\pinnacle-einvoice-willis
