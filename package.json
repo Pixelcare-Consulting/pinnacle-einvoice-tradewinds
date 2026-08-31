@@ -1,6 +1,6 @@
 {
   "name": "pxceinvoiceportal",
-  "version": "3.1.12",
+  "version": "3.1.13",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {

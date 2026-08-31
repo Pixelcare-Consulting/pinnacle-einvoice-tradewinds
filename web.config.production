@@ -12,11 +12,12 @@
         <add name="HTTP_HOST" />
       </allowedServerVariables>
       <rules>
-        <!-- Force HTTPS -->
+        <!-- Force HTTPS (skip ACME HTTP-01: CA requests http://host/.well-known/acme-challenge/...) -->
         <rule name="Redirect to HTTPS" stopProcessing="true">
           <match url="(.*)" />
-          <conditions>
+          <conditions logicalGrouping="MatchAll">
             <add input="{HTTPS}" pattern="off" ignoreCase="true" />
+            <add input="{REQUEST_URI}" pattern="^/\.well-known/acme-challenge" negate="true" />
           </conditions>
           <action type="Redirect" url="https://{HTTP_HOST}{REQUEST_URI}" redirectType="Permanent" />
         </rule>

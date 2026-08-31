@@ -1,6 +1,7 @@
 module.exports = {
   apps: [
     {
+      // Tradewinds default name; Willis server may use "Pinnacle x Willis eInvoice v3.3" locally.
       name: "Pinnacle x Tradewinds eInvoice v3.3",
       script: "./server.js",
       instances: 1, // Keep at 1 unless you have multi-core (avoid overhead of clustering on low RAM)
@@ -19,6 +20,8 @@ module.exports = {
       max_memory_restart: "512M", // Reduce from 1G → 512M to prevent memory bloat
       // Default profile is production. Use `pm2 start ecosystem.config.js --env development` for local PM2.
       // Default: Node serves HTTPS directly (no IIS reverse proxy).
+      // For Willis IIS (willis-einvoice.ddns.net): use --env iis so Node listens HTTP on 3000
+      // while IIS terminates TLS on 443 and reverse-proxies via web.config.
       env: {
         NODE_ENV: "production",
         PORT: "3000",
@@ -30,7 +33,11 @@ module.exports = {
         SSL_CERT_PATH: "./ssl/e-invoice_tradewindscorp-insbrok_com.crt",
         SSL_CA_PATH: "./ssl/DigiCertCA.crt",
       },
-      // IIS terminates TLS on 443 and reverse-proxies HTTP to Node on 3000 (see web.config.production).
+      // IIS / Willis profile: HTTP on 3000, TRUST_PROXY=true, no Node SSL.
+      // Requires web.config in IIS site root (copy from web.config.production).
+      // .env: PORT=3000, TRUST_PROXY=true, NODE_DIRECT_HTTPS=false,
+      // COOKIE_DOMAIN=willis-einvoice.ddns.net, SECURE_COOKIE=true.
+      // Start: pm2 start ecosystem.config.js --env iis
       env_iis: {
         NODE_ENV: "production",
         PORT: "3000",
