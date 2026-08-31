@@ -160,8 +160,19 @@ function createRequestLogger() {
   };
 }
 
+/**
+ * Whether verbose authentication debug logging is enabled.
+ * Set AUTH_DEBUG=true in .env when troubleshooting sign-in or LHDN token issues.
+ */
+function isAuthDebug() {
+  return process.env.AUTH_DEBUG === 'true'
+    || process.env.DEBUG_MODE === 'true'
+    || process.env.LOG_LEVEL === 'debug';
+}
+
 module.exports = {
   logger,
   logDBOperation,
-  createRequestLogger
+  createRequestLogger,
+  isAuthDebug
 };

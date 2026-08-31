@@ -1,6 +1,7 @@
 const prisma = require('../src/lib/prisma');
 const { LoggingService, LOG_TYPES, MODULES, ACTIONS, STATUS } = require('../services/logging-prisma.service');
 const authConfig = require('../config/auth.config');
+const { isAuthDebug } = require('../utils/logger');
 // Active sessions and login attempts tracking
 const activeSessions = new Map();
 const loginAttempts = new Map();
@@ -110,23 +111,23 @@ const trackLoginAttempt = async (username, ip, success) => {
 
   loginAttempts.set(key, attempts);
 
-  await LoggingService.log({
-    description: success ?
-      `User login: ${username}` :
-      `Login attempt for user ${username} - Failed (Attempt ${attempts.count})${attempts.cooldownUntil > now.getTime() ? ' - Account locked' : ''}`,
-    username,
-    ipAddress: ip,
-    logType: success ? LOG_TYPES.INFO : LOG_TYPES.WARNING,
-    module: MODULES.AUTH,
-    action: success ? ACTIONS.LOGIN : ACTIONS.FAILED_LOGIN,
-    status: success ? STATUS.SUCCESS : STATUS.FAILED,
-    details: {
-      attempts: attempts.count,
-      inCooldown: attempts.cooldownUntil > now.getTime(),
-      cooldownRemaining: Math.max(0, Math.ceil((attempts.cooldownUntil - now.getTime()) / 1000)),
-      timestamp: now.toISOString()
-    }
-  });
+  if (!success) {
+    await LoggingService.log({
+      description: `Login attempt for user ${username} - Failed (Attempt ${attempts.count})${attempts.cooldownUntil > now.getTime() ? ' - Account locked' : ''}`,
+      username,
+      ipAddress: ip,
+      logType: LOG_TYPES.WARNING,
+      module: MODULES.AUTH,
+      action: ACTIONS.FAILED_LOGIN,
+      status: STATUS.FAILED,
+      details: {
+        attempts: attempts.count,
+        inCooldown: attempts.cooldownUntil > now.getTime(),
+        cooldownRemaining: Math.max(0, Math.ceil((attempts.cooldownUntil - now.getTime()) / 1000)),
+        timestamp: now.toISOString()
+      }
+    });
+  }
 
   return attempts;
 };
@@ -399,11 +400,15 @@ const isAdmin = (req, res, next) => {
 
   // Check if user is authenticated and is an admin
   if (req.session && req.session.user && (req.session.user.admin === 1 || req.session.user.admin === true)) {
-    console.log('Admin access granted for user:', req.session.user.username);
+    if (isAuthDebug()) {
+      console.log('Admin access granted for user:', req.session.user.username);
+    }
     return next();
   }
 
-  console.log('Admin access denied for user:', req.session?.user?.username, 'Admin value:', req.session?.user?.admin);
+  if (isAuthDebug()) {
+    console.log('Admin access denied for user:', req.session?.user?.username, 'Admin value:', req.session?.user?.admin);
+  }
 
   // For API requests, return 403
   if (req.xhr || req.headers.accept?.includes('application/json')) {
@@ -444,7 +449,9 @@ async function isApiAuthenticated(req, res, next) {
 
     // Skip LHDN token logic for Gemini routes since they don't need LHDN tokens
     if (req.path.startsWith("/api/gemini")) {
-      console.log("Skipping LHDN token logic for Gemini route:", req.path);
+      if (isAuthDebug()) {
+        console.log("Skipping LHDN token logic for Gemini route:", req.path);
+      }
       return next();
     }
 
@@ -455,10 +462,12 @@ async function isApiAuthenticated(req, res, next) {
 
       if (token) {
         req.headers["Authorization"] = `Bearer ${token}`;
-        if (req.session?.accessToken) {
-          console.log("Attached LHDN token from session.");
-        } else {
-          console.log("Attached LHDN token from LHDN token cache.");
+        if (isAuthDebug()) {
+          if (req.session?.accessToken) {
+            console.log("Attached LHDN token from session.");
+          } else {
+            console.log("Attached LHDN token from LHDN token cache.");
+          }
         }
       } else {
         // Fallback to reading directly from file if getTokenSession fails
@@ -490,9 +499,11 @@ async function isApiAuthenticated(req, res, next) {
 
               if (fileToken) {
                 req.headers["Authorization"] = `Bearer ${fileToken}`;
-                console.log(
-                  "Attached LHDN token to request headers from AuthorizeToken.ini file."
-                );
+                if (isAuthDebug()) {
+                  console.log(
+                    "Attached LHDN token to request headers from AuthorizeToken.ini file."
+                  );
+                }
               }
             } catch (iniError) {
               // If INI parsing fails, try regex patterns
@@ -507,9 +518,11 @@ async function isApiAuthenticated(req, res, next) {
                 if (tokenMatch && tokenMatch[1]) {
                   const fileToken = tokenMatch[1].trim();
                   req.headers["Authorization"] = `Bearer ${fileToken}`;
-                  console.log(
-                    `Attached LHDN token to request headers from AuthorizeToken.ini file using pattern: ${pattern}`
-                  );
+                  if (isAuthDebug()) {
+                    console.log(
+                      `Attached LHDN token to request headers from AuthorizeToken.ini file using pattern: ${pattern}`
+                    );
+                  }
                   break;
                 }
               }

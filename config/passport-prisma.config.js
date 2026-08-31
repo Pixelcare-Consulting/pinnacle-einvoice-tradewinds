@@ -3,7 +3,7 @@ const LocalStrategy = require('passport-local').Strategy;
 const bcrypt = require('bcryptjs');
 const { getTokenSession } = require('../services/token-prisma.service');
 const authConfig = require('./auth.config');
-const { LOG_TYPES, MODULES, ACTIONS, STATUS } = require('../services/logging-prisma.service');
+const { isAuthDebug } = require('../utils/logger');
 const prisma = require('../src/lib/prisma');
 
 // Passport Configuration
@@ -58,31 +58,14 @@ passport.use(new LocalStrategy({
         data: { LastLoginTime: new Date() }
       });
 
-      // Log successful login
-      try {
-        await prisma.wP_LOGS.create({
-          data: {
-            Description: `User login: ${user.Username}`,
-            CreateTS: new Date().toISOString(),
-            LoggedUser: user.Username,
-            IPAddress: req.ip || 'unknown',
-            LogType: LOG_TYPES.INFO,
-            Module: MODULES.SYSTEM,
-            Action: ACTIONS.LOGIN,
-            Status: STATUS.SUCCESS,
-            UserID: user.ID
-          }
-        });
-      } catch (logError) {
-        console.error('Error logging login:', logError);
-      }
-
       // Get LHDN token if needed
       try {
         // Use getTokenSession to utilize caching and file storage
         const accessToken = await getTokenSession();
         user.accessToken = accessToken; // Attach token to user object for session serialization
-        console.log('LHDN Access Token obtained:', !!accessToken);
+        if (isAuthDebug()) {
+          console.log('LHDN Access Token obtained:', !!accessToken);
+        }
       } catch (tokenError) {
         console.error('LHDN Token acquisition error during login:', tokenError);
         // Continue login even if token acquisition fails, but log the warning
@@ -101,7 +84,9 @@ passport.use(new LocalStrategy({
 // Serialize user for the session
 passport.serializeUser((user, done) => {
   try {
-    console.log(`Serializing user: ${user.Username} (ID: ${user.ID})`);
+    if (isAuthDebug()) {
+      console.log(`Serializing user: ${user.Username} (ID: ${user.ID})`);
+    }
     const sessionUser = {
       id: user.ID,
       username: user.Username,
@@ -116,14 +101,15 @@ passport.serializeUser((user, done) => {
       isActive: true
     };
 
-    // Log only essential authentication information
-    console.log('=== AUTHENTICATION DETAILS ===');
-    console.log('User ID:', user.ID);
-    console.log('Username:', user.Username);
-    console.log('Is Admin:', user.Admin === 1 ? 'Yes' : 'No');
-    console.log('Admin Value:', user.Admin);
-    console.log('Access Token:', user.accessToken ? 'Present' : 'Not present');
-    console.log('=== END AUTHENTICATION DETAILS ===');
+    if (isAuthDebug()) {
+      console.log('=== AUTHENTICATION DETAILS ===');
+      console.log('User ID:', user.ID);
+      console.log('Username:', user.Username);
+      console.log('Is Admin:', user.Admin === 1 ? 'Yes' : 'No');
+      console.log('Admin Value:', user.Admin);
+      console.log('Access Token:', user.accessToken ? 'Present' : 'Not present');
+      console.log('=== END AUTHENTICATION DETAILS ===');
+    }
 
     done(null, sessionUser);
   } catch (error) {

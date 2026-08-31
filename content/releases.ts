@@ -8,6 +8,13 @@ export interface Release {
 
 export const releases: Release[] = [
   {
+    version: '3.1.15',
+    date: '31/08/2026',
+    improvement: [
+      'Sign-in and dashboard activity no longer flood server logs with repeated authentication messages',
+    ],
+  },
+  {
     version: '3.1.14',
     date: '31/08/2026',
     improvement: [

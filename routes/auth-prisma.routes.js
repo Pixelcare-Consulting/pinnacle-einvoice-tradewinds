@@ -11,6 +11,7 @@ const { getTokenSession } = require('../services/token-prisma.service');
 const { LOG_TYPES, ACTIONS, STATUS, MODULES } = require('../services/logging-prisma.service');
 const { updateUserActivity } = require('../middleware/auth-prisma.middleware');
 const { SecurityMiddleware, loginSecurityMiddleware } = require('../middleware/security.middleware');
+const { isAuthDebug } = require('../utils/logger');
 
 // Move constants to top
 const LOGIN_CONSTANTS = {
@@ -221,25 +222,33 @@ router.post('/login', loginSecurityMiddleware, async (req, res, next) => {
           // Try to get token from LHDN
           let tokenData = null;
           try {
-            console.log('=== TOKEN ACQUISITION DEBUG ===');
-            console.log('Attempting to get token for user:', user.Username);
+            if (isAuthDebug()) {
+              console.log('=== TOKEN ACQUISITION DEBUG ===');
+              console.log('Attempting to get token for user:', user.Username);
+            }
             tokenData = await getTokenSession();
-            console.log('Token acquisition result:', tokenData ? 'SUCCESS' : 'FAILED');
-            console.log('Token data type:', typeof tokenData);
-            console.log('Token preview:', tokenData ? tokenData.substring(0, 20) + '...' : 'null');
-            console.log('===============================');
+            if (isAuthDebug()) {
+              console.log('Token acquisition result:', tokenData ? 'SUCCESS' : 'FAILED');
+              console.log('Token data type:', typeof tokenData);
+              console.log('Token preview:', tokenData ? tokenData.substring(0, 20) + '...' : 'null');
+              console.log('===============================');
+            }
 
             // Store token separately in session
             if (tokenData && tokenData.access_token) {
               req.session.accessToken = tokenData.access_token;
               req.session.tokenExpiryTime = Date.now() + (tokenData.expires_in * 1000);
-              console.log('Token stored in session successfully');
+              if (isAuthDebug()) {
+                console.log('Token stored in session successfully');
+              }
             } else if (tokenData) {
               // If tokenData is a string (direct token), store it
               req.session.accessToken = tokenData;
               req.session.tokenExpiryTime = Date.now() + (3600 * 1000); // Default 1 hour
-              console.log('String token stored in session successfully');
-            } else {
+              if (isAuthDebug()) {
+                console.log('String token stored in session successfully');
+              }
+            } else if (isAuthDebug()) {
               console.log('No token data to store in session');
             }
           } catch (tokenError) {

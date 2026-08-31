@@ -908,11 +908,8 @@ router.get('/activity-logs', async (req, res) => {
         const limit = parseInt(req.query.limit) || 5;
         const skip = (page - 1) * limit;
 
-        console.log('Activity logs API called with page:', page, 'limit:', limit);
-
         // Get total count for pagination
         const totalCount = await prisma.wP_LOGS.count();
-        console.log('Total logs count:', totalCount);
 
         const totalPages = Math.ceil(totalCount / limit);
 
@@ -934,8 +931,6 @@ router.get('/activity-logs', async (req, res) => {
                 IPAddress: true
             }
         });
-
-        console.log('Raw logs from database:', logs);
 
         const activities = logs.map(log => ({
             description: log.Description || 'No description',
