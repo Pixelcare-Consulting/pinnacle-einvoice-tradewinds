@@ -8,6 +8,13 @@ export interface Release {
 
 export const releases: Release[] = [
   {
+    version: '3.1.12',
+    date: '31/08/2026',
+    fix: [
+      'Server startup no longer fails due to a missing security module required for cross-origin requests',
+    ],
+  },
+  {
     version: '3.1.11',
     date: '30/08/2026',
     fix: [

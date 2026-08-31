@@ -1,6 +1,6 @@
 {
   "name": "pxceinvoiceportal",
-  "version": "3.1.11",
+  "version": "3.1.12",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
@@ -68,6 +68,7 @@
     "canvas": "^3.1.0",
     "chok": "^0.2.0",
     "compression": "^1.7.4",
+    "cors": "^2.8.5",
     "connect-session-sequelize": "^7.1.7",
     "connect-sqlite3": "^0.9.15",
     "crypto-js": "^4.2.0",
