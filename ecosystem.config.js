@@ -18,8 +18,10 @@ module.exports = {
       ],
       max_memory_restart: "512M", // Reduce from 1G → 512M to prevent memory bloat
       // Default profile is production. Use `pm2 start ecosystem.config.js --env development` for local PM2.
+      // Default: Node serves HTTPS directly (no IIS reverse proxy).
       env: {
         NODE_ENV: "production",
+        PORT: "3000",
         SECURE_COOKIE: "true",
         TRUST_PROXY: "false",
         NODE_DIRECT_HTTPS: "true",
@@ -28,14 +30,26 @@ module.exports = {
         SSL_CERT_PATH: "./ssl/e-invoice_tradewindscorp-insbrok_com.crt",
         SSL_CA_PATH: "./ssl/DigiCertCA.crt",
       },
+      // IIS terminates TLS on 443 and reverse-proxies HTTP to Node on 3000 (see web.config.production).
+      env_iis: {
+        NODE_ENV: "production",
+        PORT: "3000",
+        SECURE_COOKIE: "true",
+        TRUST_PROXY: "true",
+        NODE_DIRECT_HTTPS: "false",
+        UV_THREADPOOL_SIZE: 2,
+      },
       env_development: {
         NODE_ENV: "development",
+        PORT: "3000",
         SECURE_COOKIE: "false",
         TRUST_PROXY: "true",
+        NODE_DIRECT_HTTPS: "false",
         UV_THREADPOOL_SIZE: 2,
       },
       env_production: {
         NODE_ENV: "production",
+        PORT: "3000",
         SECURE_COOKIE: "true",
         TRUST_PROXY: "false",
         NODE_DIRECT_HTTPS: "true",

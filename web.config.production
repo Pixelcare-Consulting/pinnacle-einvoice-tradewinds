@@ -5,6 +5,12 @@
     <!-- URL REWRITING & HTTPS REDIRECT   -->
     <!-- ================================ -->
     <rewrite>
+      <allowedServerVariables>
+        <add name="HTTP_X_FORWARDED_FOR" />
+        <add name="HTTP_X_FORWARDED_PROTO" />
+        <add name="HTTP_X_FORWARDED_HOST" />
+        <add name="HTTP_HOST" />
+      </allowedServerVariables>
       <rules>
         <!-- Force HTTPS -->
         <rule name="Redirect to HTTPS" stopProcessing="true">
@@ -21,8 +27,8 @@
           <action type="Rewrite" url="http://127.0.0.1:3000/{R:1}" />
           <serverVariables>
             <set name="HTTP_X_FORWARDED_FOR" value="{REMOTE_ADDR}" />
-            <set name="HTTP_HOST" value="{HTTP_HOST}" />
             <set name="HTTP_X_FORWARDED_PROTO" value="https" />
+            <set name="HTTP_X_FORWARDED_HOST" value="{HTTP_HOST}" />
           </serverVariables>
         </rule>
       </rules>
